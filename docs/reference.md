@@ -1,0 +1,245 @@
+# Reference
+
+- [Commands](#commands)
+- [Config file](#config-file)
+- [Files and folders](#files-and-folders)
+- [Clip details (.json)](#clip-details-json)
+- [Service status (status.json)](#service-status-statusjson)
+
+## Commands
+
+`linux-wow-recorder`:
+
+| Command | Does |
+|---|---|
+| `setup` | asks for the folders and options and writes the config; offers a test recording and the service |
+| `run` | watches for WoW and records, in the foreground (what the service runs) |
+| `status` | the config, the service and what it's doing, and any problem with the setup; exit code 1 if there is one |
+| `process` | cuts the recordings waiting in `sessions/` now; refuses while WoW is running |
+| `keep <clip>...` | keeps clips forever, whatever `clip_retention_days` says; `--undo` lets them expire again. A clip is a path, or a file name in `clips/` |
+| `test-recorder` | records 5 seconds to `<output>/test-recording.mkv`; refuses while the service is recording |
+| `test-webhooks` | sends a test message to every webhook and names any that failed (`test-discord` is the old name) |
+| `install-service` | installs and starts the systemd user service, which runs at every login |
+| `uninstall-service` | stops and removes the service; the config and recordings stay |
+| `logs [-n LINES]` | where the logs are, and the service log's last lines (40) |
+| `report [FOLDER]` | writes `linux-wow-recorder-report-<date>.txt` to FOLDER (default: the Desktop) for sharing by hand; nothing is sent ([Logs](#logs)) |
+
+`linux-wow-recorder-gui` (desktop app):
+
+| Command | Does |
+|---|---|
+| (none) | starts the tray icon; opens Settings if nothing is set up |
+| `--autostart on` / `off` | shows the tray icon at every login (and lists it in the app menu), or stops doing so |
+
+## Config file
+
+`~/.config/linux-wow-recorder/config.toml` (or under `$XDG_CONFIG_HOME`). `setup` and the
+settings window write it, keeping a comment above each setting; you can also edit it by hand.
+After a hand edit, run `systemctl --user restart linux-wow-recorder`. Settings missing from the
+file take their defaults, and unknown ones are ignored.
+
+### `[paths]`
+
+| Key | Default | |
+|---|---|---|
+| `combat_log_dir` | (none) | WoW's `Logs` folder. Subfolders are searched too (e.g. an addon's archive). |
+| `output_dir` | (none) | where `sessions/`, `processed/` and `clips/` go |
+
+### `[recorder]`
+
+| Key | Default | |
+|---|---|---|
+| `command` | `"gpu-screen-recorder"` | the recorder. For the Flatpak: `"flatpak run --command=gpu-screen-recorder com.dec05eba.gpu_screen_recorder"` |
+| `capture` | `"portal"` | `"portal"`, a monitor name from `gpu-screen-recorder --list-capture-options`, or `"screen"`: the first monitor in that list, not necessarily your main one |
+| `fps` | `60` | |
+| `quality` | `""` | `"medium"`, `"high"`, `"very_high"` or `"ultra"`; empty uses gpu-screen-recorder's default |
+| `audio` | `["wow"]` | one track per entry: `"wow"` is only WoW's own sound, `"default_output"` all desktop sound (WoW, Discord, music...), `"default_input"` the microphone; `"wow\|default_input"` mixes two into one track. `[]` records no sound. Anything else goes to gpu-screen-recorder's `-a` as it is, e.g. `"app:discord"`. |
+| `extra_args` | `[]` | passed to gpu-screen-recorder as they are, e.g. `["-k", "hevc"]` |
+
+### `[clips]`
+
+| Key | Default | |
+|---|---|---|
+| `pad_before` | `10` | seconds of video kept before a run |
+| `pad_after` | `15` | seconds of video kept after a run |
+| `min_run_minutes` | `5` | shorter runs are skipped, except completed keys |
+
+### `[storage]`
+
+| Key | Default | |
+|---|---|---|
+| `session_retention_days` | `3` | full recordings are deleted this many days after they're made; 0 = never |
+| `clip_retention_days` | `0` | clips are deleted this many days after they're cut; 0 = never. Kept clips never are. |
+| `min_free_gb` | `20` | warn below this much free space on the output folder's drive |
+| `stop_below_gb` | `5` | stop recording below this |
+
+### `[discord]`
+
+| Key | Default | |
+|---|---|---|
+| `webhook_urls` | `[]` | Discord or Fluxer webhook URLs, at most 25; every message goes to each one. `[]` = no messages. An older config's single `webhook_url` is read as the first entry |
+
+`[discord.notify]`, one true/false per message:
+
+| Key | Default | Sent when |
+|---|---|---|
+| `session_started` | false | WoW started and recording began |
+| `session_ended` | false | WoW closed and the recording was saved |
+| `clips_ready` | true | clips are ready after a session |
+| `no_runs` | false | a session ended with no dungeon runs in it |
+| `no_combat_log` | true | no combat log covers a session |
+| `recording_failed` | true | the recorder didn't start, or stopped mid-session |
+| `low_disk_space` | true | free space is under `min_free_gb`, or recording stopped under `stop_below_gb` |
+| `clip_failed` | true | a clip couldn't be cut |
+| `hook_failed` | true | the `after_clips` command failed |
+| `cleanup` | false | old recordings were deleted |
+
+### `[hooks]`
+
+| Key | Default | |
+|---|---|---|
+| `after_clips` | `""` | a command run after each session (in the background), with the new clips' paths added as arguments. `~` is expanded in the program's path. It's split like a shell would, but not run through one, so pipes and `&&` need a script. |
+
+### `[daemon]`
+
+| Key | Default | |
+|---|---|---|
+| `poll_interval` | `5` | seconds between checks for WoW |
+
+### `[logging]`
+
+| Key | Default | |
+|---|---|---|
+| `detailed` | `false` | adds detailed (debug) lines to the logs, for tracking down a problem |
+
+## Files and folders
+
+| Path | |
+|---|---|
+| `~/.config/linux-wow-recorder/config.toml` | the config |
+| `~/.config/systemd/user/linux-wow-recorder.service` | the service, written by `install-service` |
+| `~/.config/autostart/linux-wow-recorder-gui.desktop` | starts the tray icon at login |
+| `~/.local/share/applications/linux-wow-recorder-gui.desktop` | the app menu entry |
+| `~/.local/state/linux-wow-recorder/recorder.json` | the recorder's process, so a restarted service can stop one left running |
+| `~/.local/state/linux-wow-recorder/logs/` | the logs ([below](#logs)) |
+| `$XDG_RUNTIME_DIR/linux-wow-recorder/status.json` | what the service is doing ([below](#service-status-statusjson)) |
+| `<output>/sessions/` | the recording being made, and recordings not cut yet (`2026-10-08_19-03-12.mkv`) |
+| `<output>/processed/` | full recordings already cut |
+| `<output>/clips/` | the clips (`.mp4`) and their details (`.json`) |
+
+Recordings are `.mkv`, which stays playable even if the recorder is killed. Clips are `.mp4`
+with faststart, so they play in browsers and web galleries before they're fully downloaded.
+
+## Logs
+
+Everything is in `~/.local/state/linux-wow-recorder/logs/` and stays on this computer. The app
+never sends logs anywhere: webhook messages say that something went wrong and point here, without
+log lines, error output or file paths.
+
+| File | |
+|---|---|
+| `recorder.log` | the background service; each start is logged with the app version, distro, kernel and desktop (also in its journal, `journalctl --user -u linux-wow-recorder`) |
+| `app.log` | the desktop app and the other commands |
+| `sessions/<date time>.log` | gpu-screen-recorder's own output, one file per recording; the last 10 are kept |
+| `crash.log` | a hard crash's stack trace, if one ever happens |
+
+`recorder.log` and `app.log` start a new file at 1 MB and keep 4 old ones (`.log.1` ...), and any
+log untouched for 30 days is deleted. Lines are cleaned before they're written: webhook links
+become `webhook 2 (...a1b2)`, the home folder `~`, and the computer's name, the user name and IP
+addresses are replaced. gpu-screen-recorder's own output is saved as it is.
+
+**Report file:** `linux-wow-recorder report`, or Settings > Make a report file, writes a plain
+text file with the app, system, gpu-screen-recorder and ffmpeg versions, the GPU, the config
+(webhook links and the `after_clips` command removed) and the end of each log, all cleaned the
+same way. It's for sharing by hand when asking for help; read it first.
+
+## Clip details (.json)
+
+Each clip has a `.json` file of the same name beside it, written when the clip is cut. Other
+programs are welcome to read it, e.g. a web gallery that shows the deaths on a timeline. Times
+called "at", "start" or "end" are **seconds from the clip's start**. Times called `run_*` and
+`clip_start` are Unix times. Anything that happened outside the clip is left out (a run split
+over two recordings gets one clip from each, each with its own part).
+
+```json
+{
+  "version": 1,
+  "dungeon": "Ara-Kara, City of Echoes",
+  "label": "+11 Completed",
+  "level": 11,
+  "result": "completed",
+  "run_start": 1791694680.0,
+  "run_end": 1791696281.0,
+  "run_length": "26m41s",
+  "timer": 1601.0,
+  "clip_start": 1791694670.0,
+  "clip_length": 1626.0,
+  "run_offset": 10.0,
+  "bosses_killed": 3,
+  "deaths_total": 2,
+  "encounters": [
+    {"name": "Avanoxx", "start": 205.3, "end": 291.0, "killed": true}
+  ],
+  "deaths": [
+    {"name": "Tank-Realm-US", "at": 742.1}
+  ],
+  "lusts": [
+    {"name": "Bloodlust", "caster": "Shammy-Realm-US", "at": 206.0}
+  ],
+  "recording": "2026-10-10_19-03-12.mkv",
+  "keep": false
+}
+```
+
+| Field | |
+|---|---|
+| `version` | the format's version; it goes up if fields change meaning |
+| `dungeon` | the dungeon's name as WoW logs it |
+| `label` | `"+11 Completed"`, `"+10 Abandoned"`, or a difficulty: `"Heroic"`, `"Mythic"`, `"Normal"`, `"Timewalking"`, `"Follower"` |
+| `level` | the keystone level, or `null` without a key |
+| `result` | `"completed"`, `"abandoned"`, or the difficulty in lower case |
+| `run_start`, `run_end` | when the run started and ended |
+| `run_length` | the in-game timer for a completed key, the run's length otherwise |
+| `timer` | a completed key's in-game time in seconds, death penalties included; `null` otherwise |
+| `clip_start`, `clip_length` | where the clip starts, and how long it is |
+| `run_offset` | how far into the clip the run starts (`pad_before`, unless the recording started later) |
+| `bosses_killed`, `deaths_total` | over the whole run |
+| `encounters` | each boss pull: its name, start, end (`null` if the log ended mid-pull) and whether it was a kill. A wipe and the kill after it are separate pulls of the same boss. |
+| `deaths` | each player death: the name as logged (`Name-Realm-Region`) and when |
+| `lusts` | each Bloodlust-type effect: `"Bloodlust"`, `"Heroism"`, `"Time Warp"`, `"Primal Rage"`, `"Fury of the Aspects"`, or `"Drums"`; the caster, or `null` for drums; and when |
+| `recording` | the full recording it was cut from |
+| `keep` | `true` keeps the clip forever, whatever `clip_retention_days` says |
+
+Clips cut by versions from before the `.json` existed don't have one. The clip browser falls
+back on the clip's name for those.
+
+## Service status (status.json)
+
+The service writes what it's doing to `$XDG_RUNTIME_DIR/linux-wow-recorder/status.json`, whole,
+on every change. The tray icon and `status` read it, and so can your own scripts. If the file
+is missing, its `pid` isn't running, or `state` is `"stopped"`, the service isn't running.
+
+```json
+{
+  "pid": 12345,
+  "state": "recording",
+  "flavor": "Retail",
+  "session_start": 1791694600.0,
+  "recording_file": "/media/games/wow-recordings/sessions/2026-10-10_19-03-12.mkv",
+  "free_gb": 412.3,
+  "problem": null,
+  "last_session": {"end": 1791610000.0, "clips": ["/media/.../clips/....mp4"], "problems": []},
+  "updated": 1791694660.2
+}
+```
+
+| `state` | |
+|---|---|
+| `waiting` | watching for WoW |
+| `recording` | WoW is running and being recorded |
+| `not_recording` | WoW is running but isn't being recorded: the recorder failed, or the disk is nearly full (`problem` says which) |
+| `processing` | cutting clips after a session |
+| `stopped` | the service has exited |
+
+`problem` is a sentence while something is wrong, `null` otherwise. `last_session` is the last
+time recordings were cut: when, the new clips, and any problems (as Discord message text).

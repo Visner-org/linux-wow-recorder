@@ -1,0 +1,27 @@
+[project]
+name = "linux-wow-recorder"
+dynamic = ["version"]
+description = "Records World of Warcraft sessions on Linux and cuts one clip per dungeon run"
+readme = "README.md"
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+# The tray app, settings window and clip browser. Without it the app is the CLI and service only.
+gui = ["PySide6-Essentials>=6.8", "PySide6-Addons>=6.8"]   # Addons has QtMultimedia; full PySide6 adds Chromium
+
+[project.scripts]
+linux-wow-recorder = "linux_wow_recorder.cli:main"
+linux-wow-recorder-gui = "linux_wow_recorder.gui:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "src/linux_wow_recorder/__init__.py"
+
+[dependency-groups]
+dev = ["pytest"]

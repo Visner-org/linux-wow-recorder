@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Linux WoW Recorder
+Comment=Records World of Warcraft and cuts one clip per dungeon run
+Exec=/usr/bin/linux-wow-recorder-gui
+Icon=linux-wow-recorder
+Categories=AudioVideo;Recorder;Game;
+StartupWMClass=linux-wow-recorder
+StartupNotify=false
