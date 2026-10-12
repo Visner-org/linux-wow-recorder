@@ -10,7 +10,7 @@ from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import (QButtonGroup, QGroupBox, QHBoxLayout, QHeaderView, QLabel,
                                QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPushButton,
-                               QSlider, QSplitter, QStyle, QTreeWidget, QTreeWidgetItem,
+                               QSlider, QSplitter, QStackedWidget, QStyle, QTreeWidget, QTreeWidgetItem,
                                QVBoxLayout, QWidget)
 
 from .. import APP_TITLE, config, live, state
@@ -168,6 +168,15 @@ class ClipBrowser(QWidget):
         self.player.durationChanged.connect(self.on_duration)
         self.player.playbackStateChanged.connect(self.on_state)
         self.player.errorOccurred.connect(lambda _e, msg: self.time_label.setText(msg))
+        # With no clip loaded, QVideoWidget still paints letterbox bars for a video that isn't
+        # there, so a plain panel stands in for it.
+        self.no_video = QLabel()
+        self.no_video.setAlignment(Qt.AlignCenter)
+        self.no_video.setWordWrap(True)
+        self.no_video.setStyleSheet("background: black; color: #8A919C; font-size: 15px;")
+        self.video_stack = QStackedWidget()
+        self.video_stack.addWidget(self.video)
+        self.video_stack.addWidget(self.no_video)
 
         self.play_button = QPushButton()
         self.play_button.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
@@ -222,7 +231,7 @@ class ClipBrowser(QWidget):
         right = QWidget()
         rv = QVBoxLayout(right)
         rv.setContentsMargins(0, 0, 0, 0)
-        rv.addWidget(self.video, 1)
+        rv.addWidget(self.video_stack, 1)
         rv.addLayout(controls)
         rv.addWidget(self.title)
         rv.addWidget(self.facts)
@@ -353,11 +362,15 @@ class ClipBrowser(QWidget):
             w.setEnabled(clip is not None)
         if not clip:
             self.player.setSource(QUrl())
+            self.no_video.setText("Clips show up here after your first dungeon run." if not self.clips
+                                  else "Pick a clip from the list.")
+            self.video_stack.setCurrentWidget(self.no_video)
             self.title.setText("No clips yet" if not self.clips else "No clips match")
             self.facts.setText("")
             self.events.clear()
             self.timeline.set_clip(0, [])
             return
+        self.video_stack.setCurrentWidget(self.video)
         if not same_file:
             self.player.setSource(QUrl.fromLocalFile(str(clip.path)))
         self.show_details(clip)
