@@ -57,6 +57,10 @@ if [ "$1" -eq 0 ]; then
 fi
 
 %changelog
+* Sun Oct 11 2026 Linux WoW Recorder - 0.4.1-1
+- Clips window: no black bars in the player when no clip is loaded; it says where clips will
+  appear instead
+
 * Sun Oct 11 2026 Linux WoW Recorder - 0.4.0-1
 - Records "A window or screen you pick" (the screen-share dialog) by default; Settings explains
   it in a popup and a ? button

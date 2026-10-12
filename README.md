@@ -125,7 +125,7 @@ an issue.
 Download the `.rpm` from [Releases](../../releases), then:
 
 ```bash
-sudo dnf install ./linux-wow-recorder-0.4.0-1.fc44.noarch.rpm
+sudo dnf install ./linux-wow-recorder-0.4.1-1.fc44.noarch.rpm
 ```
 
 dnf brings in gpu-screen-recorder, ffmpeg and Qt. Open **Linux WoW Recorder** from the app
