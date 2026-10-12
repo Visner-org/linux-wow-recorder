@@ -47,7 +47,7 @@ You need:
 - **Python 3.11 or newer**: check with `python3 --version`.
 - **[uv](https://docs.astral.sh/uv/)** or **pipx**, to install the app.
 - **gpu-screen-recorder**, which does the recording:
-  - CachyOS / Arch: `paru -S gpu-screen-recorder` (AUR)
+  - CachyOS / Arch: `sudo pacman -S gpu-screen-recorder`
   - Fedora / Nobara: the RPM below brings it in (on Nobara it's in the distro's repos)
   - anywhere, including Bazzite and SteamOS: `flatpak install flathub com.dec05eba.gpu_screen_recorder`
 - **ffmpeg** (with `ffprobe`), from your distro.
@@ -74,6 +74,21 @@ appears in the menu as **Linux WoW Recorder**. To update, install the newer RPM 
 then `systemctl --user restart linux-wow-recorder`. The RPM is built for one Fedora release
 (`fc44` is Fedora/Nobara 44); on another release, build it there with
 `./packaging/build-rpm.sh` (needs `uv` and `rpm-build`).
+
+### CachyOS or Arch (package)
+
+The package in `packaging/aur/` installs the app system-wide, with every dependency from Arch's
+own repos (gpu-screen-recorder, ffmpeg, PySide6). It'll be on the AUR (`paru -S
+linux-wow-recorder`) once AUR sign-ups reopen; until then, build it from the repo:
+
+```bash
+git clone https://github.com/Visner-org/linux-wow-recorder
+cd linux-wow-recorder/packaging/aur
+makepkg -si
+```
+
+To update, `git pull` and run `makepkg -si` again, then
+`systemctl --user restart linux-wow-recorder`. The uv route below works on Arch too.
 
 ### Other distros (CachyOS, Arch, Bazzite, SteamOS, Ubuntu, ...)
 

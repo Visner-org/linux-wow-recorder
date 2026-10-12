@@ -1,0 +1,36 @@
+# Maintainer: Visner-org <341269573+Visner-org@users.noreply.github.com>
+# For the AUR. Builds from the GitHub release's source tarball. After changing pkgver:
+# updpkgsums && makepkg --printsrcinfo > .SRCINFO
+pkgname=linux-wow-recorder
+pkgver=0.4.0
+pkgrel=1
+pkgdesc="Records World of Warcraft sessions and cuts one clip per dungeon run"
+arch=('any')
+url="https://github.com/Visner-org/linux-wow-recorder"
+license=('GPL-3.0-or-later')
+depends=('python' 'pyside6' 'qt6-multimedia' 'gpu-screen-recorder' 'ffmpeg' 'grep' 'systemd' 'hicolor-icon-theme')
+makedepends=('python-build' 'python-installer' 'python-hatchling')
+checkdepends=('python-pytest')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/$pkgver.tar.gz")
+sha256sums=('aeaa0e8f529b19ff578a97d41a0d8e43b3236a01e8d1cc4032270b29caf08a76')
+
+build() {
+  cd "$pkgname-$pkgver"
+  python -m build --wheel --no-isolation
+}
+
+check() {
+  cd "$pkgname-$pkgver"
+  PYTHONPATH=src QT_QPA_PLATFORM=offscreen python -m pytest -q
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+  python -m installer --destdir="$pkgdir" dist/*.whl
+  local site
+  site=$(python -c 'import site; print(site.getsitepackages()[0])')
+  install -Dm644 packaging/linux-wow-recorder-gui.desktop \
+    "$pkgdir/usr/share/applications/linux-wow-recorder-gui.desktop"
+  install -Dm644 "$pkgdir$site/linux_wow_recorder/gui/icon.svg" \
+    "$pkgdir/usr/share/icons/hicolor/scalable/apps/linux-wow-recorder.svg"
+}

@@ -138,6 +138,11 @@ launcher, which names the game in its arguments, are skipped. Add a new client's
   `python3-pyside6`, `gpu-screen-recorder` and `/usr/bin/ffmpeg` from the distro, so it's tied to
   one Fedora release. Flatpak was ruled out: the sandbox can't see the WoW process, run
   gpu-screen-recorder with its root helper, or install the systemd user service.
+- **Arch package**: `packaging/aur/PKGBUILD` builds from the GitHub release tarball of the tag
+  `pkgver` (tags have no `v`), runs the tests in `check()`, and installs the wheel, menu entry and
+  icon. Arch's `pyside6` doesn't include QtMultimedia, so `qt6-multimedia` is a separate
+  dependency; gpu-screen-recorder is in Arch's `extra` repo. Tested in an `archlinux` container
+  with `makepkg -si`.
 - **Running commands**: settings and the tray run `python -m linux_wow_recorder <command>`
   (test-recorder, process) instead of calling the functions, so a slow command never blocks
   the window.
@@ -176,7 +181,10 @@ traceback; `faulthandler` writes hard crashes to `crash.log`.
   problems. After 1.0, a change that breaks an existing config file or command means 2.0.
 
 Each release gets an entry in the `%changelog` of `packaging/linux-wow-recorder.spec`, and the RPM's
-`Release` stays 1 unless only the packaging changed.
+`Release` stays 1 unless only the packaging changed. After the GitHub release (tag `0.5.0`, no
+`v`), set `pkgver` in `packaging/aur/PKGBUILD` (and `pkgrel=1`), then in that folder
+`updpkgsums && makepkg --printsrcinfo > .SRCINFO`; on an Arch-less machine, run both in an
+`archlinux` container.
 
 ## Not done yet
 

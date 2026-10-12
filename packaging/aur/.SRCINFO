@@ -1,0 +1,23 @@
+pkgbase = linux-wow-recorder
+	pkgdesc = Records World of Warcraft sessions and cuts one clip per dungeon run
+	pkgver = 0.4.0
+	pkgrel = 1
+	url = https://github.com/Visner-org/linux-wow-recorder
+	arch = any
+	license = GPL-3.0-or-later
+	checkdepends = python-pytest
+	makedepends = python-build
+	makedepends = python-installer
+	makedepends = python-hatchling
+	depends = python
+	depends = pyside6
+	depends = qt6-multimedia
+	depends = gpu-screen-recorder
+	depends = ffmpeg
+	depends = grep
+	depends = systemd
+	depends = hicolor-icon-theme
+	source = linux-wow-recorder-0.4.0.tar.gz::https://github.com/Visner-org/linux-wow-recorder/archive/refs/tags/0.4.0.tar.gz
+	sha256sums = aeaa0e8f529b19ff578a97d41a0d8e43b3236a01e8d1cc4032270b29caf08a76
+
+pkgname = linux-wow-recorder

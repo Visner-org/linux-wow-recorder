@@ -100,8 +100,8 @@ this app come from your package manager, when you choose.
 
 - Linux with systemd (almost every desktop distro), on X11 or Wayland
 - Python 3.11 or newer
-- [gpu-screen-recorder](https://git.dec05eba.com/gpu-screen-recorder/about/) (from your distro,
-  the AUR, or the Flatpak)
+- [gpu-screen-recorder](https://git.dec05eba.com/gpu-screen-recorder/about/) (from your distro
+  or the Flatpak)
 - ffmpeg (with ffprobe)
 - **Combat logging on in dungeons.** WoW doesn't log by itself: type `/combatlog` once you're in,
   or let an addon do it (Raider.IO's client, or any auto combat logging addon). Turn on
@@ -113,7 +113,7 @@ this app come from your package manager, when you choose.
 | Distro | How | Tested |
 |---|---|---|
 | Fedora, Nobara | the RPM | yes (Nobara 44) |
-| CachyOS, Arch, EndeavourOS, Manjaro | with `uv` (an AUR package is planned) | not yet |
+| CachyOS, Arch, EndeavourOS, Manjaro | with `uv`, or as a package built from this repo (on the AUR soon) | not yet |
 | Bazzite, SteamOS, Aurora, other read-only systems | with `uv`, into your home folder; no root, no reboot | not yet |
 | Ubuntu, Mint, Pop!_OS, Debian, openSUSE | with `uv` | not yet |
 
@@ -135,11 +135,19 @@ Fedora/Nobara 44).
 ### CachyOS and Arch
 
 ```bash
-sudo pacman -S --needed python ffmpeg uv
-paru -S gpu-screen-recorder          # or yay; it's in the AUR
+sudo pacman -S --needed python ffmpeg uv gpu-screen-recorder
 uv tool install 'linux-wow-recorder[gui] @ git+https://github.com/Visner-org/linux-wow-recorder'
 linux-wow-recorder-gui --autostart on   # tray icon at login, and an app menu entry
 linux-wow-recorder-gui
+```
+
+Or as a system package, so it updates with the rest of your system once it's on the AUR. Until
+then, build it from this repo:
+
+```bash
+git clone https://github.com/Visner-org/linux-wow-recorder
+cd linux-wow-recorder/packaging/aur
+makepkg -si
 ```
 
 ### Bazzite, SteamOS and other read-only systems
