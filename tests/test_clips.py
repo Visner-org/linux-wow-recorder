@@ -2,11 +2,13 @@ import datetime
 import os
 import shutil
 import subprocess
+from pathlib import Path
 
 import pytest
 
 from linux_wow_recorder import config
-from linux_wow_recorder.clips import cleanup, clip_name, process_pending, read_sidecar, set_keep
+from linux_wow_recorder.clips import (cleanup, clip_name, process_pending, read_sidecar, set_keep,
+                                      stale_recordings)
 from linux_wow_recorder.combatlog import Run
 
 
@@ -73,9 +75,19 @@ def test_cuts_a_session_into_clips(tmp_path):
     [boss] = details["encounters"]
     assert (boss["name"], boss["start"], boss["end"], boss["killed"]) == ("Ingra Maloch", 40, 100, True)
     assert details["deaths"] == [{"name": "Tank-Realm-US", "at": 50}]
+    # A picture for the clip browser, 20 s into the first pull.
+    assert details["thumbnail"] == clip.with_suffix(".jpg").name
+    assert clip.with_suffix(".jpg").read_bytes()[:2] == b"\xff\xd8"   # a JPEG
     assert not rec.exists() and (cfg.processed_dir / rec.name).exists()
+    # The full recording's own details, for the clip browser's Full sessions.
+    session = read_sidecar(cfg.processed_dir / rec.name)
+    assert abs(session["recording_start"] - start) < 2 and 299 <= session["length"] <= 301
+    [whole] = session["runs"]
+    assert whole["dungeon"] == "Mists of Tirna Scithe" and abs(whole["run_offset"] - 60) < 2
+    assert abs(whole["encounters"][0]["start"] - 90) < 2
 
 
+@pytest.mark.skipif(not shutil.which("ffprobe"), reason="needs ffprobe")
 def test_no_combat_log(tmp_path):
     cfg = make_cfg(tmp_path)
     cfg.sessions_dir.mkdir()
@@ -84,6 +96,7 @@ def test_no_combat_log(tmp_path):
     [result] = process_pending(cfg)
     assert result.problem == "no_combat_log"
     assert (cfg.processed_dir / rec.name).exists()
+    assert read_sidecar(cfg.processed_dir / rec.name)["runs"] == []
 
 
 def test_cleanup_keeps_clips_by_default(tmp_path):
@@ -114,6 +127,78 @@ def test_cleanup_skips_kept_clips_and_takes_sidecars(tmp_path):
         for f in (clip, clip.with_suffix(".json")):
             os.utime(f, (old, old))
 
+    for clip in (kept, expired):
+        clip.with_suffix(".jpg").write_bytes(b"x")
+        os.utime(clip.with_suffix(".jpg"), (old, old))
     assert cleanup(cfg) == 1
-    assert kept.exists() and kept.with_suffix(".json").exists()
+    assert kept.exists() and kept.with_suffix(".json").exists() and kept.with_suffix(".jpg").exists()
     assert not expired.exists() and not expired.with_suffix(".json").exists()
+    assert not expired.with_suffix(".jpg").exists()
+
+
+def test_cleanup_never_deletes_recordings_not_cut_yet(tmp_path):
+    cfg = make_cfg(tmp_path, session_retention_days=3)
+    cfg.sessions_dir.mkdir()
+    old, new = cfg.sessions_dir / "old.mkv", cfg.sessions_dir / "new.mkv"
+    for f in (old, new):
+        f.write_bytes(b"x")
+    os.utime(old, (1_000_000_000, 1_000_000_000))
+
+    assert cleanup(cfg) == 0
+    assert old.exists() and new.exists()
+    assert stale_recordings(cfg) == [old]
+    (tmp_path / "forever").mkdir()
+    assert stale_recordings(make_cfg(tmp_path / "forever", session_retention_days=0)) == []
+
+
+def test_thumbnail_time():
+    from linux_wow_recorder.clips import thumbnail_time
+    assert thumbnail_time({"encounters": [{"start": 40.0}], "clip_length": 500}) == 60.0
+    assert thumbnail_time({"run_offset": 10.0, "clip_length": 500}) == 70.0
+    assert thumbnail_time({"run_offset": 10.0, "clip_length": 30}) == 29.0   # within the clip
+
+
+def test_a_cut_that_comes_out_short_fails_and_is_retried(tmp_path, monkeypatch, caplog):
+    """ffmpeg takes a disk read error for the end of the recording and still exits 0."""
+    from linux_wow_recorder import clips
+    cfg = make_cfg(tmp_path)
+    cfg.sessions_dir.mkdir()
+    rec = cfg.sessions_dir / "2026-10-12_14-07-45.mkv"
+    rec.write_bytes(b"\0" * 2_000_000)
+    end = 1_800_000_000.0
+    os.utime(rec, (end, end))
+    start = end - 2557
+    monkeypatch.setattr(clips, "recording_span", lambda path: (start, end))
+    run = Run("Temple of Sethraliss", start + 415, start + 2081, "+10 Completed", 1666.7,
+              level=10, result="completed")
+    monkeypatch.setattr(clips, "combat_logs_between", lambda *a: [tmp_path / "log.txt"])
+    monkeypatch.setattr(clips, "read_log_events", lambda logs: [])
+    monkeypatch.setattr(clips, "find_runs", lambda events, minutes: [run])
+
+    def ffmpeg(cmd, **kw):
+        Path(cmd[-1]).write_bytes(b"short")   # the .part file
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+    monkeypatch.setattr(clips.subprocess, "run", ffmpeg)
+    monkeypatch.setattr(clips, "media_length", lambda path: 1133.1)   # of 1690 asked for
+
+    [result] = process_pending(cfg)
+    assert result.problem == "clip_failed" and result.clips == []
+    assert list(cfg.clips_dir.iterdir()) == []         # no short clip, no .part left
+    assert rec.exists()                                # stays in sessions/ for next time
+    assert "came out short (1133 s of 1691 s)" in caplog.text
+
+
+def test_cleanup_takes_a_full_recordings_details_and_picture_and_skips_kept_ones(tmp_path):
+    cfg = make_cfg(tmp_path, session_retention_days=3)
+    cfg.processed_dir.mkdir()
+    old = 1_000_000_000
+    kept, expired = cfg.processed_dir / "kept.mkv", cfg.processed_dir / "expired.mkv"
+    for rec in (kept, expired):
+        rec.write_bytes(b"x")
+        set_keep(rec, rec is kept)
+        rec.with_suffix(".jpg").write_bytes(b"x")
+        for f in (rec, rec.with_suffix(".json"), rec.with_suffix(".jpg")):
+            os.utime(f, (old, old))
+    assert cleanup(cfg) == 1
+    assert kept.exists() and kept.with_suffix(".json").exists() and kept.with_suffix(".jpg").exists()
+    assert not any(f.exists() for f in (expired, expired.with_suffix(".json"), expired.with_suffix(".jpg")))

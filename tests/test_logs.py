@@ -43,7 +43,7 @@ def test_log_file_is_cleaned(logdir):
     path = logs.setup("recorder", webhooks=[HOOK], to_stderr=False)
     logging.getLogger("x").warning("Webhook %s failed for /home/alice/a", HOOK)
     try:
-        raise ValueError(f"boom in /home/alice/b")
+        raise ValueError("boom in /home/alice/b")
     except ValueError:
         logging.getLogger("x").exception("Processing failed")
     text = path.read_text()

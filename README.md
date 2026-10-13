@@ -125,7 +125,7 @@ an issue.
 Download the `.rpm` from [Releases](../../releases), then:
 
 ```bash
-sudo dnf install ./linux-wow-recorder-0.4.1-1.fc44.noarch.rpm
+sudo dnf install ./linux-wow-recorder-0.5.0-1.fc44.noarch.rpm
 ```
 
 dnf brings in gpu-screen-recorder, ffmpeg and Qt. Open **Linux WoW Recorder** from the app
@@ -239,6 +239,11 @@ command; it runs after each session with the new clips' paths as arguments. For 
 rsync -a --remove-source-files "$@" myserver:/srv/clips/
 ```
 
+That moves the videos and leaves each clip's `.json` and `.jpg` behind. Add the folder they end
+up in (on this computer: a second drive or a share you've mounted) to Settings > "Also show clips
+from", and the clip browser still lists them with their deaths, lusts and bosses. See
+[Keeping clips somewhere else](docs/user-guide.md#keeping-clips-somewhere-else).
+
 ## Commands
 
 ```bash
@@ -247,6 +252,7 @@ linux-wow-recorder status              # settings, service state, problems
 linux-wow-recorder test-recorder       # record 5 seconds to <output>/test-recording.mkv
 linux-wow-recorder test-webhooks       # a test message to every webhook
 linux-wow-recorder process             # cut what's waiting now
+linux-wow-recorder pause               # stop recording until WoW closes (resume: record again)
 linux-wow-recorder keep <clip>...      # keep clips forever (--undo to let them expire)
 linux-wow-recorder install-service     # run at every login
 linux-wow-recorder uninstall-service

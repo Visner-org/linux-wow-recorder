@@ -57,6 +57,26 @@ if [ "$1" -eq 0 ]; then
 fi
 
 %changelog
+* Mon Oct 12 2026 Linux WoW Recorder - 0.5.0-1
+- Sound: "Only WoW's sound" recorded silence; the game's sound is "World of Warcraft" in PipeWire
+- A key WoW announces again after a crash stays one run (was split into Abandoned + Completed)
+- When WoW's window goes away mid-session, the recording stops and a new one starts when WoW is
+  back (it used to record the crashed window's last frame)
+- A cut that comes out short (a disk read error) fails and is retried instead of being saved
+- Lusts found by their debuff: no more double counts; Harrier's Cry and current drums added
+- Clips are cut in the background, so a relaunched WoW is recorded meanwhile
+- Pause recording for the rest of a session (tray menu, or the pause/resume commands)
+- Clip browser: cards with pictures, a timeline of pulls, deaths and lusts, events by boss, a
+  setup checklist; the live preview waits while the window is in the background
+- Settings: pages in a sidebar, a three-step first-run setup, a check under each field; saving
+  restarts the service only when needed
+- Webhooks are sent in the background; clips go to the trash instead of being deleted
+- Clip browser: Keystones / Full sessions; full recordings get a details file, can be played
+  with their runs on the timeline, and kept forever with Keep; the "No key" filter is gone
+- The version is in each window's title; Settings has an About page with the license
+- Clip browser: "Also show clips from" other folders on this computer; a moved clip whose .json
+  stayed behind keeps its details, even renamed with hyphens; deleting one in a read-only folder
+  says why it can't instead of failing
 * Sun Oct 11 2026 Linux WoW Recorder - 0.4.1-1
 - Clips window: no black bars in the player when no clip is loaded; it says where clips will
   appear instead

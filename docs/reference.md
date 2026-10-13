@@ -4,6 +4,7 @@
 - [Config file](#config-file)
 - [Files and folders](#files-and-folders)
 - [Clip details (.json)](#clip-details-json)
+- [Full recording details (.json)](#full-recording-details-json)
 - [Service status (status.json)](#service-status-statusjson)
 
 ## Commands
@@ -18,6 +19,7 @@
 | `process` | cuts the recordings waiting in `sessions/` now; refuses while WoW is running |
 | `keep <clip>...` | keeps clips forever, whatever `clip_retention_days` says; `--undo` lets them expire again. A clip is a path, or a file name in `clips/` |
 | `test-recorder` | records 5 seconds to `<output>/test-recording.mkv`; refuses while the service is recording |
+| `pause`, `resume` | stops recording for the rest of this WoW session (what was recorded so far is kept), or records again; the next session always records |
 | `test-webhooks` | sends a test message to every webhook and names any that failed (`test-discord` is the old name) |
 | `install-service` | installs and starts the systemd user service, which runs at every login |
 | `uninstall-service` | stops and removes the service; the config and recordings stay |
@@ -63,12 +65,13 @@ file take their defaults, and unknown ones are ignored.
 | `pad_before` | `10` | seconds of video kept before a run |
 | `pad_after` | `15` | seconds of video kept after a run |
 | `min_run_minutes` | `5` | shorter runs are skipped, except completed keys |
+| `other_folders` | `[]` | folders on this computer the clip browser also lists clips from (only the desktop app reads it). A clip there whose `.json` stayed in `clips/` is matched to it by name, ignoring spaces, hyphens and punctuation, so a renamed copy still finds its details |
 
 ### `[storage]`
 
 | Key | Default | |
 |---|---|---|
-| `session_retention_days` | `3` | full recordings are deleted this many days after they're made; 0 = never |
+| `session_retention_days` | `3` | full recordings are deleted this many days after they're made; 0 = never. One whose clips couldn't be cut is kept, with a warning |
 | `clip_retention_days` | `0` | clips are deleted this many days after they're cut; 0 = never. Kept clips never are. |
 | `min_free_gb` | `20` | warn below this much free space on the output folder's drive |
 | `stop_below_gb` | `5` | stop recording below this |
@@ -123,9 +126,10 @@ file take their defaults, and unknown ones are ignored.
 | `~/.local/state/linux-wow-recorder/recorder.json` | the recorder's process, so a restarted service can stop one left running |
 | `~/.local/state/linux-wow-recorder/logs/` | the logs ([below](#logs)) |
 | `$XDG_RUNTIME_DIR/linux-wow-recorder/status.json` | what the service is doing ([below](#service-status-statusjson)) |
+| `$XDG_RUNTIME_DIR/linux-wow-recorder/control.json` | a pause asked for by `pause` or the tray, for one session |
 | `<output>/sessions/` | the recording being made, and recordings not cut yet (`2026-10-08_19-03-12.mkv`) |
-| `<output>/processed/` | full recordings already cut |
-| `<output>/clips/` | the clips (`.mp4`) and their details (`.json`) |
+| `<output>/processed/` | full recordings already cut, each with its details (`.json`) and, once the clip browser has shown it, a picture (`.jpg`) |
+| `<output>/clips/` | the clips (`.mp4`), their details (`.json`) and pictures (`.jpg`) |
 
 Recordings are `.mkv`, which stays playable even if the recorder is killed. Clips are `.mp4`
 with faststart, so they play in browsers and web galleries before they're fully downloaded.
@@ -187,6 +191,7 @@ over two recordings gets one clip from each, each with its own part).
     {"name": "Bloodlust", "caster": "Shammy-Realm-US", "at": 206.0}
   ],
   "recording": "2026-10-10_19-03-12.mkv",
+  "thumbnail": "2026-10-10 19-03 Ara-Kara, City of Echoes +11 Completed (26m41s).jpg",
   "keep": false
 }
 ```
@@ -206,12 +211,33 @@ over two recordings gets one clip from each, each with its own part).
 | `bosses_killed`, `deaths_total` | over the whole run |
 | `encounters` | each boss pull: its name, start, end (`null` if the log ended mid-pull) and whether it was a kill. A wipe and the kill after it are separate pulls of the same boss. |
 | `deaths` | each player death: the name as logged (`Name-Realm-Region`) and when |
-| `lusts` | each Bloodlust-type effect: `"Bloodlust"`, `"Heroism"`, `"Time Warp"`, `"Primal Rage"`, `"Fury of the Aspects"`, or `"Drums"`; the caster, or `null` for drums; and when |
+| `lusts` | each Bloodlust-type effect: `"Bloodlust"`, `"Heroism"`, `"Time Warp"`, `"Primal Rage"`, `"Fury of the Aspects"`, `"Harrier's Cry"` or `"Drums"`; the caster (the drummer for drums), or `null` when the log doesn't say; and when |
 | `recording` | the full recording it was cut from |
+| `thumbnail` | a 480 px wide picture from the clip, 20 s into the first boss pull (a minute into the run without one), beside it; `null` if ffmpeg couldn't make it. Clips cut before pictures existed get one from the clip browser, as `<clip>.jpg`. |
 | `keep` | `true` keeps the clip forever, whatever `clip_retention_days` says |
 
 Clips cut by versions from before the `.json` existed don't have one. The clip browser falls
 back on the clip's name for those.
+
+## Full recording details (.json)
+
+Each full recording in `processed/` gets a `.json` of the same name when it's cut, for the clip
+browser's **Full sessions**. Times in it are **seconds from the recording's start**, except
+`recording_start` (a Unix time); `runs` holds each dungeon run in the recording, shaped like a
+clip's details above, including runs too short to get a clip. `keep` works as it does for clips:
+a kept recording is never deleted, whatever `session_retention_days` says. Recordings cut by
+0.5.0 or earlier have no `.json`; the clip browser finds their runs from the clips cut from them
+(while those clips exist).
+
+```json
+{
+  "version": 1,
+  "recording_start": 1791692400.0,
+  "length": 8040.3,
+  "runs": [{"dungeon": "Ara-Kara, City of Echoes", "label": "+11 Completed", "run_offset": 2280.0, "...": "..."}],
+  "keep": false
+}
+```
 
 ## Service status (status.json)
 
@@ -238,7 +264,8 @@ is missing, its `pid` isn't running, or `state` is `"stopped"`, the service isn'
 | `waiting` | watching for WoW |
 | `recording` | WoW is running and being recorded |
 | `not_recording` | WoW is running but isn't being recorded: the recorder failed, or the disk is nearly full (`problem` says which) |
-| `processing` | cutting clips after a session |
+| `paused` | WoW is running; recording was paused for this session (`pause`, or the tray) |
+| `processing` | cutting clips after a session (while WoW isn't running) |
 | `stopped` | the service has exited |
 
 `problem` is a sentence while something is wrong, `null` otherwise. `last_session` is the last

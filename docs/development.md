@@ -2,13 +2,30 @@
 
 ```bash
 uv sync --extra gui        # the venv, with the desktop app's Qt
-uv run pytest              # all tests (one needs ffmpeg; it's skipped without)
+uv run pytest              # the tests (the ones needing ffmpeg/ffprobe are skipped without)
+uv run --extra gui --group gui-test pytest   # also the window tests (pytest-qt), offscreen
+uv run ruff check src tests
 uv run linux-wow-recorder status
 uv run linux-wow-recorder-gui
 ```
 
+`tests/conftest.py` points the XDG folders at a throwaway folder before the app is imported,
+so tests never read or write the real config, state, logs or autostart file. The window tests
+(`tests/test_gui_windows.py`) are skipped without pytest-qt, which won't load without Qt; that's
+why it's a group of its own and not in `dev`.
+
+CI (`.github/workflows/ci.yml`) runs ruff, the core tests on Python 3.11 to 3.13 without Qt,
+and the window tests offscreen on Ubuntu 24.04 (Qt needs `libegl1 libgl1 libxkbcommon0
+libfontconfig1 libdbus-1-3 libglib2.0-0t64 libpulse0` there).
+
 ## Design rules
 
+- **One computer.** The app assumes it runs on a single computer, and everything it does stays
+  on that computer. It doesn't upload, sync, copy to other machines, mount or connect drives, or
+  talk to servers (the webhook messages aside). Anything beyond that is the user's own business,
+  and `after_clips` is the one place for it: the app runs that command and goes no further. A
+  folder setting is a local path; how files get there (a mounted share, a sync tool) isn't the
+  app's concern.
 - **The core has no dependencies.** Everything outside `gui/` uses only the standard library and
   the programs it runs (gpu-screen-recorder, ffmpeg, ffprobe, grep). A player who wants the
   command line only installs a few hundred KB.
@@ -20,7 +37,10 @@ uv run linux-wow-recorder-gui
 - **Nothing is guessed from the system except the WoW process.** The user points the app at the
   combat log folder and the output folder.
 - **The app writes and deletes only in its three output subfolders**, its config and state
-  folders, and the service and .desktop files.
+  folders, and the service and .desktop files. The clip browser's delete moves the clip and its
+  `.json` to the desktop's trash (`QFile.moveToTrash`) and deletes for good only when there's
+  no trash and the user agrees. The `other_folders` it lists clips from are read only: no
+  pictures made there, no Keep, no retention; only that delete, when the user asks for it.
 - **Clips are never re-encoded.** ffmpeg stream-copies, so cutting takes seconds and loses
   nothing.
 
@@ -33,44 +53,71 @@ daemon.run() loop, every poll_interval seconds
       recorder.start()                gpu-screen-recorder → <output>/sessions/<time>.mkv
       status.json: recording
   WoW still running → check_session()
+      check_pause()                   control.json asks to pause this session: stop the
+                                      recorder (status.json: paused), or record again
+      check_capture()                 the recorder says its window is gone ("error" from
+                                      pipewire), or WoW is a new process with portal capture:
+                                      stop it (the recording so far is kept) and start a new
+                                      one when WoW is back; say so only if WoW's still there
+                                      after 15 s (quitting WoW drops the window first)
       free space every 60 s           warn / stop below the limits
       recorder died → restart it      up to 3 times per session
   WoW gone twice in a row → end_session()
       recorder.stop()                 SIGINT, wait for the file to be saved
+      status.json: waiting
+      start_cutting()                 finish() in the cutter thread; the loop goes on, so WoW
+                                      started again meanwhile is recorded
       finish()
-        clips.process_pending()       every recording in sessions/, oldest first:
+        clips.process_pending()       every recording in sessions/, oldest first, except the
+                                      one being written; stops between recordings on SIGTERM:
           recording_span()              start = file mtime − ffprobe duration
           combat_logs_between()         log files overlapping that span
           combatlog.read_log_events()   grep keeps only the needed events
           combatlog.find_runs()         runs, with bosses, deaths and lusts
           cut_clip()                    ffmpeg -ss/-t stream copy → clips/<name>.mp4 + .json
-          → processed/                  (stays in sessions/ if a cut failed: retried next time)
+          → processed/ + .json          the recording's details, for Full sessions (stays in
+                                        sessions/ if a cut failed: retried next time)
         report()                      Discord/Fluxer webhooks
         run_hook() in a thread        after_clips
-        cleanup()                     retention
-      status.json: waiting
+        cleanup()                     retention: processed/ and clips/, never sessions/
+        warn_stale()                  un-cut recordings past retention: logged, clip_failed once
+      status.json: processing while cutting, unless a new session is recording
 ```
 
 On start, the service stops a recorder left running by a run that crashed
 (`recorder.adopt_leftover`), and cuts whatever an earlier run left in `sessions/`.
 
+One cutter thread at a time: a session that ends while it's cutting makes it go round once
+more. `Daemon._lock` covers `session` and the cutter's fields, so the cutter never writes
+"processing" or "waiting" over a new session's "recording". On SIGTERM, the service waits up to
+10 s for the recording being cut (a cut cut short is redone); the rest stay in `sessions/` for
+next time.
+
 ## Finding runs in the combat log
 
 `combatlog.find_runs` walks the events in order:
 
-- **Keys**: `CHALLENGE_MODE_START` opens one and `CHALLENGE_MODE_END` closes it. An END whose
-  success field is 0 means the key was abandoned; the run then ends when the player left the
+- **Keys**: `CHALLENGE_MODE_START` opens one and `CHALLENGE_MODE_END` closes it. END's fields
+  are `instanceID, success, keystoneLevel, totalTime`. An END whose success field is 0 means the
+  key was abandoned, whatever the level and time say. A START for the key that's already open
+  (same instance, keystone and level, no END between) is the same key resumed: WoW announces it
+  again when it comes back after a crash or a disconnect; the run then ends when the player left the
   instance. A START while a key is open abandons the old one.
 - **Dungeons without a key**: a `ZONE_CHANGE` into an instance whose difficulty is in
   `DUNGEON_DIFFICULTIES` opens a visit. Leaving it, then being somewhere else for 10 minutes,
   closes it. Coming back (after a release or a disconnect) continues it. A visit counts only if
   a boss was pulled, and isn't used when a key ran in it.
 - **Inside a run**, counted only while the player is in its instance:
-  - `ENCOUNTER_START`/`END`: boss pulls, kills and wipes.
+  - `ENCOUNTER_START`/`END`: boss pulls, kills and wipes. An END closes the open pull with its
+    encounter ID (the first field), not its name.
   - `UNIT_DIED` with a `Player-` GUID: deaths.
-  - `SPELL_AURA_APPLIED` of a lust buff or its debuff (Sated, Exhaustion, Temporal Displacement,
-    Fatigued, Exhaustion (Evoker)) on a player: lusts. Applications within 30 seconds are one
-    lust. The buff names the caster; the debuff catches sources without a buff (drums).
+  - Lusts: `SPELL_AURA_APPLIED` of a lust debuff (Sated, Exhaustion, Temporal Displacement,
+    Fatigued, Exhaustion (Evoker)) on a player who isn't sated. Applications within 30 seconds
+    are one lust. The haste buff that leaves that debuff names it and its caster (or the
+    drummer). A buff alone is never a lust: in real logs, an Evoker talent gives the caster a
+    short Fury of the Aspects every ~100 s, and an extended lust re-applies the buff. The game
+    takes the debuffs off after a boss wipe and when a key starts, so `SPELL_AURA_REMOVED` of a
+    debuff is read too; a debuff applied again while the player still has it is a refresh.
 - Runs shorter than `min_run_minutes` are dropped, except completed keys.
 
 grep does the filtering, because logs reach 1 GB. The lust part of the pattern matches only the
@@ -78,6 +125,21 @@ listed spell IDs, so the busy `SPELL_AURA_APPLIED` lines cost nothing: about 0.6
 
 Timestamps are `M/D/YYYY H:M:S.ms±offset`; the year and the offset may be missing (Classic-based
 clients, older logs). Without an offset, it's local time.
+
+### Real combat logs in the tests
+
+`tests/fixtures/logs/` holds three real retail sessions (September and October 2026, 25 keys),
+cut down to the lines the app reads and with every player's and pet's name and GUID replaced.
+`tests/fixtures/sanitize.py` makes them from a log and fails if an original name or GUID is
+left; read the result before committing it anyway. What they showed:
+
+- `UNIT_DIED`'s last field (`unconsciousOnDeath`) is 1 for about a third of party members'
+  deaths, and 92% of those players cast again within 5 seconds (24% of the others): Feign Death
+  and the like, so not counting them is right. It's never 1 for the player writing the log.
+- Each key starts with an all-zeros `CHALLENGE_MODE_END` (the keystone going in), and END has
+  two more fields after `totalTime`.
+- Lust buffs come back without a debuff (an extended lust, an Evoker talent's self-buff), and
+  the debuffs come off after a boss wipe; hence lusts are found by their debuff.
 
 ### Adding a dungeon difficulty
 
@@ -87,7 +149,8 @@ When the log enters an instance with a difficulty the app doesn't know, the serv
 
 ### Adding a lust
 
-Add the buff's spell ID to `LUST_BUFFS`. If it leaves a new debuff, add that to `LUST_DEBUFFS`.
+Add the buff's spell ID to `LUST_BUFFS` with its name and the debuff it leaves. If that debuff is
+new, add it to `LUST_DEBUFFS`; without it, the lust isn't found at all.
 
 ## Finding WoW
 
@@ -104,12 +167,12 @@ launcher, which names the game in its arguments, are skipped. Add a new client's
 |---|---|
 | `detect.py` | finds a running WoW client in /proc |
 | `recorder.py` | starts and stops gpu-screen-recorder |
-| `combatlog.py` | finds dungeon runs, bosses, deaths and lusts in the combat log |
+| `combatlog.py` | finds dungeon runs, bosses, deaths and lusts in the combat log (`_RunFinder`: one method per event) |
 | `clips.py` | cuts recordings into clips with ffmpeg, writes the `.json` details, retention cleanup |
 | `notify.py` | Discord or Fluxer webhooks (the same JSON) |
 | `logs.py` | log files, kept on this computer and cleaned; the report file ([Logging](#logging)) |
 | `daemon.py` | the main loop |
-| `state.py` | `status.json` |
+| `state.py` | `status.json`, and `control.json` (pause requests to the service) |
 | `config.py` | the config file: defaults, loading, checking, writing it with comments |
 | `cli.py` | the commands and `setup` |
 | `service.py` | the systemd user service |
@@ -117,17 +180,28 @@ launcher, which names the game in its arguments, are skipped. Add a new client's
 | `gui/model.py` | what the windows show, without Qt, so the tests need no display |
 | `gui/tray.py` | the tray icon (drawn in code) and its menu |
 | `gui/settings.py` | the settings window |
-| `gui/browser.py` | the clip browser: list, player, timeline |
+| `gui/browser.py` | the clip browser: cards or table, player, timeline, events by boss |
+| `gui/theme.py` | colours for light and dark themes (timeline marks, status text) |
 | `gui/desktop.py` | the autostart and app menu `.desktop` files |
 
 ### Desktop app notes
 
 - **Tray menu**: on KDE and GNOME, the menu is sent over D-Bus, so it can hold only plain actions,
   not widgets. Status lines are disabled actions, rebuilt only when their text changes.
-- **Updates**: the tray polls `status.json` every second, and systemd every 5 seconds.
+- **Updates**: the tray reads `status.json` every second (a small file). The service's state
+  comes from systemd's `PropertiesChanged` signals on the session bus (`tray.ServiceWatcher`,
+  after `Subscribe`); `systemctl is-active` runs once a minute as a check, or every 5 seconds
+  without the bus. Whether recordings wait in `sessions/` is worked out again only when the
+  status's state or last session changes, after an action, or every 30 seconds.
 - **Package**: the `gui` extra is `PySide6-Essentials` + `PySide6-Addons`. Addons is for
   QtMultimedia; the full `PySide6` package would also bring Chromium (QtWebEngine), which isn't
   used.
+- **Pause**: the tray's "Pause recording this session" (or `pause`/`resume`) writes
+  `control.json` beside `status.json`, naming the session it's for; the service reads it every
+  poll and stops or restarts its own recorder. A new session clears it, so the next WoW records.
+  The app stays a client: it asks, the service records or doesn't.
+- **Setup checklist**: the clip browser shows `model.setup_checklist` (recorder, ffmpeg and co.,
+  folders, combat logging, the service) at the top while anything on it isn't ticked.
 - **Window and tray**: `run()` opens the window unless started with `--tray` (the autostart
   entry). Closing it hides it; `setQuitOnLastWindowClosed(False)` keeps the tray. One app per
   user: a lock file, plus a `QLocalServer` that a second launch tells to show the window. The
@@ -146,6 +220,30 @@ launcher, which names the game in its arguments, are skipped. Add a new client's
 - **Running commands**: settings and the tray run `python -m linux_wow_recorder <command>`
   (test-recorder, process) instead of calling the functions, so a slow command never blocks
   the window.
+- **Colours**: `gui/theme.py` picks each colour's light or dark value from the palette's window
+  colour, and windows set them again on `QEvent.PaletteChange`. The timeline's kill, death and
+  lust colours were checked as a set for colour-blind separation and contrast on Breeze's light
+  and dark windows; text colours are 4.5:1 on both. Text stays in the palette's text colours;
+  colour goes on marks beside it.
+- **Clip browser**: cards (painted by `ClipCard`) or the table, remembered in `gui.ini` in the
+  config folder. Missing pictures (clips cut before they existed) are made one at a time with
+  `QProcess`. The timeline and the event list are worked out in `model.py` (`boss_spans`,
+  `lust_spans`, `event_rows`), so they're tested without a display.
+  Full sessions (`model.load_sessions`) are `ClipInfo`s too, so the cards, table, player and
+  timeline serve both; a recording without a `.json` (cut by 0.5.0 or earlier) gets its runs
+  from its clips' details, moved by `shift_run`.
+- **Settings window**: pages in a sidebar (Folders and capture, Sound, Clips and storage,
+  Notifications, Advanced, About: the version, links and the GPL from the
+  installed package's `licenses/LICENSE`, via `model.license_text`); with no config file, the same pieces are a three-step setup
+  (folders, what to record, a 5-second test). Each field has a check line under it
+  (`model.field_checks`), and a page with a problem gets a ⚠ in the sidebar; an empty needed
+  field turns red only after Next or Save. The service reads the config once, when it starts,
+  so Save restarts it only if the form differs from the config file (or it should run and
+  isn't); the two "at login" boxes alone don't.
+- **Settings window, speed**: nothing slow runs while it opens or while you type. The capture list
+  starts with "portal" and "screen" and is filled from `--list-capture-options` through a
+  `QProcess` when the recorder answers. The combat log folder's hint waits for a 300 ms pause in
+  typing and looks only a few folders deep (`model.newest_combat_log`).
 
 ## Logging
 
@@ -192,10 +290,13 @@ Each release gets an entry in the `%changelog` of `packaging/linux-wow-recorder.
 - Timed vs depleted for keys: the log only says completed. It needs each dungeon's time limit,
   which changes every season.
 - Choosing the encoder GPU on machines with two GPUs.
-- Checked against real logs: deaths (does Feign Death show up as `UNIT_DIED`?), lusts, Classic,
-  WoW Forever.
+- Checked against real logs: Classic, WoW Forever, dungeons without a key (Mythic 0, Heroic),
+  raids. Retail Mythic+ was checked on a month of logs (130 keys): deaths, lusts, wipes and
+  restarted keys; see [Real combat logs in the tests](#real-combat-logs-in-the-tests).
 - The gpu-screen-recorder Flatpak: stopping it relies on `flatpak run` passing SIGINT on.
 - The output format of `--list-capture-options` that the settings window parses.
-- "Only WoW's sound" assumes WoW's sound shows up in PipeWire under its .exe name (`Wow.exe`),
-  which is how Wine names a program's sound. Check with `gpu-screen-recorder
-  --list-application-audio` while WoW runs.
+- "Only WoW's sound" on retail is checked: `--list-application-audio` lists the game as
+  `World of Warcraft`, not its .exe, and recordings asking for `app:WoW.exe` alone were silent
+  (October 12, 2026). The recorder asks for both names, and gpu-screen-recorder picks the sound
+  up when the game opens it after the recording started. Not checked: Classic and other
+  clients' names. The service logs the list 90 s into each session and warns if WoW isn't in it.

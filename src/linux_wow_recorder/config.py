@@ -5,7 +5,7 @@ import os
 import shlex
 import shutil
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import APP_NAME
@@ -32,7 +32,7 @@ NOTIFY_EVENTS = {
 }
 
 # An audio source meaning WoW's own sound. The recorder turns it into gpu-screen-recorder's
-# "app:Wow.exe" for the WoW it found (Wine names a program's sound after its .exe).
+# "app:Wow.exe|app:World of Warcraft" for the WoW it found (recorder.audio_source).
 WOW_SOUND = "wow"
 # What game sound to record, as the settings offer it.
 GAME_SOUND = {
@@ -66,7 +66,7 @@ DEFAULTS = {
         "audio": [WOW_SOUND],
         "extra_args": [],
     },
-    "clips": {"pad_before": 10, "pad_after": 15, "min_run_minutes": 5},
+    "clips": {"pad_before": 10, "pad_after": 15, "min_run_minutes": 5, "other_folders": []},
     "storage": {
         "session_retention_days": 3,
         "clip_retention_days": 0,
@@ -109,6 +109,7 @@ class Config:
     after_clips: str
     poll_interval: int
     detailed_logging: bool = False
+    other_clip_dirs: list[Path] = field(default_factory=list)   # the clip browser's, read only
 
     # Everything the app writes is in these three folders, never loose in output_dir, so the
     # retention cleanup can't touch anything else the user keeps there.
@@ -191,6 +192,7 @@ def from_dict(data: dict) -> Config:
             after_clips=after_clips,
             poll_interval=max(1, int(data["daemon"]["poll_interval"])),
             detailed_logging=bool(data["logging"]["detailed"]),
+            other_clip_dirs=[Path(f).expanduser() for f in _list(c["other_folders"]) if f.strip()],
         )
     except (TypeError, ValueError) as e:
         raise ConfigError(f"Bad value in the config: {e}") from e
@@ -287,6 +289,9 @@ pad_before = {_toml(c["pad_before"])}
 pad_after = {_toml(c["pad_after"])}
 # Runs shorter than this are skipped, except completed keys
 min_run_minutes = {_toml(c["min_run_minutes"])}
+# Folders on this computer the clip browser also lists clips from, e.g. where you move them to.
+# A clip there finds its details in clips/ when its .json stayed behind. [] = only clips/.
+other_folders = {_toml(c["other_folders"])}
 
 [storage]
 # Full session recordings are deleted this many days after they're made (0 = never)

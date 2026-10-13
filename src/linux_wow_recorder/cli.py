@@ -224,10 +224,22 @@ def cmd_process(args) -> int:
         print(f"Nothing waiting in {cfg.sessions_dir}.")
     for r in results:
         print(f"{r.recording.name}: {len(r.clips)} clip(s)")
-        for run, clip in r.clips:
+        for _run, clip in r.clips:
             print(f"  {clip.name}")
         if r.problem:
             print(f"  {r.detail}")
+    return 0
+
+
+def cmd_pause(args) -> int:
+    """Stops recording for the rest of this WoW session; `resume` records again."""
+    pause = args.command == "pause"
+    why = state.request_pause(pause)
+    if why:
+        print(why)
+        return 1
+    print("Paused: the rest of this session isn't recorded. The next time WoW starts, it is."
+          if pause else "Recording again.")
     return 0
 
 
@@ -332,6 +344,8 @@ def main():
         ("status", cmd_status, "show the config and check it"),
         ("process", cmd_process, "cut the recordings waiting in sessions/ now"),
         ("test-recorder", cmd_test_recorder, "record 5 seconds to check the recorder"),
+        ("pause", cmd_pause, "stop recording for the rest of this WoW session"),
+        ("resume", cmd_pause, "record again after pause"),
         ("test-webhooks", cmd_test_webhooks, "send a test message to every webhook"),
         ("install-service", cmd_install_service, "run at every login (systemd user service)"),
         ("uninstall-service", cmd_uninstall_service, "remove the systemd user service"),

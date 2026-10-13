@@ -29,14 +29,16 @@ def test_older_configs_read_as_desktop_sound():
     assert game_sound(["wow|default_input"]) == "wow"
 
 
-def test_wow_becomes_the_running_exe():
-    assert audio_source("wow", "WowClassic.exe") == "app:WowClassic.exe"
-    assert audio_source("wow|default_input", "Wow.exe") == "app:Wow.exe|default_input"
+def test_wow_becomes_the_running_exe_and_the_games_name():
+    assert audio_source("wow", "WowClassic.exe") == "app:WowClassic.exe|app:World of Warcraft"
+    assert audio_source("wow|default_input", "Wow.exe") == \
+        "app:Wow.exe|app:World of Warcraft|default_input"
     assert audio_source("default_output", "Wow.exe") == "default_output"
 
 
 def test_wow_without_a_running_game_lists_every_known_exe():
-    assert audio_source("wow", None) == "|".join(f"app:{e}" for e in WOW_EXES)
+    assert audio_source("wow", None) == \
+        "|".join(f"app:{e}" for e in WOW_EXES) + "|app:World of Warcraft"
 
 
 def test_recorder_command(tmp_path):
@@ -44,4 +46,4 @@ def test_recorder_command(tmp_path):
     rec = Recorder(config.from_dict(data))
     rec.game_exe = "Wow.exe"
     cmd = rec.command(tmp_path / "out.mkv")
-    assert cmd[cmd.index("-a") + 1] == "app:Wow.exe"
+    assert cmd[cmd.index("-a") + 1] == "app:Wow.exe|app:World of Warcraft"

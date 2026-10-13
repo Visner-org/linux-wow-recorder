@@ -1,4 +1,5 @@
 import tomllib
+from pathlib import Path
 
 from linux_wow_recorder import config
 
@@ -77,3 +78,12 @@ def test_webhooks_blanks_repeats_and_limit(tmp_path):
     data["discord"]["webhook_urls"] = [f"https://a/{i}" for i in range(config.MAX_WEBHOOKS + 1)]
     with pytest.raises(config.ConfigError):
         config.from_dict(data)
+
+
+def test_other_folders(tmp_path):
+    data = config.load_raw(tmp_path / "missing.toml")
+    assert data["clips"]["other_folders"] == []
+    data["clips"]["other_folders"] = ["~/server clips", ""]
+    config.save(data, tmp_path / "c.toml")
+    cfg = config.load(tmp_path / "c.toml")
+    assert cfg.other_clip_dirs == [Path("~/server clips").expanduser()]

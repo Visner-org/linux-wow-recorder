@@ -24,4 +24,18 @@ build-backend = "hatchling.build"
 path = "src/linux_wow_recorder/__init__.py"
 
 [dependency-groups]
-dev = ["pytest"]
+dev = ["pytest", "ruff"]
+# The window tests (tests/test_gui_windows.py); pytest-qt won't load without Qt, so it's apart
+# from dev: uv run --extra gui --group gui-test pytest
+gui-test = ["pytest-qt"]
+
+[tool.ruff]
+line-length = 100   # the code's width; not enforced (E501), as some lines read better long
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "UP"]   # not I: its import wrapping isn't this code's
+ignore = ["E501", "E741"]   # E741: l for a lust, as in the sidecar's loops
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -66,7 +66,7 @@ And in WoW:
 ### Nobara or Fedora (RPM)
 
 ```bash
-sudo dnf install ./linux-wow-recorder-0.4.1-1.fc44.noarch.rpm
+sudo dnf install ./linux-wow-recorder-0.5.0-1.fc44.noarch.rpm
 ```
 
 dnf installs gpu-screen-recorder, ffmpeg and Qt from your distro's repos along with it. The app
@@ -129,16 +129,21 @@ You'll be asked for two folders:
 
 ### Desktop app
 
-Open **Linux WoW Recorder** from the app menu (or run `linux-wow-recorder-gui`). The first time, the settings window opens by itself:
+Open **Linux WoW Recorder** from the app menu (or run `linux-wow-recorder-gui`). The first time,
+a short setup opens by itself, in three steps:
 
-1. Fill in the two folders (the Browse buttons help). Under the combat log folder, the newest
-   log found is shown, so you know you picked the right one.
-2. Check the capture settings. "What to record" starts on "A window or screen you pick": the
-   test recording opens the screen-share dialog, where you choose the WoW window or its monitor.
-3. Press **Save and record a 5-second test**. The result shows under the button, and the video is
-   saved as `test-recording.mkv` in the output folder. Watch it to check the picture and sound.
-4. Press **Save and start**. This installs the background service and shows the tray icon at
-   every login.
+1. **Folders**: the combat log folder and the output folder (the Browse buttons help). Under
+   each, a line says what it found: the newest combat log, or the free space.
+2. **What to record**: the capture, frame rate and quality, and the sound. "Record" starts on
+   "A window or screen you pick": the test recording opens the screen-share dialog, where you
+   choose the WoW window or its monitor.
+3. **Try it**: **Save and record a 5-second test**. The result shows under the button, and the
+   video is saved as `test-recording.mkv` in the output folder. Watch it to check the picture and
+   sound. **Finish** installs the background service and shows the tray icon at every login.
+
+Everything else (clips and storage, Discord messages, the recorder command, logs) is in
+Settings later, on pages down the left. A line under a field says when something's wrong with
+it, and a page with a problem gets a ⚠ beside its name.
 
 ### Command line
 
@@ -198,13 +203,15 @@ the tray icon starts. To close the app completely, use **Quit** in the tray menu
 | empty ring | the service isn't running |
 
 - **Left-click** opens the clip browser.
-- **Right-click** opens the menu: the status, the last session, the clips folder, start and stop
-  for the service, the log, and Settings.
+- **Right-click** opens the menu: the status and the last session, then Clips, **Pause
+  recording this session** (while WoW runs: nothing more is recorded until WoW closes, and the
+  next session records as usual; Resume undoes it), Settings, and a Folders and logs submenu.
 
 You also get a desktop notification when clips are ready or something goes wrong.
 
 Closing the tray icon doesn't stop the recording: the service does the recording, not the
-icon. To stop both, use **Quit (stop recording and close)** in the menu. If the service is set
+icon: **Hide tray icon (keeps recording)** does just that. To stop both, use **Quit and stop
+recording**. If the service is set
 to start at login, it comes back at the next login; untick that in Settings to stop it for good.
 
 On GNOME, tray icons need the
@@ -215,23 +222,42 @@ extension. KDE and most other desktops show them as they are.
 
 - **Recording now**, at the top left while WoW is being recorded: the newest frame of the
   recording, every 3 seconds, so you can check it records the right screen or window. It's a few
-  seconds behind, because the recording is written to disk in chunks.
-- **The list** on the left: every clip with its date, dungeon, level, result, length and
-  deaths. Sort by any column, filter with All / Completed / Abandoned / No key, or search by
-  dungeon.
-- **The timeline** under the player shows the run:
-  - tall blue ticks: boss kills
-  - grey ticks: pulls and wipes
-  - red ticks: deaths
-  - amber ticks: Bloodlust and other lusts (Heroism, Time Warp, Primal Rage, Fury of the
-    Aspects, drums)
+  seconds behind, because the recording is written to disk in chunks. While the window is minimized or
+  in the background, the preview waits (to save the work of decoding frames nobody sees) and
+  says so; it catches up as soon as you click the window.
+- **Not ready to record yet**, at the top left only while something is missing: a checklist
+  (gpu-screen-recorder, ffmpeg, the combat log folder, combat logging, the output folder, the
+  service), with what to do about each unticked item.
+- **The clips** on the left, as cards (a picture, the dungeon and level, the result, length,
+  deaths and lusts, ★ when kept) or as a table you can sort by any column (Cards / Table).
+  Filter with All / Completed / Abandoned, or search by dungeon.
+- **Clips you move elsewhere**: add the folder in Settings > Clips and storage > "Also show
+  clips from", and the list shows the clips there too, saying which folder each is in. If you
+  leave a clip's `.json` (and `.jpg`) in `clips/` when you move the video, it keeps its picture,
+  deaths, lusts and bosses, even if the copy was renamed with hyphens for spaces. The app never
+  changes anything in those folders, and Keep and "Keep clips" don't apply there.
+- **Keystones / Full sessions**, above the list: Keystones lists the clips, one per dungeon run;
+  Full sessions lists the whole recordings they were cut from, one each time you played, with
+  every run in them on the timeline and in the events (each run holding its boss pulls). Full
+  recordings are kept for as long as Settings > Clips and storage > "Keep full recordings" says
+  (3 days unless you change it; Forever keeps them all); ☆ Keep keeps one forever. A recording
+  of the session still going is listed as "Not cut yet" once the recorder has started a new one
+  (after WoW's window closed, for example).
+- **The timeline** under the player shows the run, with a legend:
+  - above the bar, each boss pull from pull to kill (blue) or wipe (grey)
+  - below it, deaths (red ticks) and lusts (yellow brackets as long as the haste: Bloodlust,
+    Heroism, Time Warp, Primal Rage, Fury of the Aspects, Harrier's Cry, drums)
 
-  Hover a tick to see what it is, and click it to jump there.
-- **The event list** below has the same events with their times. Clicking one plays from a few
+  Hover to see what's there. Click a pull, death or lust to play from a few seconds before it;
+  click anywhere else to go there.
+- **The events** below, one row per boss pull ("killed in 1:44 · 2 deaths") holding the deaths
+  and lusts during it; wipes and pulls with deaths are opened. Clicking a row plays from a few
   seconds before it.
 - **Keys**: space plays and pauses; the left and right arrows skip 5 seconds.
-- **Buttons**: open the clip in your own video player, show it in the file manager, keep it
-  forever, run your `after_clips` command on it again, or delete it.
+- **Buttons**: **Play**; beside the title, ☆ Keep (keep it forever), open it in your own video
+  player, show it in the file manager, run your `after_clips` command on it again (only there
+  when one is set), and the red trash can: move it to the trash (with its details and picture;
+  restore them from the trash to undo).
 
 New clips show up by themselves.
 
@@ -287,18 +313,89 @@ The command runs in the background, so a long upload doesn't stop the next sessi
 recorded. Its output goes to the service log. If it fails, you get a message (when
 "Hook failed" is on).
 
+### To Fireshare
+
+[Fireshare](https://github.com/fireshare-app/fireshare) (1.9 or newer) takes uploads from scripts
+with an upload token: in Fireshare, your account > Upload tokens > create one. The upload is a
+`POST` to `/api/upload/token` with the token as `Authorization: Bearer <token>` and the clip as
+the `file` form field (`title`, `folder` and `game` are optional); Fireshare answers 201 when it
+has the clip, and 409 when it already had it. A script for `after_clips` only needs that:
+
+```bash
+#!/bin/sh
+# Uploads the new clips to Fireshare, and deletes each video here once Fireshare has it. The
+# .json and .jpg stay, so the clip browser still shows the details if you add the folder
+# Fireshare keeps its videos in to "Also show clips from".
+for clip in "$@"; do
+    code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $FIRESHARE_TOKEN" \
+           -F "file=@$clip" -F "game=World of Warcraft" https://fireshare.example.com/api/upload/token)
+    case "$code" in
+        201|409) rm -f "$clip" ;;
+        *) echo "$clip: Fireshare answered $code"; exit 1 ;;
+    esac
+done
+```
+
+Clips are large (a few GB for a key): if a reverse proxy in front of Fireshare limits upload
+sizes, send them in pieces with `/api/upload/token/chunked` instead (each request: `blob`,
+`chunkPart` from 1, `totalChunks`, a `checkSum` of your choice grouping the pieces, `fileName`,
+`fileSize`; Fireshare answers 202 until the last piece). Keep the token out of the config file
+and out of the script if others can read them: anyone with it can upload as you.
+
+### Keeping clips somewhere else
+
+The app records, cuts and keeps everything on this computer, and it doesn't move or upload
+anything itself: that's your After clips command's job, and getting the files somewhere (another
+drive, a mounted share, a sync folder) is up to you. Once they're there, the clip browser can
+still show them:
+
+1. **Move the video, leave its details.** Have your command move or delete only the `.mp4`, and
+   leave the clip's `.json` and `.jpg` in `clips/` (a few KB each).
+2. **Add the folder the videos end up in** to Settings > Clips and storage > "Also show clips
+   from". It has to be a folder on this computer: a second drive, or a share you've mounted.
+
+Then the clips there are listed with your local ones (the details line says which folder each
+is in), play from there, and still have their picture, timeline, bosses, deaths and lusts. The
+details are matched by name, ignoring spaces, hyphens and punctuation, so a copy that was renamed
+on the way (Fireshare turns spaces into hyphens) still finds them.
+
+| What you do | What the clip browser shows |
+|---|---|
+| Move the `.mp4`, leave the `.json` and `.jpg` in `clips/` | everything: picture, timeline, bosses, deaths, lusts |
+| Move the `.json` (and `.jpg`) along with the `.mp4`, keeping the name | everything; the picture only if the `.jpg` went too |
+| Move the `.mp4` and delete its details | the dungeon, level, result and length, read from the name |
+| Copy the clip and let `clips/` expire it ("Keep clips") | the copy, but from its name only once the original expires: cleanup deletes the details with the clip. Move instead of copying to keep them |
+| Nothing in "Also show clips from" | only `clips/` |
+
+Clips in those folders are yours to manage:
+
+- The app never changes or deletes anything there on its own: no pictures are made there, Keep
+  and "Keep clips" don't apply, and only **Move to trash** (which you click) touches them. On a
+  share without a trash, it asks before deleting for good; in a folder that's read only for you
+  (a read-only share, say), it says so and deletes nothing.
+- If the folder isn't there (a drive or share not mounted), its clips just aren't listed, and
+  Settings shows a ⚠ beside it.
+- New clips show up by themselves when the folder is on this computer's own drives. On a network
+  share, changes made by another computer may not show until the list reloads (closing and
+  reopening the window does it).
+- Full sessions stay in the output folder. A full recording's runs come from its own `.json`
+  in `processed/`, so moving its clips doesn't change it.
+
 ## Disk space and cleanup
 
 The app writes only inside three folders in your output folder:
 
 ```
 <output>/sessions/    the recording being made, and recordings not cut yet
-<output>/processed/   full recordings already cut
-<output>/clips/       the clips, each with a .json of details beside it
+<output>/processed/   full recordings already cut, each with a .json of details
+<output>/clips/       the clips, each with a .json of details and a .jpg picture beside it
 ```
 
 - **Full recordings** are deleted 3 days after they're made. You can change this in "Keep full
-  recordings" or `session_retention_days`; 0 means never.
+  recordings" or `session_retention_days`; 0 means never. One marked ☆ Keep in the clip
+  browser's Full sessions is never deleted. A recording whose clips couldn't be
+  cut stays in `sessions/` instead, and you get a warning (in the log, and in Discord if "clip
+  failed" messages are on).
 - **Clips** are kept until you delete them. To expire them, set "Keep clips" or
   `clip_retention_days`. A clip you've marked **Keep forever** is never deleted.
 - **Below 20 GB free** (`min_free_gb`) you get a warning. **Below 5 GB** (`stop_below_gb`)
@@ -319,9 +416,10 @@ The app writes only inside three folders in your output folder:
 
 Start with `linux-wow-recorder status`, then the log: Show log in the tray menu, or
 `linux-wow-recorder logs`. The log files are in `~/.local/state/linux-wow-recorder/logs/`
-(tray menu: Open log folder). To track a problem down, tick Detailed logging in Settings.
+(tray menu: Folders and logs > Open log folder). To track a problem down, tick Detailed logging
+in Settings > Advanced.
 
-To ask someone for help, make a report file (Settings > Make a report file, or
+To ask someone for help, make a report file (Settings > Advanced > Make a report file, or
 `linux-wow-recorder report`): a text file with your versions, settings and the end of the logs,
 with webhook links, your home folder, user name, computer name and IP addresses replaced. Nothing
 is sent; read it, then share it however you like.
@@ -344,8 +442,9 @@ On GNOME, install the AppIndicator extension mentioned above. Elsewhere, check t
 app is running: run `linux-wow-recorder-gui` in a terminal and read what it prints.
 
 **The settings didn't take effect.**
-Saving in the settings window restarts the service. After editing the config file by hand,
-restart it yourself: `systemctl --user restart linux-wow-recorder`.
+Saving in the settings window restarts the service when the config changed: the button says
+**Save and restart service** then. After editing the config file by hand, restart it yourself:
+`systemctl --user restart linux-wow-recorder`.
 
 **Deaths or lusts look wrong.**
 They come straight from the combat log, and haven't been checked against every class yet

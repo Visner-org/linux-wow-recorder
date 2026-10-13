@@ -11,8 +11,10 @@ def key_start(t, inst, name, level):
     return (T0 + t, "CHALLENGE_MODE_START", [name, str(inst), "375", str(level), "[10", "9]"])
 
 
-def key_end(t, inst, level, ms):
-    return (T0 + t, "CHALLENGE_MODE_END", [str(inst), "1", str(level), str(ms)])
+def key_end(t, inst, level, ms, success=None):
+    """success defaults to whether there's a time, so key_end(t, inst, 0, 0) is all zeros."""
+    success = bool(ms) if success is None else success
+    return (T0 + t, "CHALLENGE_MODE_END", [str(inst), "1" if success else "0", str(level), str(ms)])
 
 
 def boss(t):
@@ -42,6 +44,49 @@ def test_abandoned_key_ends_when_leaving():
         key_end(1000, 2290, 0, 0),   # reset: all zeros
     ])
     assert [(r.label, r.end) for r in runs] == [("+10 Abandoned", T0 + 900)]
+
+
+def test_key_end_success_field_decides_completed():
+    # success=0 with the level and a time filled in: abandoned, whatever those say.
+    runs = find_runs([
+        zone(0, 2290, "Mists of Tirna Scithe", 8),
+        key_start(10, 2290, "Mists of Tirna Scithe", 10),
+        zone(900, 0, "Ardenweald", 0),
+        key_end(1000, 2290, 10, 600_000, success=False),
+    ])
+    assert [(r.label, r.end, r.timer) for r in runs] == [("+10 Abandoned", T0 + 900, None)]
+
+    # success=1: completed, with the in-game time.
+    [run] = find_runs([
+        zone(0, 2290, "Mists of Tirna Scithe", 8),
+        key_start(10, 2290, "Mists of Tirna Scithe", 2),
+        key_end(1000, 2290, 2, 950_000, success=True),
+    ])
+    assert (run.label, run.timer) == ("+2 Completed", 950.0)
+
+
+def test_a_key_resumed_after_a_crash_is_one_run():
+    # Seen in a real log: WoW crashed mid-key and, back in, announced the same key again with
+    # no END before it. A reset starts with an all-zeros END instead (test above).
+    [run] = find_runs([
+        zone(0, 1762, "Kings' Rest", 23),
+        key_end(30, 1762, 0, 0),                      # the keystone going in
+        key_start(31, 1762, "Kings' Rest", 10),
+        (T0 + 150, "ENCOUNTER_START", ["2139", "The Golden Serpent", "8", "5", "1762"]),
+        (T0 + 250, "ENCOUNTER_END", ["2139", "The Golden Serpent", "8", "5", "1", "99850"]),
+        aura(600, 80353, caster="Mage-Realm-US"),
+        aura(600, 80354),
+        # The crash: the log stops; WoW's back 90 s later and says it all again.
+        zone(902, 1762, "UNKNOWN AREA", 8),
+        key_start(903, 1762, "Kings' Rest", 10),
+        aura(904, 80354),                             # the debuff put back on: not a new lust
+        (T0 + 1000, "ENCOUNTER_START", ["2143", "King Dazar", "8", "5", "1762"]),
+        (T0 + 1100, "ENCOUNTER_END", ["2143", "King Dazar", "8", "5", "1", "99824"]),
+        key_end(1400, 1762, 10, 1_442_631),
+    ])
+    assert (run.label, run.start, run.end, run.length) == ("+10 Completed", T0 + 31, T0 + 1400, "24m02s")
+    assert [e.name for e in run.encounters] == ["The Golden Serpent", "King Dazar"]
+    assert [(l.name, l.time - T0) for l in run.lusts] == [("Time Warp", 600)]
 
 
 def test_heroic_dungeon_with_a_boss():
@@ -128,6 +173,19 @@ def test_dungeon_without_a_key_keeps_its_bosses():
     assert [(e.name, e.killed) for e in run.encounters] == [("Boss", True)]
 
 
+def test_encounter_end_matches_its_start_by_id():
+    [run] = find_runs([
+        zone(0, 2290, "Mists of Tirna Scithe", 2),
+        (T0 + 60, "ENCOUNTER_START", ["2397", "Ingra Maloch", "2", "5", "2290"]),
+        (T0 + 70, "ENCOUNTER_START", ["2400", "Mistcaller", "2", "5", "2290"]),
+        (T0 + 90, "ENCOUNTER_END", ["2397", "Ingra Maloch (renamed)", "2", "5", "1", "30000"]),
+        (T0 + 95, "ENCOUNTER_END", ["9999", "Mistcaller", "2", "5", "1", "25000"]),   # not its ID
+        zone(1200, 0, "Ardenweald", 0),
+    ])
+    assert [(e.encounter_id, e.end and e.end - T0, e.killed) for e in run.encounters] == [
+        (2397, 90, True), (2400, None, False)]
+
+
 def aura(t, spell, caster="Shammy-Realm-US", dest="Player-1-AAA"):
     return (T0 + t, "SPELL_AURA_APPLIED", ["Player-1-CCC", caster, "0x511", "0x0", dest,
                                            "Someone-Realm-US", "0x511", "0x0", str(spell),
@@ -153,6 +211,65 @@ def test_lusts():
         ("Bloodlust", 100, "Shammy-Realm-US"), ("Drums", 900, None)]
 
 
+def test_harriers_cry_and_drums_name_their_caster():
+    [run] = find_runs([
+        zone(0, 2290, "Mists of Tirna Scithe", 8),
+        key_start(10, 2290, "Mists of Tirna Scithe", 10),
+        aura(100, 466904, caster="Hunter-Realm-US"),
+        aura(100.1, 264689, dest="Player-1-AAA"),   # its debuff, Fatigued
+        aura(800, 1243972, caster="Drummer-Realm-US", dest="Player-1-BBB"),
+        aura(800.1, 57723, dest="Player-1-BBB"),    # Exhaustion
+        key_end(1700, 2290, 10, 1_650_000),
+    ])
+    assert [(l.name, l.caster) for l in run.lusts] == [("Harrier's Cry", "Hunter-Realm-US"),
+                                                      ("Drums", "Drummer-Realm-US")]
+
+
+def aura_removed(t, spell, dest="Player-1-AAA"):
+    t, _, f = aura(t, spell, dest=dest)
+    return (t, "SPELL_AURA_REMOVED", f)
+
+
+def test_lust_buffs_without_a_debuff_are_not_lusts():
+    [run] = find_runs([
+        zone(0, 2290, "Mists of Tirna Scithe", 8),
+        key_start(10, 2290, "Mists of Tirna Scithe", 10),
+        aura(50, 390386, caster="Evoker-Realm-US"),   # a talent's self-buff: no debuff
+        aura(500, 390386, caster="Evoker-Realm-US"),  # the real one, with Exhaustion
+        aura(500, 390435),
+        aura(533, 390386, caster="Evoker-Realm-US"),  # extended: the buff again, no debuff
+        key_end(1700, 2290, 10, 1_650_000),
+    ])
+    assert [(l.name, l.time - T0) for l in run.lusts] == [("Fury of the Aspects", 500)]
+
+
+def test_a_lust_after_the_debuff_was_taken_off_counts():
+    # The game takes the debuffs off after a boss wipe; a lust 4 minutes later is a new one.
+    [run] = find_runs([
+        zone(0, 2290, "Mists of Tirna Scithe", 8),
+        key_start(10, 2290, "Mists of Tirna Scithe", 10),
+        aura(100, 80353, caster="Mage-Realm-US"),
+        aura(100, 80354),
+        aura_removed(150, 80354),
+        aura(340, 1243972, caster="Drummer-Realm-US"),
+        aura(340, 57723),
+        aura(400, 57724),        # Sated on a player still exhausted: not possible, so a refresh
+        key_end(1700, 2290, 10, 1_650_000),
+    ])
+    assert [(l.name, l.time - T0) for l in run.lusts] == [("Time Warp", 100), ("Drums", 340)]
+
+
+def test_a_buff_names_only_the_lust_whose_debuff_it_leaves():
+    [run] = find_runs([
+        zone(0, 2290, "Mists of Tirna Scithe", 8),
+        key_start(10, 2290, "Mists of Tirna Scithe", 10),
+        aura(95, 390386, caster="Evoker-Realm-US"),   # a self-buff just before drums
+        aura(100, 57723),                             # Exhaustion: drums, not Fury
+        key_end(1700, 2290, 10, 1_650_000),
+    ])
+    assert [(l.name, l.caster) for l in run.lusts] == [("Drums", None)]
+
+
 def test_read_log_events_keeps_only_lust_auras(tmp_path):
     log = tmp_path / "WoWCombatLog-100826_190000.txt"
     log.write_text(
@@ -171,5 +288,5 @@ def test_parse_log_time_without_a_year():
     assert parse_log_time("12/30 19:03:12.000", now=now) == datetime.datetime(2026, 12, 30, 19, 3, 12).timestamp()
     assert parse_log_time("1/4 19:03:12.000", now=now) == datetime.datetime(2027, 1, 4, 19, 3, 12).timestamp()
     assert parse_log_time("10/8/2026 19:03:12.000+5.5") == datetime.datetime(
-        2026, 10, 8, 13, 33, 12, tzinfo=datetime.timezone.utc).timestamp()
+        2026, 10, 8, 13, 33, 12, tzinfo=datetime.UTC).timestamp()
     assert parse_log_time("2/30/2026 19:03:12.000") is None

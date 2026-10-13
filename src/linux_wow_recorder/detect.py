@@ -52,8 +52,8 @@ def wow_flavor(args: list[str]) -> str | None:
     return found[0] if found else None
 
 
-def find_wow_process() -> tuple[str, str] | None:
-    """(flavor, .exe name) of the WoW client running now, or None."""
+def find_wow_process() -> tuple[str, str, int] | None:
+    """(flavor, .exe name, process ID) of the WoW client running now, or None."""
     for pid_dir in Path("/proc").iterdir():
         if not pid_dir.name.isdigit():
             continue
@@ -63,7 +63,7 @@ def find_wow_process() -> tuple[str, str] | None:
             continue
         found = wow_process([a.decode(errors="replace") for a in raw.split(b"\0") if a])
         if found:
-            return found
+            return (*found, int(pid_dir.name))
     return None
 
 

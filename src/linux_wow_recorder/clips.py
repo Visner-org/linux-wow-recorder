@@ -6,7 +6,9 @@ import logging
 import re
 import shutil
 import subprocess
+import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -63,6 +65,22 @@ def recording_span(path: Path) -> tuple[float, float] | None:
     return None
 
 
+def media_length(path: Path) -> float | None:
+    """A video's length in seconds, as ffprobe reads it, or None."""
+    try:
+        result = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                                 "-of", "csv=p=0", str(path)],
+                                capture_output=True, text=True, timeout=120)
+        return float(result.stdout.strip())
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return None
+
+
+# A cut this much shorter than asked for stopped early. ffmpeg takes a read error for the end of
+# the recording and still succeeds (seen with a failing disk: 18 of 28 minutes).
+SHORT_CUT_SECONDS = 5
+
+
 def clip_name(run: Run, rec_start: float, rec_end: float) -> str:
     stamp = datetime.datetime.fromtimestamp(run.start).strftime("%Y-%m-%d %H-%M")
     name = re.sub(r"[^\w '+()-]", "", run.name).strip()
@@ -87,6 +105,47 @@ def clip_window(cfg: Config, rec_start: float, rec_end: float, run: Run) -> tupl
 def sidecar_path(clip: Path) -> Path:
     """The clip's details file: "<clip>.mp4" -> "<clip>.json"."""
     return clip.with_suffix(".json")
+
+
+def thumbnail_path(clip: Path) -> Path:
+    """The clip's picture for the clip browser: "<clip>.mp4" -> "<clip>.jpg"."""
+    return clip.with_suffix(".jpg")
+
+
+def thumbnail_time(details: dict) -> float:
+    """Where in the clip its picture is taken: 20 s into the first boss pull, or a minute into
+    the run, within the clip."""
+    encounters = details.get("encounters") or []
+    at = (encounters[0]["start"] + 20 if encounters
+          else (details.get("run_offset") or 0) + 60)
+    length = details.get("clip_length") or 0
+    return max(0.0, min(at, length - 1)) if length else at
+
+
+def thumbnail_command(clip: Path, at: float) -> list[str]:
+    """ffmpeg grabbing one frame at `at` s into a .part file (renamed when done)."""
+    part = thumbnail_path(clip).with_name(thumbnail_path(clip).name + ".part")
+    return ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-ss", f"{at:.1f}",
+            "-i", str(clip), "-frames:v", "1", "-vf", "scale=480:-2", "-q:v", "5", "-f", "mjpeg",
+            str(part)]
+
+
+def make_thumbnail(clip: Path, details: dict) -> Path | None:
+    """The clip's picture, or None if ffmpeg couldn't make one (the browser shows a blank)."""
+    out = thumbnail_path(clip)
+    part = out.with_name(out.name + ".part")
+    try:
+        result = subprocess.run(thumbnail_command(clip, thumbnail_time(details)),
+                                capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        log.warning(f"No thumbnail for {clip.name}: {e}")
+        return None
+    if result.returncode != 0 or not part.exists():
+        part.unlink(missing_ok=True)
+        log.warning(f"No thumbnail for {clip.name}: {result.stderr.strip()}")
+        return None
+    part.replace(out)
+    return out
 
 
 def read_sidecar(clip: Path) -> dict:
@@ -168,16 +227,44 @@ def cut_clip(cfg: Config, src: Path, rec_start: float, rec_end: float, run: Run)
         part.unlink(missing_ok=True)
         log.error(f"ffmpeg failed on {out.name}:\n{result.stderr}")
         return None
+    length = media_length(part)
+    if length is None or length < stop - offset - SHORT_CUT_SECONDS:
+        part.unlink(missing_ok=True)
+        got = f"{length:.0f} s" if length is not None else "an unreadable clip"
+        log.error(f"{out.name} came out short ({got} of {stop - offset:.0f} s): the recording "
+                  f"couldn't be read to the end (a disk read error?). ffmpeg said:\n"
+                  f"{result.stderr.strip() or '(nothing)'}")
+        return None
     part.replace(out)
     details = sidecar_for(run, rec_start + offset, stop - offset, src)
     details["keep"] = read_sidecar(out).get("keep", False)   # a retry keeps the user's choice
+    thumbnail = make_thumbnail(out, details)
+    details["thumbnail"] = thumbnail.name if thumbnail else None
     write_sidecar(out, details)
     return out
 
 
-def _move_done(cfg: Config, src: Path):
+def _move_done(cfg: Config, src: Path, details: dict | None = None):
+    """Moves a cut recording to processed/, with its details file when there are details."""
     cfg.processed_dir.mkdir(parents=True, exist_ok=True)
-    src.replace(cfg.processed_dir / src.name)
+    done = cfg.processed_dir / src.name
+    src.replace(done)
+    if details is not None:
+        write_sidecar(done, details)
+
+
+def session_details(rec_start: float, rec_end: float, runs: list[Run], recording: Path) -> dict:
+    """A full recording's details, for the clip browser's Full sessions: its start and length,
+    and each dungeon run in it shaped like a clip's details, with times from the recording's
+    start."""
+    length = rec_end - rec_start
+    return {
+        "version": SIDECAR_VERSION,
+        "recording_start": rec_start,
+        "length": round(length, 1),
+        "runs": [sidecar_for(run, rec_start, length, recording) for run in runs],
+        "keep": False,
+    }
 
 
 def process_recording(cfg: Config, src: Path) -> SessionResult:
@@ -197,7 +284,7 @@ def process_recording(cfg: Config, src: Path) -> SessionResult:
     logs = combat_logs_between(cfg.combat_log_dir, rec_start, rec_end)
     if not logs:
         # Nothing to cut by; processed anyway, so it isn't retried after every session.
-        _move_done(cfg, src)
+        _move_done(cfg, src, session_details(rec_start, rec_end, [], src))
         keep = (f"for {cfg.session_retention_days} days" if cfg.session_retention_days
                 else "until you delete it")
         return SessionResult(src, problem="no_combat_log", detail=(
@@ -225,13 +312,22 @@ def process_recording(cfg: Config, src: Path) -> SessionResult:
                          "trying again after the next session.")
         return result
 
-    _move_done(cfg, src)
+    _move_done(cfg, src, session_details(rec_start, rec_end, runs, src))
     return result
 
 
-def process_pending(cfg: Config) -> list[SessionResult]:
+def process_pending(cfg: Config, stop: threading.Event | None = None,
+                    in_use: Callable[[], Path | None] = lambda: None) -> list[SessionResult]:
+    """Cuts every waiting recording, oldest first. stop is checked between recordings (the
+    rest wait for next time); in_use() names the recording being written now, which is
+    skipped."""
     results = []
     for src in pending_recordings(cfg):
+        if stop is not None and stop.is_set():
+            log.info("Stopping; the other recordings are cut next time.")
+            break
+        if src == in_use():
+            continue
         try:
             results.append(process_recording(cfg, src))
         except Exception:
@@ -241,11 +337,21 @@ def process_pending(cfg: Config) -> list[SessionResult]:
     return results
 
 
+def stale_recordings(cfg: Config) -> list[Path]:
+    """Recordings still waiting in sessions/ (their clips couldn't be cut) though they're older
+    than session_retention_days. cleanup() leaves them alone: they'd be lost un-cut."""
+    if cfg.session_retention_days <= 0:
+        return []
+    cutoff = time.time() - cfg.session_retention_days * 86400
+    return [f for f in pending_recordings(cfg) if f.stat().st_mtime < cutoff]
+
+
 def cleanup(cfg: Config) -> int:
-    """Deletes session recordings and clips older than their retention, except clips marked
-    keep. Returns the count (a clip and its sidecar count as one)."""
+    """Deletes cut recordings (processed/) and clips older than their retention, except those
+    marked keep. Recordings not cut yet (sessions/) are never deleted; see stale_recordings.
+    Returns the count (a video and its details and picture count as one)."""
     deleted = 0
-    for folders, days in (((cfg.sessions_dir, cfg.processed_dir), cfg.session_retention_days),
+    for folders, days in (((cfg.processed_dir,), cfg.session_retention_days),
                           ((cfg.clips_dir,), cfg.clip_retention_days)):
         if days <= 0:
             continue
@@ -254,18 +360,18 @@ def cleanup(cfg: Config) -> int:
             if not folder.is_dir():
                 continue
             for f in folder.iterdir():
-                # Sidecars go with their clip, below; a sidecar whose clip is gone is left.
-                if folder == cfg.clips_dir and f.suffix == ".json":
+                # Details and pictures go with their video, below; one whose video is gone is left.
+                if f.suffix in (".json", ".jpg"):
                     continue
                 try:
                     if not f.is_file() or f.stat().st_mtime >= cutoff:
                         continue
-                    if folder == cfg.clips_dir and read_sidecar(f).get("keep"):
+                    if read_sidecar(f).get("keep"):
                         continue
                     log.info(f"Deleting {f.name} (older than {days} days)")
                     f.unlink()
-                    if folder == cfg.clips_dir:
-                        sidecar_path(f).unlink(missing_ok=True)
+                    sidecar_path(f).unlink(missing_ok=True)
+                    thumbnail_path(f).unlink(missing_ok=True)
                     deleted += 1
                 except OSError as e:
                     log.warning(f"Couldn't delete {f}: {e}")
