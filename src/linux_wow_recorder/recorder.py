@@ -23,6 +23,18 @@ log = logging.getLogger(__name__)
 # gpu-screen-recorder's line when the window it records is gone (WoW crashed or closed): it then
 # goes on writing that window's last frame.
 _CAPTURE_LOST = re.compile(r'pipewire: stream \S+ previous state: "[^"]*", new state: "(error|unconnected)"')
+# Its line once a portal capture is running. Until then the screen-share dialog is waiting for a
+# pick (it can open behind WoW), and nothing is recorded.
+_STREAMING = re.compile(r'pipewire: stream \S+ previous state: "[^"]*", new state: "streaming"')
+# How long start() waits for a remembered portal pick to start streaming.
+PORTAL_WAIT = 6
+# Where gpu-screen-recorder remembers the last pick in the screen-share dialog
+# (-restore-portal-session): its own config folder, or its Flatpak's.
+RESTORE_TOKENS = (
+    Path(os.environ.get("XDG_CONFIG_HOME") or "~/.config").expanduser()
+    / "gpu-screen-recorder" / "restore_token",
+    Path("~/.var/app/com.dec05eba.gpu_screen_recorder/config/gpu-screen-recorder/restore_token").expanduser(),
+)
 # The recorder of the current session, so a run that crashed can find and stop it.
 STATE_FILE = STATE_DIR / "recorder.json"
 # WoW's sound when the running .exe isn't known (the 5-second test): every known name.
@@ -77,27 +89,36 @@ class Recorder:
         self.game_exe: str | None = None   # WoW's .exe, for recording only its sound
         self.output_log: Path | None = None  # gpu-screen-recorder's output, logs/sessions/
         self._log_read = 0   # how much of output_log capture_lost() has read
+        self.capture: str | None = None   # this session's capture instead of cfg.capture
+        self._streaming = False   # waiting_for_pick() has seen the stream start
+
+    @property
+    def capture_mode(self) -> str:
+        """What -w records: "portal", a monitor name or "screen"."""
+        return self.capture or self.cfg.capture
 
     def command(self, output: Path) -> list[str]:
         cfg = self.cfg
-        cmd = [*cfg.recorder_command, "-w", cfg.capture, "-f", str(cfg.fps)]
+        cmd = [*cfg.recorder_command, "-w", self.capture_mode, "-f", str(cfg.fps)]
         if cfg.quality:
             cmd += ["-q", cfg.quality]
         for track in cfg.audio:
             cmd += ["-a", audio_source(track, self.game_exe)]
-        if cfg.capture == "portal":
+        if self.capture_mode == "portal":
             # Remembers the screen-share permission, so it's asked only the first time.
             cmd += ["-restore-portal-session", "yes"]
         return [*cmd, *cfg.extra_args, "-o", str(output)]
 
     def start(self, output: Path) -> bool:
-        """Starts recording to output. True if the recorder is still running 3 s later."""
+        """Starts recording to output. True if the recorder is still running 3 s later; with
+        portal capture it may still be waiting for a pick then (waiting_for_pick)."""
         STATE_DIR.mkdir(parents=True, exist_ok=True)
         output.parent.mkdir(parents=True, exist_ok=True)
         cmd = self.command(output)
         log.info(f"Starting the recorder: {shlex.join(cmd)}")
         self.output_log = logs.new_session_log()
         self._log_read = 0
+        self._streaming = False
         # Set before the file exists, so clips are never cut from it while it's written.
         self.file = output
         with open(self.output_log, "ab") as out:
@@ -115,12 +136,37 @@ class Recorder:
         STATE_FILE.write_text(json.dumps({"pid": self.pid, "file": str(output)}))
 
         time.sleep(3)
+        deadline = time.time() + PORTAL_WAIT - 3
+        while self.is_running() and self.waiting_for_pick() and time.time() < deadline:
+            time.sleep(0.5)   # a remembered pick takes a moment to start
         if not self.is_running():
             log.error(f"The recorder exited right away:\n{self.log_tail()}")
             self.stop()
             return False
-        log.info(f"Recording to {output}")
+        if self.waiting_for_pick():
+            log.warning("The screen-share dialog is waiting for a pick; not recording until then.")
+        else:
+            log.info(f"Recording to {output}")
         return True
+
+    def waiting_for_pick(self) -> bool:
+        """True while a portal capture hasn't started: the screen-share dialog is open (perhaps
+        behind WoW) and nothing is being recorded."""
+        if self.capture_mode != "portal" or self.output_log is None or not self.is_running():
+            return False
+        if not self._streaming:
+            try:
+                self._streaming = bool(_STREAMING.search(self.output_log.read_text(errors="replace")))
+            except OSError:
+                return False
+        return not self._streaming
+
+    def forget_pick(self):
+        """Forgets the window (or screen) picked in the screen-share dialog, so the next start
+        asks again."""
+        for token in RESTORE_TOKENS:
+            with contextlib.suppress(OSError):
+                token.unlink(missing_ok=True)
 
     def is_running(self) -> bool:
         if self.proc is not None:
@@ -130,7 +176,11 @@ class Recorder:
     def stop(self, timeout: int = 30):
         """Stops the recorder and waits for it to save the file. Safe to call when it isn't
         running."""
-        if self.pid is not None and self.is_running():
+        if self.pid is not None and self.is_running() and self.waiting_for_pick():
+            # Nothing to save, and it ignores SIGINT while the dialog is open.
+            log.info("Stopping the recorder (nothing was picked, so nothing was recorded).")
+            _signal_group(self.pid, signal.SIGKILL)
+        elif self.pid is not None and self.is_running():
             log.info(f"Stopping the recorder (saving {self.file.name if self.file else 'the file'})...")
             _signal_group(self.pid, signal.SIGINT)
             deadline = time.time() + timeout

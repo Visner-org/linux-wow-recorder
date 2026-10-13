@@ -119,9 +119,10 @@ def test_webhook_messages_carry_no_logs_or_paths():
                             "sessions_dir"}, ast.unparse(call)
 
 
-def test_only_notify_talks_to_the_network():
-    """The app's one outside connection is webhooks (notify.py). The desktop app's QtNetwork use
-    is QLocalServer/QLocalSocket, a Unix socket on this computer."""
+def test_only_notify_and_updates_talk_to_the_network():
+    """The app's outside connections are webhooks (notify.py) and, if turned on, asking GitHub
+    for the newest version (updates.py). The desktop app's QtNetwork use is
+    QLocalServer/QLocalSocket, a Unix socket on this computer."""
     src = Path(__file__).parents[1] / "src/linux_wow_recorder"
     network = {"urllib", "http", "requests", "httpx", "aiohttp", "ftplib", "smtplib", "telnetlib"}
     for path in src.rglob("*.py"):
@@ -130,7 +131,7 @@ def test_only_notify_talks_to_the_network():
                    for a in n.names}
         modules |= {(n.module or "").split(".")[0] for n in ast.walk(tree)
                     if isinstance(n, ast.ImportFrom)}
-        if path.name != "notify.py":
+        if path.name not in ("notify.py", "updates.py"):
             assert not modules & network, path
         qt_net = {a.name for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)
                   and (n.module or "").endswith("QtNetwork") for a in n.names}
@@ -138,3 +139,11 @@ def test_only_notify_talks_to_the_network():
         calls = {n.func.attr for n in ast.walk(tree) if isinstance(n, ast.Call)
                  and isinstance(n.func, ast.Attribute)}
         assert not calls & {"connect_ex", "create_connection", "sendto"}, path
+
+
+def test_the_update_check_asks_github_only():
+    from linux_wow_recorder import updates
+    text = Path(updates.__file__).read_text()
+    assert re.findall(r"https?://[^\s\"']+", text) == [
+        "https://api.github.com/repos/Visner-org/linux-wow-recorder/releases/latest"]
+    assert "urlopen(request" in text and text.count("urlopen(") == 1

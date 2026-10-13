@@ -85,6 +85,8 @@ def clip_name(run: Run, rec_start: float, rec_end: float) -> str:
     stamp = datetime.datetime.fromtimestamp(run.start).strftime("%Y-%m-%d %H-%M")
     name = re.sub(r"[^\w '+()-]", "", run.name).strip()
     clip = f"{stamp} {name} {run.label} ({run.length})"
+    if run.is_raid:   # the same boss is pulled again and again
+        clip = f"{stamp} {name} {run.label} pull {run.pull} ({run.length})"
     # A run split over two recordings (the recorder restarted mid-run) gives one clip from
     # each; the recording's start time keeps their names apart. Names are otherwise the same
     # every time, so a retry overwrites a clip instead of making a copy.
@@ -186,7 +188,7 @@ def sidecar_for(run: Run, clip_start: float, length: float, recording: Path) -> 
              for l in run.lusts if at(l.time) is not None]
     return {
         "version": SIDECAR_VERSION,
-        "dungeon": run.name,
+        "dungeon": run.name,   # a raid pull's boss
         "label": run.label,
         "level": run.level,
         "result": run.result,
@@ -204,6 +206,8 @@ def sidecar_for(run: Run, clip_start: float, length: float, recording: Path) -> 
         "lusts": lusts,
         "recording": recording.name,
         "keep": False,
+        **({"kind": "raid", "raid": run.raid, "difficulty": run.difficulty, "pull": run.pull}
+           if run.is_raid else {}),
     }
 
 
@@ -291,9 +295,11 @@ def process_recording(cfg: Config, src: Path) -> SessionResult:
             f"No combat log covers `{src.name}`. Is combat logging on? "
             f"The full recording is kept in processed/ {keep}."))
 
-    runs = [r for r in find_runs(read_log_events(logs), cfg.min_run_minutes)
+    runs = [r for r in find_runs(read_log_events(logs), cfg.min_run_minutes, cfg.raids)
             if r.end > rec_start and r.start < rec_end]
-    log.info(f"{src.name}: {len(runs)} dungeon run(s) in the combat log.")
+    pulls = sum(r.is_raid for r in runs)
+    log.info(f"{src.name}: {len(runs) - pulls} dungeon run(s) and {pulls} raid pull(s) in the "
+             "combat log.")
 
     result = SessionResult(src)
     failed = 0

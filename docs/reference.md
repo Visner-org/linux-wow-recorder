@@ -23,6 +23,7 @@
 | `test-webhooks` | sends a test message to every webhook and names any that failed (`test-discord` is the old name) |
 | `install-service` | installs and starts the systemd user service, which runs at every login |
 | `uninstall-service` | stops and removes the service; the config and recordings stay |
+| `uninstall` | a clean uninstall (Settings > Advanced > Uninstall... runs it): stops and removes the service, the autostart and menu entries the app wrote, the config, logs and runtime files, and for a uv or pipx install the program too; an RPM or Arch package is removed with the `dnf`/`pacman` command it prints. Recordings and clips stay unless asked: `--delete-recordings` removes `sessions/`, `processed/` and `clips/` (nothing else in the output folder, nor other folders' clips). `--yes` asks nothing; `--keep-program` leaves the program installed |
 | `logs [-n LINES]` | where the logs are, and the service log's last lines (40) |
 | `report [FOLDER]` | writes `linux-wow-recorder-report-<date>.txt` to FOLDER (default: the Desktop) for sharing by hand; nothing is sent ([Logs](#logs)) |
 
@@ -53,6 +54,7 @@ file take their defaults, and unknown ones are ignored.
 |---|---|---|
 | `command` | `"gpu-screen-recorder"` | the recorder. For the Flatpak: `"flatpak run --command=gpu-screen-recorder com.dec05eba.gpu_screen_recorder"` |
 | `capture` | `"portal"` | `"portal"`, a monitor name from `gpu-screen-recorder --list-capture-options`, or `"screen"`: the first monitor in that list, not necessarily your main one |
+| `monitor` | `""` | what **Record monitor instead** switches a session to while `capture` is `"portal"`: a monitor name, or `""` for `"screen"` |
 | `fps` | `60` | |
 | `quality` | `""` | `"medium"`, `"high"`, `"very_high"` or `"ultra"`; empty uses gpu-screen-recorder's default |
 | `audio` | `["wow"]` | one track per entry: `"wow"` is only WoW's own sound, `"default_output"` all desktop sound (WoW, Discord, music...), `"default_input"` the microphone; `"wow\|default_input"` mixes two into one track. `[]` records no sound. Anything else goes to gpu-screen-recorder's `-a` as it is, e.g. `"app:discord"`. |
@@ -65,6 +67,7 @@ file take their defaults, and unknown ones are ignored.
 | `pad_before` | `10` | seconds of video kept before a run |
 | `pad_after` | `15` | seconds of video kept after a run |
 | `min_run_minutes` | `5` | shorter runs are skipped, except completed keys |
+| `raids` | `"all"` | raid boss pulls: `"all"` (a clip per pull, kills and wipes; pulls under 30 s that aren't kills are skipped), `"kills"`, or `"off"` |
 | `other_folders` | `[]` | folders on this computer the clip browser also lists clips from (only the desktop app reads it). A clip there whose `.json` stayed in `clips/` is matched to it by name, ignoring spaces, hyphens and punctuation, so a renamed copy still finds its details |
 
 ### `[storage]`
@@ -89,7 +92,7 @@ file take their defaults, and unknown ones are ignored.
 | `session_started` | false | WoW started and recording began |
 | `session_ended` | false | WoW closed and the recording was saved |
 | `clips_ready` | true | clips are ready after a session |
-| `no_runs` | false | a session ended with no dungeon runs in it |
+| `no_runs` | false | a session ended with no dungeon runs or raid pulls in it |
 | `no_combat_log` | true | no combat log covers a session |
 | `recording_failed` | true | the recorder didn't start, or stopped mid-session |
 | `low_disk_space` | true | free space is under `min_free_gb`, or recording stopped under `stop_below_gb` |
@@ -102,6 +105,12 @@ file take their defaults, and unknown ones are ignored.
 | Key | Default | |
 |---|---|---|
 | `after_clips` | `""` | a command run after each session (in the background), with the new clips' paths added as arguments. `~` is expanded in the program's path. It's split like a shell would, but not run through one, so pipes and `&&` need a script. |
+
+### `[updates]`
+
+| Key | Default | |
+|---|---|---|
+| `check` | `false` | the tray app asks GitHub once a day for the newest release's version (`api.github.com/repos/Visner-org/linux-wow-recorder/releases/latest`; the request carries nothing about you) and, if it's newer, says so in a popup once and in the menu, with a link. It never downloads or installs anything. Setup asks; configs from before 0.6.0 stay `false` until you tick it in Settings > About. |
 
 ### `[daemon]`
 
@@ -120,13 +129,14 @@ file take their defaults, and unknown ones are ignored.
 | Path | |
 |---|---|
 | `~/.config/linux-wow-recorder/config.toml` | the config |
+| `~/.config/linux-wow-recorder/gui.ini` | the desktop app's own choices: the clips window's view, and when GitHub was last asked about a new version and what it said |
 | `~/.config/systemd/user/linux-wow-recorder.service` | the service, written by `install-service` |
 | `~/.config/autostart/linux-wow-recorder-gui.desktop` | starts the tray icon at login |
 | `~/.local/share/applications/linux-wow-recorder-gui.desktop` | the app menu entry |
 | `~/.local/state/linux-wow-recorder/recorder.json` | the recorder's process, so a restarted service can stop one left running |
 | `~/.local/state/linux-wow-recorder/logs/` | the logs ([below](#logs)) |
 | `$XDG_RUNTIME_DIR/linux-wow-recorder/status.json` | what the service is doing ([below](#service-status-statusjson)) |
-| `$XDG_RUNTIME_DIR/linux-wow-recorder/control.json` | a pause asked for by `pause` or the tray, for one session |
+| `$XDG_RUNTIME_DIR/linux-wow-recorder/control.json` | a pause (`pause` or the tray), a switch to the monitor or another pick (tray or clips window), for one session |
 | `<output>/sessions/` | the recording being made, and recordings not cut yet (`2026-10-08_19-03-12.mkv`) |
 | `<output>/processed/` | full recordings already cut, each with its details (`.json`) and, once the clip browser has shown it, a picture (`.jpg`) |
 | `<output>/clips/` | the clips (`.mp4`), their details (`.json`) and pictures (`.jpg`) |
@@ -199,10 +209,11 @@ over two recordings gets one clip from each, each with its own part).
 | Field | |
 |---|---|
 | `version` | the format's version; it goes up if fields change meaning |
-| `dungeon` | the dungeon's name as WoW logs it |
-| `label` | `"+11 Completed"`, `"+10 Abandoned"`, or a difficulty: `"Heroic"`, `"Mythic"`, `"Normal"`, `"Timewalking"`, `"Follower"` |
+| `dungeon` | the dungeon's name as WoW logs it; a raid pull's boss |
+| `label` | `"+11 Completed"`, `"+10 Abandoned"`, or a difficulty: `"Heroic"`, `"Mythic"`, `"Normal"`, `"Timewalking"`, `"Follower"`; a raid pull's difficulty and result: `"Heroic Kill"`, `"LFR Wipe"` |
 | `level` | the keystone level, or `null` without a key |
-| `result` | `"completed"`, `"abandoned"`, or the difficulty in lower case |
+| `result` | `"completed"`, `"abandoned"`, or the difficulty in lower case; a raid pull's `"kill"` or `"wipe"` |
+| `kind`, `raid`, `difficulty`, `pull` | a raid pull's only: `"raid"`, the raid's name, its difficulty (`"LFR"`, `"Normal"`, `"Heroic"`, `"Mythic"`, ...), and the pull's number on that boss and difficulty in the recording, from 1 |
 | `run_start`, `run_end` | when the run started and ended |
 | `run_length` | the in-game timer for a completed key, the run's length otherwise |
 | `timer` | a completed key's in-game time in seconds, death penalties included; `null` otherwise |
@@ -223,7 +234,7 @@ back on the clip's name for those.
 
 Each full recording in `processed/` gets a `.json` of the same name when it's cut, for the clip
 browser's **Full sessions**. Times in it are **seconds from the recording's start**, except
-`recording_start` (a Unix time); `runs` holds each dungeon run in the recording, shaped like a
+`recording_start` (a Unix time); `runs` holds each dungeon run and raid pull in the recording, shaped like a
 clip's details above, including runs too short to get a clip. `keep` works as it does for clips:
 a kept recording is never deleted, whatever `session_retention_days` says. Recordings cut by
 0.5.0 or earlier have no `.json`; the clip browser finds their runs from the clips cut from them
@@ -254,6 +265,9 @@ is missing, its `pid` isn't running, or `state` is `"stopped"`, the service isn'
   "recording_file": "/media/games/wow-recordings/sessions/2026-10-10_19-03-12.mkv",
   "free_gb": 412.3,
   "problem": null,
+  "picking": false,
+  "capture": "portal",
+  "monitor_switch": false,
   "last_session": {"end": 1791610000.0, "clips": ["/media/.../clips/....mp4"], "problems": []},
   "updated": 1791694660.2
 }
@@ -263,10 +277,11 @@ is missing, its `pid` isn't running, or `state` is `"stopped"`, the service isn'
 |---|---|
 | `waiting` | watching for WoW |
 | `recording` | WoW is running and being recorded |
-| `not_recording` | WoW is running but isn't being recorded: the recorder failed, or the disk is nearly full (`problem` says which) |
+| `not_recording` | WoW is running but isn't being recorded: the screen-share dialog is waiting for a pick (`picking`), the recorder failed, or the disk is nearly full (`problem` says which) |
 | `paused` | WoW is running; recording was paused for this session (`pause`, or the tray) |
 | `processing` | cutting clips after a session (while WoW isn't running) |
 | `stopped` | the service has exited |
 
-`problem` is a sentence while something is wrong, `null` otherwise. `last_session` is the last
+`problem` is a sentence while something is wrong, `null` otherwise. `capture` is what this
+session records (`-w`), and `monitor_switch` is true once it was switched to the monitor. `last_session` is the last
 time recordings were cut: when, the new clips, and any problems (as Discord message text).

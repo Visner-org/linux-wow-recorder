@@ -84,6 +84,15 @@ daemon.run() loop, every poll_interval seconds
       status.json: processing while cutting, unless a new session is recording
 ```
 
+**Updates:** the service and the tray app each keep a `service.UpdateWatch`, which compares the
+installed package's version (its metadata on disk) with the one installed when they started, once a
+minute; a new one counts once two checks in a row see it, so a package still being installed isn't
+caught halfway. The service restarts only with no session, no cutter and no `after_clips` thread
+running; the tray app only with none of its windows open. Both `os.execv` themselves (the same
+process ID, so systemd and the autostart see nothing), the tray app after releasing its lock and
+local server. Nothing runs from the package's install scripts: they run as root, outside the
+user's session.
+
 On start, the service stops a recorder left running by a run that crashed
 (`recorder.adopt_leftover`), and cuts whatever an earlier run left in `sessions/`.
 
@@ -286,7 +295,6 @@ Each release gets an entry in the `%changelog` of `packaging/linux-wow-recorder.
 
 ## Not done yet
 
-- Raids (`ENCOUNTER_START`/`END` per boss pull, one clip per pull or per raid night).
 - Timed vs depleted for keys: the log only says completed. It needs each dungeon's time limit,
   which changes every season.
 - Choosing the encoder GPU on machines with two GPUs.

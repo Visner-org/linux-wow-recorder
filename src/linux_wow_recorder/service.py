@@ -1,14 +1,18 @@
 """Installs the app as a systemd user service, so it runs whenever the user is logged in."""
 
+import os
 import shutil
 import subprocess
 import sys
+from importlib import metadata
 from pathlib import Path
 
 from . import APP_NAME, APP_TITLE
 
 UNIT_NAME = f"{APP_NAME}.service"
-UNIT_FILE = Path("~/.config/systemd/user").expanduser() / UNIT_NAME
+# systemd reads user units from $XDG_CONFIG_HOME/systemd/user, like the app's own config.
+UNIT_FILE = (Path(os.environ.get("XDG_CONFIG_HOME") or "~/.config").expanduser() / "systemd" / "user"
+             / UNIT_NAME)
 
 
 def _exec_start() -> str:
@@ -65,3 +69,41 @@ def state() -> str:
     if not UNIT_FILE.exists():
         return "not installed"
     return _systemctl("is-active", UNIT_NAME).stdout.strip() or "unknown"
+
+
+# ── Updates ──
+
+# How often the service and the desktop app look for a newer version installed under them.
+UPDATE_CHECK_SECONDS = 60
+
+
+def installed_version() -> str | None:
+    """The version installed on disk now (its package metadata), which an upgrade changes under
+    a running program. None when it can't be told (running from a source folder)."""
+    try:
+        return metadata.version(APP_NAME)
+    except metadata.PackageNotFoundError:
+        return None
+
+
+class UpdateWatch:
+    """Notices a different version installed under the running program (an RPM, Arch package or
+    `uv tool upgrade`), so it can restart into it when it's safe. Compared with what was
+    installed when it started, not with __version__: a source checkout's metadata can lag
+    behind its code. A version counts once two checks in a row see it, so a package that's
+    still being installed isn't caught halfway."""
+
+    def __init__(self):
+        self.running = installed_version()
+        self._seen: str | None = None
+
+    def check(self) -> str | None:
+        """The newly installed version, once it's settled; None otherwise."""
+        found = installed_version()
+        if not found or not self.running or found == self.running:
+            self._seen = None
+            return None
+        if found != self._seen:
+            self._seen = found
+            return None
+        return found

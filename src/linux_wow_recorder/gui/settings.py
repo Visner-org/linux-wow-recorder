@@ -12,14 +12,14 @@ from pathlib import Path
 
 from PySide6.QtCore import QEvent, QProcess, Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import (QAbstractButton, QButtonGroup, QCheckBox, QComboBox, QDialog,
+from PySide6.QtWidgets import (QAbstractButton, QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog,
                                QFileDialog, QFormLayout, QHBoxLayout, QLabel,
                                QLineEdit, QListWidget, QMessageBox, QPlainTextEdit, QPushButton,
                                QRadioButton,
                                QScrollArea, QSizePolicy, QSpinBox, QStackedWidget, QVBoxLayout,
                                QWidget)
 
-from .. import APP_TITLE, REPO_URL, __version__, config, logs, service, state
+from .. import APP_TITLE, REPO_URL, __version__, config, logs, service, state, uninstall, updates
 from ..cli import find_recorder_command
 from ..config import CONFIG_FILE, MAX_WEBHOOKS, NOTIFY_EVENTS, ConfigError
 from ..notify import Notifier
@@ -47,7 +47,7 @@ PAGES = ("Folders and capture", "Sound", "Clips and storage", "Notifications", "
 FIELD_PAGE = {"combat_log_dir": 0, "output_dir": 0, "stop_below_gb": 2, "other_folders": 2,
               "webhooks": 3, "recorder_command": 4, "after_clips": 4}
 # Settings only the desktop app reads: changing them doesn't restart the service.
-APP_ONLY = (("clips", "other_folders"),)
+APP_ONLY = (("clips", "other_folders"), ("updates", "check"))
 WIZARD = (("Folders", "Where WoW writes its combat log, and where recordings and clips go."),
           ("What to record", "The picture and the sound. Everything else can wait for Settings."),
           ("Try it", "A 5-second recording to check the picture and the sound. Then Finish "
@@ -159,6 +159,7 @@ class SettingsWindow(QDialog):
             "storage": self.storage_part(), "notify": self.notify_part(),
             "recorder": self.recorder_part(), "hook": self.hook_part(),
             "service": self.service_part(), "logging": self.logging_part(),
+            "updates": self.updates_part(),
         }
         self.problems = QLabel()   # what no field shows: missing programs
         self.problems.setWordWrap(True)
@@ -189,8 +190,10 @@ class SettingsWindow(QDialog):
             [_heading("Clips"), p["clips"], _heading("Storage"), p["storage"]],
             [_heading("Discord or Fluxer messages"), p["notify"]],
             [_heading("Recorder"), p["recorder"], _heading("After clips"), p["hook"],
-             _heading("Background service"), p["service"], _heading("Logs"), p["logging"]],
-            [_heading(APP_TITLE), self.about_part(), _heading("License"), self.license_part()],
+             _heading("Background service"), p["service"], _heading("Logs"), p["logging"],
+             _heading("Uninstall"), self.uninstall_part()],
+            [_heading(APP_TITLE), self.about_part(), _heading("New versions"), p["updates"],
+             _heading("License"), self.license_part()],
         ]
         self.sidebar = QListWidget()
         self.sidebar.addItems(PAGES)
@@ -224,7 +227,8 @@ class SettingsWindow(QDialog):
 
     def build_wizard(self, layout: QVBoxLayout):
         p = self.parts
-        steps = [[p["folders"]], [p["capture"], _heading("Sound"), p["sound"]], [p["test"]]]
+        steps = [[p["folders"]], [p["capture"], _heading("Sound"), p["sound"]],
+                 [p["test"], _heading("New versions"), p["updates"]]]
         self.step_title = _heading("")
         self.step_text = _hint()
         self.stack = QStackedWidget()
@@ -359,6 +363,11 @@ class SettingsWindow(QDialog):
         # don't widen the window to fit the longest option
         self.capture.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
         self.capture.setMinimumContentsLength(12)
+        # What "Record monitor instead" (tray, clips window) switches a session to.
+        self.monitor = QComboBox()
+        self.monitor.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.monitor.setMinimumContentsLength(12)
+        self.monitor.activated.connect(self.flash_switch_monitor)
         # The defaults now; the recorder's own list when it answers (list_capture_options).
         self.fill_capture(DEFAULT_CAPTURE, r["capture"])
         self.list_capture_options()
@@ -375,6 +384,13 @@ class SettingsWindow(QDialog):
         row.addWidget(self.capture, 1)
         row.addWidget(about)
         form.addRow("Record", row)
+        self.monitor_hint = _hint("For \"Record monitor instead\" in the tray menu.")
+        self.monitor_field = _field(self.monitor, self.monitor_hint)
+        form.addRow("Monitor instead", self.monitor_field)
+        self.monitor_label = form.labelForField(self.monitor_field)
+        self.capture.currentIndexChanged.connect(lambda _: self.show_monitor_row())
+        self.capture.editTextChanged.connect(lambda _: self.show_monitor_row())
+        self.show_monitor_row()
 
         self.fps = QComboBox()
         for fps in (30, 60, 120, 144):
@@ -428,6 +444,12 @@ class SettingsWindow(QDialog):
         form.addRow("Extra video before a run", self.pad_before)
         self.pad_after = _spin(c["pad_after"], 0, 600, " s")
         form.addRow("Extra video after a run", self.pad_after)
+        self.raids = QComboBox()
+        for value, label in config.RAID_CHOICES.items():
+            self.raids.addItem(label, value)
+        self.raids.setCurrentIndex(max(0, self.raids.findData(c["raids"])))
+        form.addRow("Raid boss clips",
+                    _field(self.raids, _hint("A clip per boss pull. Pulls under 30 s are skipped.")))
         return _section(form, _heading("Also show clips from"), self.other_folders_part())
 
     def other_folders_part(self) -> QWidget:
@@ -549,6 +571,45 @@ class SettingsWindow(QDialog):
                         _hint("Logs stay on this computer; nothing is ever sent. The report file "
                               "is for you to share by hand if you want help."))
 
+    def uninstall_part(self) -> QWidget:
+        button = QPushButton("Uninstall...")
+        button.clicked.connect(self.uninstall)
+        row = QHBoxLayout()
+        row.addWidget(button)
+        row.addStretch(1)
+        return _section(row)
+
+    def uninstall(self):
+        """Asks what to remove, then runs `uninstall` in a process of its own (stopping the
+        service can take a while: the recording in progress is saved first) and quits."""
+        dialog = UninstallDialog(self)
+        if dialog.exec() != QDialog.Accepted:
+            return
+        args = ["-m", "linux_wow_recorder", "uninstall", "--yes"]
+        if dialog.delete_recordings.isChecked():
+            args.append("--delete-recordings")
+        if dialog.remove_program is None or not dialog.remove_program.isChecked():
+            args.append("--keep-program")
+        self.setEnabled(False)
+        process = QProcess(self)
+        process.setProcessChannelMode(QProcess.MergedChannels)
+        process.finished.connect(lambda *_: self.uninstalled(process, dialog.program))
+        process.start(sys.executable, args)
+
+    def uninstalled(self, process: QProcess, prog):
+        out = bytes(process.readAll()).decode(errors="replace")
+        lines = [l for l in out.splitlines() if "[INFO]" not in l and "[WARNING]" not in l]
+        if process.exitCode() != 0:
+            QMessageBox.warning(self, APP_TITLE, "Uninstalling didn't finish:\n\n"
+                                + "\n".join(lines[-8:]))
+            self.setEnabled(True)
+            return
+        text = f"{APP_TITLE} is uninstalled."
+        if prog.needs_root:
+            text += f"\n\nTo remove the program itself, run:\n{prog.text}"
+        QMessageBox.information(self, APP_TITLE, text)
+        QApplication.instance().quit()
+
     def about_part(self) -> QWidget:
         version = QLabel(f"Version {__version__}")
         font = version.font()
@@ -567,8 +628,46 @@ class SettingsWindow(QDialog):
             links,
             _hint(f"Python {sys.version.split()[0]}, {qt}. A report file "
                   "(Advanced > Make a report file) has these and more, for a problem report."),
-            _hint("No telemetry, update checks or crash reports: the only thing this app sends "
-                  "is your own webhook messages."))
+            _hint("No telemetry or crash reports. All it sends is your own webhook messages and, "
+                  "if you turn it on, a daily check for a new version."))
+
+    def updates_part(self) -> QWidget:
+        self.check_updates = QCheckBox("Check for new versions once a day")
+        # Setup shows it ticked, so it's a choice made there; an existing config keeps its own.
+        self.check_updates.setChecked(True if self.first_run else bool(self.data["updates"]["check"]))
+        self.check_now = QPushButton("Check now")
+        self.check_now.clicked.connect(self.start_update_check)
+        self.update_result = QLabel()
+        self.update_result.setOpenExternalLinks(True)
+        self.update_check: updates.Check | None = None
+        self.update_timer = QTimer(self, interval=300)
+        self.update_timer.timeout.connect(self.update_checked)
+        row = QHBoxLayout()
+        row.addWidget(self.check_now)
+        row.addWidget(self.update_result, 1)
+        return _section(self.check_updates, row, _hint(
+            "Asks GitHub for the newest version number; nothing about you is sent. "
+            "Installing it is up to you."))
+
+    def start_update_check(self):
+        self.check_now.setEnabled(False)
+        self.update_result.setText("Checking...")
+        self.update_check = updates.Check()
+        self.update_timer.start()
+
+    def update_checked(self):
+        if not self.update_check or not self.update_check.done:
+            return
+        self.update_timer.stop()
+        self.check_now.setEnabled(True)
+        found, self.update_check = self.update_check.version, None
+        if found is None:
+            self.update_result.setText("Couldn't reach GitHub.")
+        elif updates.is_newer(found, __version__):
+            self.update_result.setText(f'Version {found} is out: <a href="{updates.RELEASES_PAGE}">'
+                                       'release page</a>')
+        else:
+            self.update_result.setText("This is the newest version.")
 
     def license_part(self) -> QWidget:
         intro = _hint(
@@ -599,7 +698,33 @@ class SettingsWindow(QDialog):
         if monitor:
             self.monitor_flash.flash(monitor)
 
+    def flash_switch_monitor(self, i: int):
+        options = [self.monitor.itemData(j) for j in range(self.monitor.count())]
+        if monitor := model.capture_monitor(self.monitor.itemData(i) or "screen", options):
+            self.monitor_flash.flash(monitor)
+
+    def show_monitor_row(self):
+        """The monitor to switch to only matters while a window is picked in the dialog."""
+        shown = self.capture_value() == "portal"
+        self.monitor_field.setVisible(shown)
+        if self.monitor_label:
+            self.monitor_label.setVisible(shown)
+
+    def fill_monitor(self, options: list[tuple[str, str]], current: str):
+        """The capture options without the portal; "" (the config's default) is "screen"."""
+        self.monitor.clear()
+        for value, label in options:
+            if value != "portal":
+                self.monitor.addItem(label, "" if value == "screen" else value)
+        i = self.monitor.findData(current)
+        if i < 0:
+            self.monitor.addItem(current, current)
+            i = self.monitor.count() - 1
+        self.monitor.setCurrentIndex(i)
+
     def fill_capture(self, options: list[tuple[str, str]], current: str):
+        self.fill_monitor(options, self.monitor.currentData() if self.monitor.count()
+                          else self.data["recorder"]["monitor"])
         self.capture.blockSignals(True)
         self.capture.clear()
         for value, label in options:
@@ -628,7 +753,10 @@ class SettingsWindow(QDialog):
         QTimer.singleShot(10_000, process.kill)   # a no-op once it has finished
 
     def capture_options_listed(self, process: QProcess):
-        out = bytes(process.readAllStandardOutput()).decode(errors="replace")
+        try:
+            out = bytes(process.readAllStandardOutput()).decode(errors="replace")
+        except RuntimeError:
+            return   # the window closed before the recorder answered; its process went with it
         self.capture_lister = None
         if options := model.parse_capture_options(out):
             self.fill_capture(options, self.capture_value())
@@ -689,6 +817,7 @@ class SettingsWindow(QDialog):
         r = d["recorder"]
         r["command"] = self.command.text().strip()
         r["capture"] = self.capture_value()
+        r["monitor"] = self.monitor.currentData() or ""
         r["fps"] = self.fps.currentData()
         r["quality"] = self.quality.currentData()
         game = list(config.GAME_SOUND)[max(0, self.game_sound.checkedId())]
@@ -699,6 +828,7 @@ class SettingsWindow(QDialog):
         s["min_free_gb"] = self.min_free.value()
         s["stop_below_gb"] = self.stop_below.value()
         c["min_run_minutes"] = self.min_run.value()
+        c["raids"] = self.raids.currentData()
         c["pad_before"] = self.pad_before.value()
         c["pad_after"] = self.pad_after.value()
         c["other_folders"] = [self.other_folders.item(i).text()
@@ -708,6 +838,7 @@ class SettingsWindow(QDialog):
         d["discord"]["notify"] = {k: b.isChecked() for k, b in self.events.items()}
         d["hooks"]["after_clips"] = self.hook.text().strip()
         d["logging"]["detailed"] = self.detailed.isChecked()
+        d["updates"]["check"] = self.check_updates.isChecked()
         return d
 
     def update_checks(self):
@@ -878,6 +1009,51 @@ class SettingsWindow(QDialog):
         else:
             QMessageBox.warning(self, APP_TITLE, f"Failed for webhook "
                                 f"{', '.join(map(str, failed))}. Check the URL.")
+
+
+class UninstallDialog(QDialog):
+    """What uninstalling removes, with the two choices: the recordings, and the program."""
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.setWindowTitle(f"Uninstall {APP_TITLE}")
+        try:
+            cfg = config.load()
+        except (ConfigError, OSError):
+            cfg = None
+        self.program = uninstall.program()
+        folders = uninstall.recording_folders(cfg)
+        layout = QVBoxLayout(self)
+        intro = QLabel(f"This stops {APP_TITLE} and removes its service, login and menu "
+                       "entries, settings and logs.")
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+        if (state.read() or {}).get("state") == state.RECORDING:
+            layout.addWidget(QLabel("WoW is being recorded: the recording so far is saved first."))
+        self.delete_recordings = QCheckBox(
+            f"Also delete my recordings and clips ({uninstall.size_gb(folders):.1f} GB in "
+            f"{cfg.output_dir})" if folders else "Also delete my recordings and clips")
+        self.delete_recordings.setEnabled(bool(folders))
+        layout.addWidget(self.delete_recordings)
+        self.remove_program = None
+        if self.program.needs_root:
+            then = QLabel(f"Then remove the program with: <code>{_html(self.program.text)}</code>")
+            then.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            layout.addWidget(then)
+        elif self.program.kind != "other":
+            self.remove_program = QCheckBox(f"Also remove the program ({self.program.text})")
+            self.remove_program.setChecked(True)
+            layout.addWidget(self.remove_program)
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        cancel, go = QPushButton("Cancel"), QPushButton("Uninstall")
+        cancel.setDefault(True)   # an Enter by mistake doesn't uninstall
+        cancel.clicked.connect(self.reject)
+        go.clicked.connect(self.accept)
+        buttons.addWidget(cancel)
+        buttons.addWidget(go)
+        layout.addSpacing(8)
+        layout.addLayout(buttons)
 
 
 def _html(text: str) -> str:

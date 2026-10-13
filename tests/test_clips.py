@@ -87,6 +87,47 @@ def test_cuts_a_session_into_clips(tmp_path):
     assert abs(whole["encounters"][0]["start"] - 90) < 2
 
 
+def test_clip_name_of_a_raid_pull():
+    t = datetime.datetime(2026, 10, 14, 20, 15).timestamp()
+    run = Run("Vexie and the Geargrinders", t, t + 151, "LFR Wipe", result="wipe",
+              raid="Liberation of Undermine", difficulty="LFR", pull=3)
+    assert clip_name(run, t - 60, t + 3000) == (
+        "2026-10-14 20-15 Vexie and the Geargrinders LFR Wipe pull 3 (2m31s).mp4")
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="needs ffmpeg")
+def test_cuts_raid_pulls_into_clips(tmp_path):
+    cfg = make_cfg(tmp_path)
+    cfg.sessions_dir.mkdir()
+    rec = cfg.sessions_dir / "2026-10-14_20-00-00.mkv"
+    subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc=size=320x180:rate=10",
+                    "-t", "300", "-c:v", "libx264", "-preset", "ultrafast", "-g", "10", "-b:v",
+                    "500k", str(rec)], check=True)
+    end = 1_800_000_000.0
+    os.utime(rec, (end, end))
+    start = end - 300
+    log = cfg.combat_log_dir / f"WoWCombatLog-{datetime.datetime.fromtimestamp(start - 600):%m%d%y_%H%M%S}.txt"
+    log.write_text(
+        f'{stamp(start + 10)}  ZONE_CHANGE,2769,"Liberation of Undermine",17\n'
+        f'{stamp(start + 30)}  ENCOUNTER_START,3009,"Vexie and the Geargrinders",17,25,2769\n'
+        f'{stamp(start + 60)}  UNIT_DIED,0000000000000000,nil,0x80000000,0x80000000,Player-1-A,"Tank-Realm-US",0x511,0x0,0\n'
+        f'{stamp(start + 90)}  ENCOUNTER_END,3009,"Vexie and the Geargrinders",17,25,0,60000\n'
+        f'{stamp(start + 150)}  ENCOUNTER_START,3009,"Vexie and the Geargrinders",17,25,2769\n'
+        f'{stamp(start + 250)}  ENCOUNTER_END,3009,"Vexie and the Geargrinders",17,25,1,100000\n'
+    )
+    os.utime(log, (end, end))
+
+    [result] = process_pending(cfg)
+    assert result.problem is None
+    assert [(run.label, run.pull) for run, _ in result.clips] == [("LFR Wipe", 1), ("LFR Kill", 2)]
+    wipe, kill = (read_sidecar(clip) for _, clip in result.clips)
+    assert wipe["dungeon"] == "Vexie and the Geargrinders" and wipe["kind"] == "raid"
+    assert (wipe["raid"], wipe["difficulty"], wipe["pull"]) == ("Liberation of Undermine", "LFR", 1)
+    assert wipe["result"] == "wipe" and wipe["deaths"] == [{"name": "Tank-Realm-US", "at": 40}]
+    assert kill["result"] == "kill" and kill["encounters"][0]["killed"]
+    assert result.clips[1][1].name.endswith("LFR Kill pull 2 (1m40s).mp4")
+
+
 @pytest.mark.skipif(not shutil.which("ffprobe"), reason="needs ffprobe")
 def test_no_combat_log(tmp_path):
     cfg = make_cfg(tmp_path)
@@ -173,7 +214,7 @@ def test_a_cut_that_comes_out_short_fails_and_is_retried(tmp_path, monkeypatch, 
               level=10, result="completed")
     monkeypatch.setattr(clips, "combat_logs_between", lambda *a: [tmp_path / "log.txt"])
     monkeypatch.setattr(clips, "read_log_events", lambda logs: [])
-    monkeypatch.setattr(clips, "find_runs", lambda events, minutes: [run])
+    monkeypatch.setattr(clips, "find_runs", lambda events, minutes, raids: [run])
 
     def ffmpeg(cmd, **kw):
         Path(cmd[-1]).write_bytes(b"short")   # the .part file

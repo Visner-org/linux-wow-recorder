@@ -15,7 +15,7 @@ from PySide6.QtWidgets import QMessageBox  # noqa: E402
 
 from linux_wow_recorder import config, service  # noqa: E402
 from linux_wow_recorder.clips import write_sidecar  # noqa: E402
-from linux_wow_recorder.gui import browser, settings  # noqa: E402
+from linux_wow_recorder.gui import browser, model, settings  # noqa: E402
 
 RUN_START = 1_800_000_000.0
 
@@ -357,3 +357,134 @@ def test_deleting_a_clip_in_a_read_only_folder_says_why_instead(qtbot, cfg, tmp_
     w.delete()
     assert asked == [] and len(told) == 1 and "read only" in told[0]
     assert clip.exists()
+
+
+def test_settings_remembers_the_monitor_to_switch_to(qtbot, cfg, fake_recorder):
+    data = config.load_raw()
+    data["recorder"]["command"] = str(fake_recorder)
+    data["recorder"]["monitor"] = "HDMI-A-1"
+    config.save(data)
+    w = settings.SettingsWindow()
+    qtbot.addWidget(w)
+    qtbot.waitUntil(lambda: w.capture.count() == 4, timeout=5000)
+    assert w.capture_value() == "portal" and w.monitor_field.isVisibleTo(w)
+    assert [w.monitor.itemData(i) for i in range(w.monitor.count())] == ["", "DP-1", "HDMI-A-1"]
+    assert w.collect()["recorder"]["monitor"] == "HDMI-A-1"
+    w.monitor.setCurrentIndex(w.monitor.findData("DP-1"))
+    assert w.collect()["recorder"]["monitor"] == "DP-1"
+    w.capture.setCurrentIndex(w.capture.findData("DP-1"))   # a monitor itself: nothing to switch to
+    assert not w.monitor_field.isVisibleTo(w)
+
+
+def test_the_preview_says_when_the_screen_share_dialog_is_waiting(qtbot, cfg, monkeypatch):
+    from linux_wow_recorder import state
+    w = browser.ClipBrowser()
+    qtbot.addWidget(w)
+    status = {"state": state.NOT_RECORDING, "session_start": 1.0, "picking": True,
+              "capture": "portal", "problem": "Pick WoW's window <here>."}
+    monkeypatch.setattr(state, "read", lambda path=None: status)
+    asked = []
+    monkeypatch.setattr(state, "request_monitor", lambda monitor: asked.append(monitor))
+    w.update_live()
+    assert w.live_box.isVisibleTo(w) and w.live_box.title() == "Not recording"
+    assert "Pick WoW's window &lt;here&gt;." in w.live_image.text()
+    assert w.live_switch.isVisibleTo(w) and w.live_switch.text() == "Record monitor instead"
+    w.live_switch.click()
+    assert asked == [True]
+    status.update(state=state.RECORDING, picking=False, problem=None, monitor_switch=True,
+                  capture="DP-1", recording_file=str(cfg.output_dir / "now.mkv"))
+    monkeypatch.setattr(browser.live, "preview_input", lambda path: None)
+    w.update_live()
+    assert w.live_box.title() == "Recording now" and "Pick" not in w.live_image.text()
+    assert w.live_switch.text() == "Record the window again"
+    assert not w.live_repick.isVisibleTo(w)   # recording a monitor
+    status.update(monitor_switch=False, capture="portal")
+    w.update_live()
+    assert w.live_repick.isVisibleTo(w)
+    repicks = []
+    monkeypatch.setattr(state, "request_repick", lambda: repicks.append(1))
+    w.live_repick.click()
+    assert repicks == [1]
+    status.update(state=state.WAITING, session_start=None, recording_file=None)
+    w.update_live()
+    assert not w.live_box.isVisibleTo(w)
+
+
+def test_a_clip_shows_the_poster_until_it_plays(qtbot, cfg):
+    from PySide6.QtMultimedia import QMediaPlayer
+    clip = make_clip(cfg, "a.mp4", dungeon="Ara-Kara", result="completed", label="+2 Completed")
+    w = browser.ClipBrowser()
+    qtbot.addWidget(w)
+    qtbot.waitUntil(lambda: w.tree.topLevelItemCount() == 1, timeout=10_000)
+    w.select(str(clip))
+    assert w.video_stack.currentWidget() is w.poster
+    w.on_state(QMediaPlayer.PlayingState)
+    assert w.video_stack.currentWidget() is w.video
+
+
+def test_settings_raid_clips_choice(qtbot, cfg, fake_recorder):
+    w = settings.SettingsWindow()
+    qtbot.addWidget(w)
+    assert w.collect()["clips"]["raids"] == "all"
+    w.raids.setCurrentIndex(w.raids.findData("kills"))
+    assert w.collect()["clips"]["raids"] == "kills"
+
+
+def test_raid_pulls_have_their_own_view(qtbot, cfg):
+    make_clip(cfg, "a.mp4", dungeon="Ara-Kara", result="completed", label="+2 Completed")
+    make_clip(cfg, "b.mp4", dungeon="Vexie and the Geargrinders", result="wipe", label="LFR Wipe",
+              kind="raid", raid="Liberation of Undermine", difficulty="LFR", pull=3)
+    make_clip(cfg, "c.mp4", dungeon="Vexie and the Geargrinders", result="kill", label="LFR Kill",
+              kind="raid", raid="Liberation of Undermine", difficulty="LFR", pull=4)
+    w = browser.ClipBrowser()
+    qtbot.addWidget(w)
+    w.set_mode(model.KEYS)
+    qtbot.waitUntil(lambda: w.tree.topLevelItemCount() == 1, timeout=10_000)
+    assert w.tree.topLevelItem(0).text(1) == "Ara-Kara"
+    w.set_mode(model.RAIDS)
+    assert w.tree.topLevelItemCount() == 2
+    assert w.tree.headerItem().text(1) == "Boss" and w.count.text() == "2 of 2 clips"
+    assert [b.text() for b in w.filter_group.buttons()] == ["All", "Kills", "Wipes"]
+    rows = {w.tree.topLevelItem(i).text(2): w.tree.topLevelItem(i).text(3) for i in range(2)}
+    assert rows == {"#3": "LFR Wipe", "#4": "LFR Kill"}
+    kills = next(b for b in w.filter_group.buttons() if b.text() == "Kills")
+    kills.click()
+    assert w.tree.topLevelItemCount() == 1
+    w.search.setText("undermine")             # the raid's name finds its bosses
+    assert w.tree.topLevelItemCount() == 1
+    w.select(str(cfg.clips_dir / "c.mp4"))
+    assert w.title.text() == "Vexie and the Geargrinders, pull 4"
+    assert "Liberation of Undermine" in w.facts.text()
+    w.set_mode(model.KEYS)                   # the dungeon filters come back
+    assert [b.text() for b in w.filter_group.buttons()] == ["All", "Completed", "Abandoned"]
+    assert w.filter_group.checkedButton().text() == "All"
+
+
+def test_setup_asks_about_update_checks(qtbot, no_config, fake_recorder):
+    w = settings.SettingsWindow()
+    qtbot.addWidget(w)
+    assert w.first_run and w.check_updates.isChecked()   # shown ticked: a choice made at setup
+    assert w.collect()["updates"]["check"] is True
+    w.check_updates.setChecked(False)
+    assert w.collect()["updates"]["check"] is False
+
+
+def test_an_existing_config_keeps_update_checks_off(qtbot, cfg, fake_recorder):
+    w = settings.SettingsWindow()
+    qtbot.addWidget(w)
+    assert not w.check_updates.isChecked()   # never asked before: stays off
+    assert not w.service_changed({**w.collect(), "updates": {"check": True}})   # no restart
+
+
+def test_check_now_says_what_github_has(qtbot, cfg, fake_recorder, monkeypatch):
+    from linux_wow_recorder import updates
+
+    class Check:
+        def __init__(self):
+            self.done, self.version = True, "99.0.0"
+    monkeypatch.setattr(updates, "Check", Check)
+    w = settings.SettingsWindow()
+    qtbot.addWidget(w)
+    w.check_now.click()
+    qtbot.waitUntil(lambda: "99.0.0" in w.update_result.text(), timeout=3000)
+    assert w.check_now.isEnabled()

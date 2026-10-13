@@ -22,6 +22,10 @@ class View:
     service_running: bool = False
     recording: bool = False
     paused: bool = False         # WoW is running and the user paused recording
+    # "Record monitor instead" makes sense: a window's picked (or awaited), or it was switched
+    can_switch: bool = False
+    monitor_switch: bool = False  # switched to the monitor this session
+    can_repick: bool = False      # recording a window picked in the dialog: pick another
 
 
 def menu_text(text: str, limit: int = 80) -> str:
@@ -73,6 +77,10 @@ def describe(status: dict | None, service_state: str, now: float | None = None) 
     else:
         view = View(IDLE, "Waiting for WoW", service_running=True)
 
+    view.monitor_switch = bool(status.get("monitor_switch"))
+    view.can_switch = bool(since) and s in (state.RECORDING, state.NOT_RECORDING) and (
+        status.get("capture") == "portal" or view.monitor_switch)
+    view.can_repick = bool(since) and s == state.RECORDING and status.get("capture") == "portal"
     if status.get("problem"):
         view.icon = ATTENTION
         details.append(menu_text(status["problem"]))
@@ -80,6 +88,15 @@ def describe(status: dict | None, service_state: str, now: float | None = None) 
         details.append(f"{status['free_gb']:.0f} GB free")
     view.details = details
     return view
+
+
+# Opens the screen-share dialog again (tray menu, clips window).
+REPICK_TEXT = "Pick another window"
+
+
+def switch_text(monitor_switch: bool) -> str:
+    """The "Record monitor instead" button's text (tray menu, clips window)."""
+    return "Record the window again" if monitor_switch else "Record monitor instead"
 
 
 def last_session_lines(status: dict | None) -> list[str]:
@@ -194,8 +211,10 @@ _CLIP_NAME = re.compile(r"^(\d{4}-\d{2}-\d{2}) (\d{2})-(\d{2}) (.+?) (\+\d+ \w+|
 # ("2026-10-08-19-03-Kings'-Rest-+12-Completed-(24m52s).mp4").
 _HYPHENATED_NAME = re.compile(r"^(\d{4}-\d{2}-\d{2})-(\d{2})-(\d{2})-(.+?)-(\+\d+-\w+|\w+)-\((\d+m\d+s)\)")
 FILTERS = {"all": "All", "completed": "Completed", "abandoned": "Abandoned"}
-# What the clip browser lists: one clip per run, or the full recordings they were cut from.
-KEYS, SESSIONS = "keys", "sessions"
+RAID_FILTERS = {"all": "All", "kill": "Kills", "wipe": "Wipes"}   # as many buttons as FILTERS
+# What the clip browser lists: a clip per dungeon run, a clip per raid boss pull, or the full
+# recordings they were cut from.
+KEYS, RAIDS, SESSIONS = "keys", "raids", "sessions"
 
 
 @dataclass
@@ -217,11 +236,26 @@ class ClipInfo:
 
     @property
     def filter_key(self) -> str:
-        return self.result if self.result in ("completed", "abandoned") else "nokey"
+        return self.result if self.result in ("completed", "abandoned", "kill", "wipe") else "nokey"
+
+    @property
+    def is_raid(self) -> bool:
+        """A raid boss pull's clip; its dungeon is the boss."""
+        return self.details.get("kind") == "raid"
+
+    @property
+    def raid(self) -> str:
+        return self.details.get("raid") or ""
+
+    @property
+    def pull(self) -> int | None:
+        return self.details.get("pull")
 
     @property
     def result_text(self) -> str:
-        """The result for people: "Completed", "Heroic", ..."""
+        """The result for people: "Completed", "Heroic", "LFR Kill", ..."""
+        if self.is_raid and not self.chip:
+            return self.label
         return self.chip or self.result.capitalize()
 
     @property
@@ -318,10 +352,16 @@ def _read(read_sidecar, path: Path) -> dict:
         return {}
 
 
+def in_mode(clip: ClipInfo, mode: str) -> bool:
+    """Whether the clip browser lists the clip in mode: raid pulls under Raids, dungeon runs
+    under Keystones."""
+    return mode == SESSIONS or clip.is_raid == (mode == RAIDS)
+
+
 def matches(clip: ClipInfo, filter_key: str, search: str) -> bool:
     if filter_key != "all" and clip.filter_key != filter_key:
         return False
-    return search.lower() in clip.dungeon.lower() if search else True
+    return search.lower() in f"{clip.dungeon} {clip.raid}".lower() if search else True
 
 
 def mmss(seconds: float) -> str:
@@ -629,8 +669,8 @@ def session_info(path: Path, details: dict, clips: list[dict], cut: bool = True)
         runs = [shift_run(c, c["clip_start"] - start) for c in clips if c.get("clip_start")]
     runs = sorted(runs, key=lambda r: r.get("run_offset") or 0)
     length = details.get("length")
-    names = list(dict.fromkeys(r["dungeon"] for r in runs))
-    title = ", ".join(names) if names else ("Not cut into clips yet" if not cut else "No dungeon runs")
+    names = list(dict.fromkeys(r.get("raid") or r["dungeon"] for r in runs))
+    title = ", ".join(names) if names else ("Not cut into clips yet" if not cut else "No runs")
     merged = {
         "clip_length": length,
         "runs": runs,
@@ -642,7 +682,10 @@ def session_info(path: Path, details: dict, clips: list[dict], cut: bool = True)
     n = len(runs)
     # Before it's cut, how many deaths and bosses it has isn't known yet.
     known = cut or bool(runs)
-    chip = (f"{n} run{'s' if n != 1 else ''}" if n else "Session") if cut else "Not cut yet"
+    pulls = sum(r.get("kind") == "raid" for r in runs)
+    counts = [f"{k} {word}{'s' if k != 1 else ''}"
+              for k, word in ((n - pulls, "run"), (pulls, "pull")) if k]
+    chip = (", ".join(counts) or "Session") if cut else "Not cut yet"
     return ClipInfo(path, start, title, None, "", "session" if cut else "uncut",
                     hours_minutes(length) if length else "",
                     sum(r.get("deaths_total", 0) for r in runs) if known else None,
@@ -693,5 +736,6 @@ def session_event_rows(details: dict) -> list[EventRow]:
         detail = r.get("run_length", "") + (f" · {deaths} death{'s' if deaths != 1 else ''}"
                                              if deaths else "")
         rows.append(EventRow(r.get("run_offset") or 0.0, "start",
-                             f"{r['dungeon']} {r.get('label', '')}".strip(), detail, inner))
+                             f"{r['dungeon']} {r.get('label', '')}".strip()
+                             + (f" pull {r['pull']}" if r.get("pull") else ""), detail, inner))
     return rows

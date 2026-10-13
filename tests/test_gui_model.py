@@ -340,3 +340,28 @@ def test_other_folders_are_checked():
     data["clips"]["other_folders"] = ["/no/such/folder"]
     check = model.field_checks(data, free_gb=lambda p: 100)["other_folders"]
     assert check.level == model.WARNING and "/no/such/folder" in check.text
+
+
+def test_describe_offers_the_monitor_switch_only_for_a_picked_window():
+    waiting = {"state": "not_recording", "session_start": NOW - 5, "capture": "portal",
+               "picking": True, "problem": "Not recording: pick WoW's window."}
+    view = model.describe(waiting, "active", now=NOW)
+    assert view.can_switch and not view.monitor_switch and view.icon == model.ATTENTION
+    assert model.switch_text(view.monitor_switch) == "Record monitor instead"
+    switched = {"state": "recording", "session_start": NOW - 5, "capture": "DP-1",
+                "monitor_switch": True}
+    view = model.describe(switched, "active", now=NOW)
+    assert view.can_switch and model.switch_text(view.monitor_switch) == "Record the window again"
+    monitor = {"state": "recording", "session_start": NOW - 5, "capture": "DP-1"}
+    assert not model.describe(monitor, "active", now=NOW).can_switch
+    assert not model.describe({"state": "waiting"}, "active", now=NOW).can_switch
+
+
+def test_describe_offers_another_pick_while_recording_a_window():
+    recording = {"state": "recording", "session_start": NOW - 5, "capture": "portal"}
+    assert model.describe(recording, "active", now=NOW).can_repick
+    picking = {"state": "not_recording", "session_start": NOW - 5, "capture": "portal",
+               "picking": True}
+    assert not model.describe(picking, "active", now=NOW).can_repick   # the dialog's open already
+    monitor = {"state": "recording", "session_start": NOW - 5, "capture": "DP-1"}
+    assert not model.describe(monitor, "active", now=NOW).can_repick

@@ -5,12 +5,13 @@ import os
 import shlex
 import signal
 import subprocess
+import sys
 import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import APP_TITLE, __version__, logs, state
+from . import APP_TITLE, __version__, logs, service, state
 from .clips import (SessionResult, cleanup, free_gb, new_recording_path, process_pending,
                     stale_recordings)
 from .config import WOW_SOUND, Config
@@ -36,6 +37,8 @@ CAPTURE_NOTICE = 15
 # How long into a session the programs with sound are logged once: WoW opens its sound a little
 # after it starts.
 AUDIO_CHECK_AFTER = 90
+# While the screen-share dialog waits for a pick (it can open behind WoW).
+PICK_PROBLEM = "Not recording: pick WoW's window in the screen-share dialog."
 
 
 @dataclass
@@ -47,6 +50,9 @@ class Session:
     disk_warned: bool = False
     disk_stopped: bool = False   # stopped for low disk space; not restarted this session
     paused: bool = False         # the user paused recording for this session
+    picking: bool = False        # the screen-share dialog is waiting; nothing's recorded yet
+    monitor: bool = False        # recording the monitor instead, as asked
+    repicked: float = 0.0        # the last "Pick another window" acted on
     pid: int | None = None       # WoW's process
     lost_at: float = 0.0         # when what was recorded went away; 0 while it's fine
     captures_lost: int = 0
@@ -68,6 +74,19 @@ def run_summary(run) -> str:
     return "".join(f" · {p}" for p in parts)
 
 
+def raid_summary(pulls) -> list[str]:
+    """A line per raid and difficulty, for the Discord message: a night of wipes would
+    otherwise be a line each. "• Liberation of Undermine (Heroic): 9 pulls, kills: Vexie"."""
+    lines = []
+    for raid, difficulty in dict.fromkeys((p.raid, p.difficulty) for p in pulls):
+        these = [p for p in pulls if (p.raid, p.difficulty) == (raid, difficulty)]
+        kills = [p.name for p in these if p.result == "kill"]
+        n = len(these)
+        lines.append(f"• {raid} ({difficulty}): {n} pull{'s' if n != 1 else ''}"
+                     + (f", kills: {', '.join(kills)}" if kills else ", no kills"))
+    return lines
+
+
 class Daemon:
     def __init__(self, cfg: Config):
         self.cfg = cfg
@@ -83,6 +102,13 @@ class Daemon:
         self._cutter: threading.Thread | None = None
         self._cut_again = False   # a session ended while cutting: go round once more
         self._stale_warned: set[str] = set()   # un-cut recordings past retention, told once
+        self._hooks: list[threading.Thread] = []   # after_clips commands still running
+        # A newer version installed under the service: it restarts into it once nothing is going
+        # on (no session, no cutting, no after_clips), so a recording is never cut short.
+        self.updates = service.UpdateWatch()
+        self._update_checked = 0.0
+        self._update_waiting: str | None = None   # a new version waiting, already logged
+        self._restart = False
 
     def _on_signal(self, signum, frame):
         log.info(f"Signal {signum} received; stopping.")
@@ -122,6 +148,9 @@ class Daemon:
                     misses += 1
                     if misses >= 2:
                         self.end_session()
+                if self.update_ready():
+                    self._restart = True
+                    break
             except Exception:
                 log.exception("Unexpected error")
             self._stop.wait(cfg.poll_interval)
@@ -137,7 +166,37 @@ class Daemon:
             cutter.join(timeout=10)   # within systemd's TimeoutStopSec, after recorder.stop()
         self.notifier.flush(timeout=3)   # all of it within systemd's TimeoutStopSec
         self.status.update(state=state.STOPPED)
+        if self._restart:
+            self.restart_into_new_version()
         log.info("Exiting.")
+
+    def update_ready(self) -> bool:
+        """True when a newer version has been installed and nothing is going on: no WoW session
+        (recording or paused), no clips being cut, no after_clips command running."""
+        now = time.time()
+        if now - self._update_checked < service.UPDATE_CHECK_SECONDS:
+            return False
+        self._update_checked = now
+        found = self.updates.check()
+        if not found:
+            return False
+        with self._lock:
+            busy = self.session is not None or self._cutter is not None
+        self._hooks = [t for t in self._hooks if t.is_alive()]
+        if busy or self._hooks:
+            if self._update_waiting != found:
+                self._update_waiting = found
+                log.info(f"Version {found} was installed; restarting into it once WoW is closed "
+                         "and the clips are cut.")
+            return False
+        log.info(f"Version {found} was installed; restarting into it.")
+        return True
+
+    def restart_into_new_version(self):
+        """Replaces this process with the newly installed version (the same process ID, so
+        systemd carries on as if nothing happened)."""
+        logging.shutdown()   # flushes the log files; the new process opens them again
+        os.execv(sys.executable, [sys.executable, "-m", "linux_wow_recorder", "run"])
 
     def _free(self) -> float | None:
         try:
@@ -153,7 +212,9 @@ class Daemon:
         with self._lock:
             self.session = Session(flavor, start=time.time(), pid=pid)
         self.recorder.game_exe = exe
-        self.status.update(flavor=flavor, session_start=self.session.start, problem=None)
+        self.recorder.capture = None   # "Record monitor instead" was for the session before
+        self.status.update(flavor=flavor, session_start=self.session.start, problem=None,
+                           monitor_switch=False)
         self.start_recording()
         if self.recorder.is_running():
             self.notifier.send("session_started", f"🔴 WoW {flavor} started; recording.")
@@ -171,10 +232,16 @@ class Daemon:
                                "this session isn't being recorded.")
             return
         if self.recorder.start(new_recording_path(cfg)):
-            self.status.update(state=state.RECORDING, recording_file=str(self.recorder.file),
-                               free_gb=round(free, 1))
+            self.status.update(free_gb=round(free, 1), capture=self.recorder.capture_mode)
+            s.picking = self.recorder.waiting_for_pick()
+            if s.picking:
+                self.status.update(state=state.NOT_RECORDING, recording_file=None, picking=True,
+                                   problem=PICK_PROBLEM)
+            else:
+                self.status.update(state=state.RECORDING, recording_file=str(self.recorder.file),
+                                   picking=False)
             return
-        self.status.update(state=state.NOT_RECORDING, recording_file=None,
+        self.status.update(state=state.NOT_RECORDING, recording_file=None, picking=False,
                            problem="The recorder didn't start.")
         if not s.alerted:
             s.alerted = True
@@ -183,7 +250,9 @@ class Daemon:
     def check_session(self, pid: int | None = None):
         """pid: WoW's process now."""
         s = self.session
-        if self.check_pause() or self.check_capture(pid):
+        self.check_monitor()
+        self.check_repick()
+        if self.check_pause() or self.check_pick() or self.check_capture(pid):
             return
         now = time.time()
         if now - s.last_disk_check >= DISK_CHECK_INTERVAL:
@@ -209,12 +278,67 @@ class Daemon:
             log.error("The recorder keeps failing; giving up until WoW is started again.")
             self.status.update(problem="The recorder keeps failing; trying again next session.")
 
+    def check_pick(self) -> bool:
+        """While the screen-share dialog waits: True until a pick starts the recording. Closing
+        the dialog without a pick ends the recorder; this session then isn't recorded, rather
+        than the dialog coming back again and again."""
+        s = self.session
+        if not s.picking:
+            return False
+        if self.recorder.waiting_for_pick():
+            return True
+        s.picking = False
+        if self.recorder.is_running():
+            log.info(f"Picked; recording to {self.recorder.file}")
+            self.status.update(state=state.RECORDING, recording_file=str(self.recorder.file),
+                               picking=False, problem=None)
+            return False
+        log.warning("The screen-share dialog was closed without a pick; not recording this "
+                    "session.")
+        self.recorder.stop()
+        s.restarts = MAX_RESTARTS
+        self.status.update(state=state.NOT_RECORDING, recording_file=None, picking=False,
+                           problem="Nothing picked: not recording this session.")
+        return True
+
+    def check_monitor(self):
+        """Switches between the window picked in the screen-share dialog and the monitor, as
+        the desktop app asked. The recording so far is kept; a new one starts."""
+        s = self.session
+        want = state.monitor_requested(s.start)
+        if want == s.monitor:
+            return
+        s.monitor, s.picking, s.restarts, s.lost_at = want, False, 0, 0.0
+        self.recorder.stop()
+        self.recorder.capture = (self.cfg.monitor or "screen") if want else None
+        log.info(f"Recording {self.recorder.capture_mode} instead, as asked.")
+        self.status.update(monitor_switch=want, recording_file=None, problem=None)
+        if not s.paused:
+            self.start_recording()
+
+    def check_repick(self):
+        """Opens the screen-share dialog again, as the desktop app asked: the saved pick is
+        forgotten and a new recording starts. The recording so far is kept."""
+        s = self.session
+        asked = state.repick_requested(s.start)
+        if asked <= s.repicked:
+            return
+        s.repicked = asked
+        if s.paused or self.recorder.capture_mode != "portal":
+            return
+        log.info("Picking another window, as asked.")
+        self.recorder.stop()
+        self.recorder.forget_pick()
+        s.picking, s.restarts, s.lost_at = False, 0, 0.0
+        self.status.update(recording_file=None, problem=None)
+        self.start_recording()
+
     def check_capture(self, pid: int | None) -> bool:
         """Handles the recording losing what it records: WoW crashed and came back within a
         poll or two (or something kept the session going), and the recorder, given the old WoW
         window, records its last frame. The recording so far is kept; a new one starts once
         WoW is back. True while waiting for that."""
-        s, cfg = self.session, self.cfg
+        s = self.session
         restarted = pid is not None and s.pid is not None and pid != s.pid
         if s.lost_at:
             waited = time.time() - s.lost_at
@@ -226,7 +350,7 @@ class Daemon:
                     self.status.update(problem=None)
                 return False
             if waited >= CAPTURE_NOTICE and self.status.data["state"] != state.NOT_RECORDING:
-                pick = " (pick it in the screen-share dialog)" if cfg.capture == "portal" else ""
+                pick = " (pick it in the screen-share dialog)" if self.recorder.capture_mode == "portal" else ""
                 self.status.update(state=state.NOT_RECORDING, problem=(
                     f"WoW's window closed: recording again when it's back{pick}."))
             return True
@@ -237,7 +361,7 @@ class Daemon:
             s.pid = pid
         # A window picked in the screen-share dialog can't follow a new WoW: its window is new.
         lost = (self.recorder.is_running() and self.recorder.capture_lost()) or \
-            (restarted and cfg.capture == "portal" and self.recorder.is_running())
+            (restarted and self.recorder.capture_mode == "portal" and self.recorder.is_running())
         if not lost or s.captures_lost >= MAX_RESTARTS:
             return False
         s.captures_lost += 1
@@ -277,7 +401,8 @@ class Daemon:
             s.paused = True
             log.info("Recording paused for this session, as asked.")
             self.recorder.stop()   # what was recorded so far is kept and cut after the session
-            self.status.update(state=state.PAUSED, recording_file=None)
+            s.picking = False
+            self.status.update(state=state.PAUSED, recording_file=None, picking=False, problem=None)
         elif not want and s.paused:
             s.paused = False
             log.info("Recording again, as asked.")
@@ -305,7 +430,7 @@ class Daemon:
 
     def end_session(self):
         log.info("WoW closed; finishing the session.")
-        was_recording = self.recorder.is_running()
+        was_recording = self.recorder.is_running() and not self.session.picking
         self.recorder.stop()
         length = time.time() - self.session.start
         with self._lock:
@@ -316,7 +441,8 @@ class Daemon:
             self.notifier.send("session_ended", f"⏹️ WoW closed after {hours}h{rest // 60:02d}m; "
                                                 "the recording is saved. Cutting clips...")
         self.status.update(state=state.WAITING, flavor=None, session_start=None,
-                           recording_file=None, problem=None, free_gb=self._free())
+                           recording_file=None, problem=None, picking=False, capture=None,
+                           monitor_switch=False, free_gb=self._free())
         self.start_cutting()
         log.info("Watching for WoW...")
 
@@ -371,7 +497,9 @@ class Daemon:
         if self.cfg.after_clips and clips:
             # In the background: an upload can take hours, and WoW may be started again
             # meanwhile. Retention can't touch the new clips, so cleanup can go ahead.
-            threading.Thread(target=self.run_hook, args=(clips,), daemon=True).start()
+            hook = threading.Thread(target=self.run_hook, args=(clips,), daemon=True)
+            self._hooks.append(hook)   # a restart for an update waits for it
+            hook.start()
         deleted = cleanup(self.cfg)
         if deleted:
             self.notifier.send("cleanup", f"🧹 Deleted **{deleted}** old file(s) from the "
@@ -399,15 +527,16 @@ class Daemon:
             log.info(f"{len(clips)} clip(s) saved in {self.cfg.clips_dir}")
             lines = [f"✅ **{len(clips)}** clip(s) saved:"]
             lines += [f"• {run.name} {run.label} ({run.length}){run_summary(run)}"
-                      for run, _ in clips]
+                      for run, _ in clips if not run.is_raid]
+            lines += raid_summary([run for run, _ in clips if run.is_raid])
             self.notifier.send("clips_ready", "\n".join(lines))
         for r in results:
             if r.problem:
                 log.warning(r.detail)
                 self.notifier.send(r.problem, f"⚠️ {r.detail}")
         if results and not clips and not any(r.problem for r in results):
-            log.info("No dungeon runs this session.")
-            self.notifier.send("no_runs", "Session recorded; no dungeon runs in it.")
+            log.info("No dungeon runs or raid pulls this session.")
+            self.notifier.send("no_runs", "Session recorded; no dungeon runs or raid pulls in it.")
 
     def run_hook(self, clips: list[Path]):
         """Runs the after_clips command on clips. Called in a thread of its own."""

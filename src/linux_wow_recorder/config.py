@@ -22,7 +22,7 @@ NOTIFY_EVENTS = {
     "session_started":  (False, "WoW started and recording began"),
     "session_ended":    (False, "WoW closed and the recording was saved"),
     "clips_ready":      (True,  "Clips are ready after a session"),
-    "no_runs":          (False, "A session ended with no dungeon runs in it"),
+    "no_runs":          (False, "A session ended with no dungeon runs or raid pulls in it"),
     "no_combat_log":    (True,  "No combat log covers a session (combat logging off?)"),
     "recording_failed": (True,  "The recorder didn't start, or stopped mid-session"),
     "low_disk_space":   (True,  "Free space in the output folder is low"),
@@ -30,6 +30,9 @@ NOTIFY_EVENTS = {
     "hook_failed":      (True,  "The after_clips command failed"),
     "cleanup":          (False, "Old recordings were deleted"),
 }
+
+# [clips] raids: which raid boss pulls get a clip.
+RAID_CHOICES = {"all": "Every pull, kills and wipes", "kills": "Kills only", "off": "None"}
 
 # An audio source meaning WoW's own sound. The recorder turns it into gpu-screen-recorder's
 # "app:Wow.exe|app:World of Warcraft" for the WoW it found (recorder.audio_source).
@@ -61,12 +64,14 @@ DEFAULTS = {
     "recorder": {
         "command": "gpu-screen-recorder",
         "capture": "portal",
+        "monitor": "",
         "fps": 60,
         "quality": "",
         "audio": [WOW_SOUND],
         "extra_args": [],
     },
-    "clips": {"pad_before": 10, "pad_after": 15, "min_run_minutes": 5, "other_folders": []},
+    "clips": {"pad_before": 10, "pad_after": 15, "min_run_minutes": 5, "raids": "all",
+              "other_folders": []},
     "storage": {
         "session_retention_days": 3,
         "clip_retention_days": 0,
@@ -78,6 +83,8 @@ DEFAULTS = {
         "notify": {key: default for key, (default, _) in NOTIFY_EVENTS.items()},
     },
     "hooks": {"after_clips": ""},
+    # Off until chosen: setup asks (the settings window's first run, or `setup`).
+    "updates": {"check": False},
     "daemon": {"poll_interval": 5},
     "logging": {"detailed": False},
 }
@@ -109,6 +116,9 @@ class Config:
     after_clips: str
     poll_interval: int
     detailed_logging: bool = False
+    monitor: str = ""   # what "Record monitor instead" records; "" = "screen"
+    raids: str = "all"  # raid boss pulls clipped: "all", "kills" or "off"
+    check_updates: bool = False   # the tray app asks GitHub once a day for a newer version
     other_clip_dirs: list[Path] = field(default_factory=list)   # the clip browser's, read only
 
     # Everything the app writes is in these three folders, never loose in output_dir, so the
@@ -157,6 +167,13 @@ def _webhooks(value) -> list[str]:
     return urls
 
 
+def _raids(value) -> str:
+    value = str(value).strip().lower()
+    if value not in RAID_CHOICES:
+        raise ConfigError(f"raids = {value!r}; it's one of {', '.join(RAID_CHOICES)}")
+    return value
+
+
 def _upgrade(data: dict) -> dict:
     """Older configs had one webhook_url; it becomes the first entry of webhook_urls."""
     d = data.get("discord")
@@ -176,6 +193,9 @@ def from_dict(data: dict) -> Config:
             output_dir=_path(p["output_dir"]),
             recorder_command=shlex.split(r["command"]),
             capture=str(r["capture"]),
+            monitor=str(r["monitor"]).strip(),
+            raids=_raids(c["raids"]),
+            check_updates=bool(data["updates"]["check"]),
             fps=int(r["fps"]),
             quality=str(r["quality"]).strip(),
             audio=_list(r["audio"]),
@@ -273,6 +293,9 @@ command = {_toml(r["command"])}
 # `gpu-screen-recorder --list-capture-options`, or "screen": the first monitor in that list,
 # which may not be your main monitor or the one your desktop calls "1"
 capture = {_toml(r["capture"])}
+# The monitor "Record monitor instead" (tray menu, clips window) switches a session to while
+# capture is "portal", e.g. "DP-1"; "" = "screen"
+monitor = {_toml(r["monitor"])}
 fps = {_toml(r["fps"])}
 # "medium", "high", "very_high" or "ultra"; empty = gpu-screen-recorder's default
 quality = {_toml(r["quality"])}
@@ -289,6 +312,9 @@ pad_before = {_toml(c["pad_before"])}
 pad_after = {_toml(c["pad_after"])}
 # Runs shorter than this are skipped, except completed keys
 min_run_minutes = {_toml(c["min_run_minutes"])}
+# Raid bosses: "all" (a clip per pull, kills and wipes; pulls under 30 s are skipped), "kills"
+# or "off"
+raids = {_toml(c["raids"])}
 # Folders on this computer the clip browser also lists clips from, e.g. where you move them to.
 # A clip there finds its details in clips/ when its .json stayed behind. [] = only clips/.
 other_folders = {_toml(c["other_folders"])}
@@ -317,6 +343,11 @@ webhook_urls = {_webhook_list(d["webhook_urls"])}
 # Optional command run after clips are cut, with the new clips' paths added as arguments,
 # e.g. "~/bin/upload-clips.sh". Empty = none.
 after_clips = {_toml(data["hooks"]["after_clips"])}
+
+[updates]
+# Ask GitHub once a day whether a newer version is out (the tray app says so; installing it is
+# up to you). It sends nothing about you; GitHub sees your IP address.
+check = {_toml(bool(data["updates"]["check"]))}
 
 [daemon]
 # Seconds between checks for WoW

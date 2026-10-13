@@ -1,12 +1,12 @@
 # Linux WoW Recorder
 
-Records your World of Warcraft sessions on Linux and cuts one clip per dungeon run, using WoW's
-combat log to find where each run starts and ends. Every clip comes with its boss pulls, deaths
-and lusts, and a tray icon shows when it's recording.
+Records your World of Warcraft sessions on Linux and cuts one clip per dungeon run and per raid
+boss pull, using WoW's combat log to find where each run starts and ends. Every clip comes with
+its boss pulls, deaths and lusts, and a tray icon shows when it's recording.
 
-**It runs entirely on your computer.** No account, no telemetry, no update checks, no crash
-reporting. The only network traffic it can make is a Discord or Fluxer message, and only if you
-add a webhook yourself. See [Privacy](#privacy).
+**It runs entirely on your computer.** No account, no telemetry, no crash reporting. The only
+network traffic it can make is a Discord or Fluxer message if you add a webhook, and a daily
+check for a new version on GitHub if you turn that on. See [Privacy](#privacy).
 
 <!-- Screenshot: the clip browser with a run's timeline. Add docs/screenshot.png before publishing. -->
 
@@ -21,8 +21,8 @@ WoW starts (found in /proc: Retail, Classic, PTR or beta, however it's installed
   → gpu-screen-recorder records the session, using your GPU's encoder
 WoW closes
   → the combat log is read for dungeon runs: each Mythic+ key from start to end (abandoned
-    keys too, if they lasted 5 minutes), and dungeons without a key from entering to leaving
-    (if a boss was pulled)
+    keys too, if they lasted 5 minutes), dungeons without a key from entering to leaving
+    (if a boss was pulled), and each raid boss pull from pull to kill or wipe
   → one clip per run is cut out of the recording (no re-encode, takes seconds), named like
     "2026-10-08 19-03 Kings' Rest +12 Completed (24m52s).mp4", with a .json file beside it
     listing the boss pulls (kills and wipes), deaths, and each Bloodlust/Heroism/Time Warp/
@@ -47,12 +47,20 @@ WoW closes
 
 This app is built so you never have to wonder what it sends or where.
 
-**What leaves your computer: nothing, unless you add a webhook.**
+**What leaves your computer: nothing, unless you add a webhook or turn on update checks.**
 
-- No telemetry, analytics, usage statistics, update checks or crash reporting. No account, no
-  sign-in, no server of ours anywhere.
-- The **one** network connection the app can make is posting a message to the Discord or Fluxer
-  webhooks you add in Settings. With no webhooks (the default) it makes no connections at all.
+- No telemetry, analytics, usage statistics or crash reporting. No account, no sign-in, no
+  server of ours anywhere.
+- The app can make **two** kinds of network connection, both your choice:
+  - posting a message to the Discord or Fluxer webhooks you add in Settings (none by default);
+  - asking GitHub, once a day, which version is newest. Setup asks whether you want this, and
+    Settings > About turns it on or off. The request carries nothing about you or your computer:
+    no version, settings or ID, just a plain request for the newest release's number. Like any
+    web page, GitHub sees your IP address. If a newer version is out, the tray says so with a
+    link; downloading and installing it is up to you. "Check now" in Settings > About asks once,
+    even with daily checks off.
+
+  With no webhooks and update checks off, it makes no connections at all.
 - You choose which events send a message (see [below](#discord-or-fluxer-messages)). A message
   says what happened in plain words: a dungeon, key level, result, run length, bosses killed,
   how many deaths and lusts. **It never contains log lines, error output, file or folder paths,
@@ -85,11 +93,12 @@ is sent: read it, then share it however and wherever you like, or don't.
 
 **Check it yourself.** It's a small Python program, and it's all here:
 
-- `grep -rn urlopen src/` finds the one place that opens a connection:
-  [`notify.py`](src/linux_wow_recorder/notify.py), which posts to your webhooks.
-- The test suite fails if any other file imports networking code
-  ([`tests/test_logs.py`](tests/test_logs.py)), or if a webhook message is built from log text
-  or paths.
+- `grep -rn urlopen src/` finds the two places that open a connection:
+  [`notify.py`](src/linux_wow_recorder/notify.py), which posts to your webhooks, and
+  [`updates.py`](src/linux_wow_recorder/updates.py), which asks GitHub for the newest version.
+- The test suite fails if any other file imports networking code, if `updates.py` contacts
+  anything but GitHub's release API ([`tests/test_logs.py`](tests/test_logs.py)), or if a
+  webhook message is built from log text or paths.
 - The desktop app uses a local socket (`QLocalServer`, a file under `/run/user/`) so that opening
   it a second time brings the open window forward. It's on your computer only.
 
@@ -125,7 +134,7 @@ an issue.
 Download the `.rpm` from [Releases](../../releases), then:
 
 ```bash
-sudo dnf install ./linux-wow-recorder-0.5.0-1.fc44.noarch.rpm
+sudo dnf install ./linux-wow-recorder-0.6.0-1.fc44.noarch.rpm
 ```
 
 dnf brings in gpu-screen-recorder, ffmpeg and Qt. Open **Linux WoW Recorder** from the app
@@ -217,7 +226,7 @@ Webhooks. You choose which events send a message:
 | `session_started` | WoW started and recording began | off |
 | `session_ended` | WoW closed and the recording was saved | off |
 | `clips_ready` | clips are ready: each run's dungeon, level, result, length, bosses killed, deaths and lusts | on |
-| `no_runs` | a session ended with no dungeon runs in it | off |
+| `no_runs` | a session ended with no dungeon runs or raid pulls in it | off |
 | `no_combat_log` | no combat log covers a session (combat logging was off?) | on |
 | `recording_failed` | the recorder didn't start, or stopped mid-session | on |
 | `low_disk_space` | the output folder's drive is nearly full, or recording stopped because of it | on |
@@ -256,6 +265,7 @@ linux-wow-recorder pause               # stop recording until WoW closes (resume
 linux-wow-recorder keep <clip>...      # keep clips forever (--undo to let them expire)
 linux-wow-recorder install-service     # run at every login
 linux-wow-recorder uninstall-service
+linux-wow-recorder uninstall           # remove everything (Settings > Advanced > Uninstall... too)
 linux-wow-recorder logs                # where the logs are, and the last lines
 linux-wow-recorder report              # a report file to share by hand (nothing is sent)
 ```

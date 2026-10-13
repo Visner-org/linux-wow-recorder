@@ -147,6 +147,12 @@ def cmd_setup(args) -> int:
         print("   Send a message when:")
         discord["notify"] = choose_events(discord["notify"])
 
+    print("\n5. New versions")
+    print("   The tray icon can ask GitHub once a day whether a newer version is out. Nothing about")
+    print("   you is sent; installing it is up to you.")
+    data["updates"]["check"] = ask_yes("Check for new versions?", data["updates"]["check"]
+                                       or not CONFIG_FILE.exists())
+
     config.save(data)
     print(f"\nSaved {CONFIG_FILE}. Everything else (retention, clip padding, ...) is in there.")
 
@@ -327,6 +333,40 @@ def cmd_report(args) -> int:
     return 0
 
 
+def cmd_uninstall(args) -> int:
+    """Removes everything the app made, and the program too where that needs no root."""
+    from . import uninstall
+    try:
+        cfg = config.load()
+    except (ConfigError, OSError):
+        cfg = None
+    prog = uninstall.program()
+    folders = uninstall.recording_folders(cfg)
+    print(f"This stops {APP_TITLE} and removes its service, login and menu entries, settings "
+          "and logs.")
+    if not args.yes and not ask_yes("Uninstall?", False):
+        return 1
+    delete = args.delete_recordings
+    if folders and not delete and not args.yes:
+        delete = ask_yes(f"Also delete your recordings and clips "
+                         f"({uninstall.size_gb(folders):.1f} GB in {cfg.output_dir})?", False)
+    remove = not args.keep_program and not prog.needs_root and prog.kind != "other"
+    if remove and not args.yes:
+        remove = ask_yes(f"Also remove the program ({prog.text})?", True)
+
+    for path in uninstall.remove_user_files(cfg, delete):
+        print(f"Removed {path}")
+    if folders and not delete:
+        print(f"Kept your recordings and clips in {cfg.output_dir}")
+    if remove:
+        ok, output = uninstall.remove_program(prog)
+        print(output)
+        return 0 if ok else 1
+    if prog.kind in ("rpm", "pacman", "other"):
+        print(f"To remove the program itself: {prog.text}")
+    return 0
+
+
 def cmd_uninstall_service(args) -> int:
     service.uninstall()
     print(f"Stopped and removed {service.UNIT_NAME}. The config and recordings are left alone.")
@@ -360,6 +400,13 @@ def main():
     show = sub.add_parser("logs", help="show where the logs are and the last lines")
     show.add_argument("-n", "--lines", type=int, default=40)
     show.set_defaults(func=cmd_logs)
+    remove = sub.add_parser("uninstall", help="remove the service, settings, logs and the program")
+    remove.add_argument("--yes", action="store_true", help="don't ask")
+    remove.add_argument("--delete-recordings", action="store_true",
+                        help="also delete sessions/, processed/ and clips/ in the output folder")
+    remove.add_argument("--keep-program", action="store_true",
+                        help="leave the program installed (uv and pipx installs)")
+    remove.set_defaults(func=cmd_uninstall)
     report = sub.add_parser("report", help="write a report file to share by hand (nothing is sent)")
     report.add_argument("folder", nargs="?", help="where to write it (default: the Desktop)")
     report.set_defaults(func=cmd_report)

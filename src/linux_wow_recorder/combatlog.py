@@ -1,4 +1,4 @@
-"""Dungeon runs from WoW's combat log."""
+"""Dungeon runs and raid boss pulls from WoW's combat log."""
 
 import csv
 import datetime
@@ -15,6 +15,14 @@ log = logging.getLogger(__name__)
 # ZONE_CHANGE difficulty IDs of dungeons run without a keystone. Keystone runs (8) are found
 # from CHALLENGE_MODE_START/END instead.
 DUNGEON_DIFFICULTIES = {1: "Normal", 2: "Heroic", 23: "Mythic", 24: "Timewalking", 205: "Follower"}
+# Raid difficulty IDs (ENCOUNTER_START's and ZONE_CHANGE's). Each boss pull in one is a run.
+RAID_DIFFICULTIES = {14: "Normal", 15: "Heroic", 16: "Mythic", 17: "LFR", 33: "Timewalking",
+                     3: "10 Normal", 4: "25 Normal", 5: "10 Heroic", 6: "25 Heroic",
+                     7: "LFR", 9: "40 Player"}
+# Raid pulls shorter than this aren't clipped unless the boss died: a pull reset at once.
+MIN_PULL_SECONDS = 30
+# What find_runs keeps of raid pulls.
+RAIDS_ALL, RAIDS_KILLS, RAIDS_OFF = "all", "kills", "off"
 LOG_EVENTS = ("ZONE_CHANGE|CHALLENGE_MODE_START|CHALLENGE_MODE_END|ENCOUNTER_START|ENCOUNTER_END"
               "|UNIT_DIED")
 
@@ -91,7 +99,15 @@ class Run:
     encounters: list[Encounter] = field(default_factory=list)   # boss pulls, kills and wipes
     deaths: list[Death] = field(default_factory=list)           # player deaths
     lusts: list[Lust] = field(default_factory=list)
-    result: str = ""             # "completed", "abandoned", or the difficulty without a key ("heroic")
+    result: str = ""             # "completed", "abandoned", the difficulty without a key
+                                 # ("heroic"), or a raid pull's "kill" or "wipe"
+    raid: str = ""               # a raid pull's raid ("Liberation of Undermine"); "" otherwise
+    difficulty: str = ""         # a raid pull's: "Heroic", "LFR", ...
+    pull: int | None = None      # a raid pull's number on this boss and difficulty, from 1
+
+    @property
+    def is_raid(self) -> bool:
+        return bool(self.raid)
 
     @property
     def minutes(self) -> float:
@@ -99,7 +115,8 @@ class Run:
 
     @property
     def length(self) -> str:
-        """The key's in-game time if it was completed, otherwise the run's length: "24m52s"."""
+        """The key's in-game time if it was completed, otherwise the run's (or pull's) length:
+        "24m52s"."""
         mins, secs = divmod(int(self.timer or self.end - self.start), 60)
         return f"{mins}m{secs:02d}s"
 
@@ -165,6 +182,9 @@ class _OpenRun:
     difficulty: str = ""         # a visit's: "Heroic", ...
     left_at: float | None = None   # when the player left the instance; None while inside
     keyed: bool = False          # a visit a key was started in: the key's run is used instead
+    raid: str = ""               # a raid pull's raid; name is then the boss
+    encounter_id: int | None = None   # a raid pull's
+    pull: int | None = None
     lust_debuff: int | None = None   # the debuff of lusts[-1]
     encounters: list[Encounter] = field(default_factory=list)
     deaths: list[Death] = field(default_factory=list)
@@ -175,7 +195,8 @@ class _OpenRun:
 
     def to_run(self, end: float, label: str, result: str, timer: float | None = None) -> Run:
         return Run(self.name, self.start, end, label, timer, self.level, self.encounters,
-                   self.deaths, self.lusts, result)
+                   self.deaths, self.lusts, result, self.raid,
+                   self.difficulty if self.raid else "", self.pull)
 
 
 class _RunFinder:
@@ -185,7 +206,10 @@ class _RunFinder:
         self.runs: list[Run] = []
         self.key: _OpenRun | None = None
         self.visit: _OpenRun | None = None
+        self.pull: _OpenRun | None = None   # a raid boss being fought
+        self.pulls: dict[tuple, int] = {}   # (instance, encounter, difficulty) -> pulls so far
         self.instance: int | None = None   # ZONE_CHANGE also fires for sub-zones and reloads
+        self.zone_name = ""                # the instance's name, for a raid pull's raid
         self.last_t = 0.0
         self.sated: dict[str, float] = {}   # player GUID -> when the lust debuff they have was applied
         self.last_buff: tuple[float, int, str] | None = None   # (time, buff spell ID, caster)
@@ -211,6 +235,8 @@ class _RunFinder:
             log.debug(f"Unreadable combat log line: {event} {f}")
 
     def finish(self) -> list[Run]:
+        if self.pull:
+            self.close_pull(self.last_t, killed=False)
         if self.key:
             self.close_key(self.last_t)
         if self.visit:
@@ -218,8 +244,14 @@ class _RunFinder:
         return self.runs
 
     def open_runs(self) -> list[_OpenRun]:
-        """The open key and visit, if the player is inside their instance."""
-        return [r for r in (self.key, self.visit) if r and r.instance == self.instance]
+        """The open key, visit and raid pull, if the player is inside their instance."""
+        return [r for r in (self.key, self.visit, self.pull) if r and r.instance == self.instance]
+
+    def close_pull(self, t: float, killed: bool):
+        pull, self.pull = self.pull, None
+        pull.encounters[0].end, pull.encounters[0].killed = t, killed
+        result = "kill" if killed else "wipe"
+        self.runs.append(pull.to_run(t, f"{pull.difficulty} {result.capitalize()}", result))
 
     def close_key(self, t: float, completed: bool = False, timer_ms: int = 0):
         key, self.key = self.key, None
@@ -242,7 +274,9 @@ class _RunFinder:
         inst, name, diff = int(f[0]), f[1], int(f[2])
         if inst == self.instance:
             return
-        self.instance = inst
+        self.instance, self.zone_name = inst, name
+        if self.pull:
+            self.close_pull(t, killed=False)   # left mid-pull: a disconnect, or a hearth
         if self.key:
             if inst == self.key.instance:
                 self.key.left_at = None
@@ -253,9 +287,10 @@ class _RunFinder:
                 self.visit.left_at = None   # back in after a release or a disconnect
                 return
             self.visit.left(t)
-        if inst and diff and diff not in DUNGEON_DIFFICULTIES and diff != 8:
-            # Raids and scenarios, or a dungeon difficulty this app doesn't know yet (a new
-            # game version's); logged so it can be added.
+        if inst and diff and diff not in DUNGEON_DIFFICULTIES and diff not in RAID_DIFFICULTIES \
+                and diff != 8:
+            # Scenarios, delves, or a difficulty this app doesn't know yet (a new game
+            # version's); logged so it can be added.
             log.info(f"Not a dungeon this app knows: {name} (difficulty {diff})")
         if inst and diff in DUNGEON_DIFFICULTIES:
             if self.visit:
@@ -291,12 +326,27 @@ class _RunFinder:
 
     def encounter_start(self, t: float, f: list[str]):
         # ENCOUNTER_START,encounterID,"Name",difficultyID,groupSize,instanceID
+        encounter_id, diff = int(f[0]), int(f[2])
+        if diff in RAID_DIFFICULTIES:
+            if self.pull:
+                self.close_pull(t, killed=False)   # no END for the last one (a disconnect)
+            inst = int(f[4])
+            n = self.pulls[inst, encounter_id, diff] = self.pulls.get((inst, encounter_id, diff), 0) + 1
+            self.pull = _OpenRun(f[1], inst, t, difficulty=RAID_DIFFICULTIES[diff],
+                                 raid=self.zone_name if inst == self.instance else "Raid",
+                                 encounter_id=encounter_id, pull=n,
+                                 encounters=[Encounter(f[1], t, encounter_id=encounter_id)])
+            self.instance = inst   # a log started inside the raid has no ZONE_CHANGE yet
+            return
         for r in self.open_runs():
-            r.encounters.append(Encounter(f[1], t, encounter_id=int(f[0])))
+            r.encounters.append(Encounter(f[1], t, encounter_id=encounter_id))
 
     def encounter_end(self, t: float, f: list[str]):
         # ENCOUNTER_END,encounterID,"Name",difficultyID,groupSize,success,fightTime
         encounter_id = int(f[0])
+        if self.pull and self.pull.encounter_id == encounter_id:
+            self.close_pull(t, killed=f[4] == "1")
+            return
         for r in self.open_runs():
             pull = next((e for e in reversed(r.encounters)
                          if e.encounter_id == encounter_id and e.end is None), None)
@@ -347,11 +397,21 @@ class _RunFinder:
                 r.deaths.append(Death(f[5], t))
 
 
-def find_runs(events: Iterable[tuple[float, str, list[str]]], min_run_minutes: int = 5) -> list[Run]:
+def find_runs(events: Iterable[tuple[float, str, list[str]]], min_run_minutes: int = 5,
+              raids: str = RAIDS_ALL) -> list[Run]:
     """One Run per dungeon: a keystone from CHALLENGE_MODE_START to its END, or a dungeon
-    without a key from entering it to leaving it (kept only if a boss was pulled)."""
+    without a key from entering it to leaving it (kept only if a boss was pulled). And one per
+    raid boss pull, from ENCOUNTER_START to its END: every pull, the kills only, or none
+    (raids: RAIDS_ALL, RAIDS_KILLS or RAIDS_OFF)."""
     finder = _RunFinder()
     for t, event, f in events:
         finder.feed(t, event, f)
-    # Completed keys always count; anything else only if it's long enough to be a real run.
-    return [r for r in finder.finish() if r.result == "completed" or r.minutes >= min_run_minutes]
+
+    def keep(r: Run) -> bool:
+        if r.is_raid:
+            # A pull reset at once isn't worth a clip; a kill always is.
+            return raids != RAIDS_OFF and (r.result == "kill" or (
+                raids == RAIDS_ALL and r.end - r.start >= MIN_PULL_SECONDS))
+        # Completed keys always count; anything else only if it's long enough to be a real run.
+        return r.result == "completed" or r.minutes >= min_run_minutes
+    return [r for r in finder.finish() if keep(r)]

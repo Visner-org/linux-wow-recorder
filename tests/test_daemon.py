@@ -18,19 +18,35 @@ class FakeRecorder:
         self.game_exe = None
         self.starts = 0
         self.lost = False   # what capture_lost() says next
+        self.capture = None
+        self.picking = False   # the screen-share dialog waits after each start
+        self.waiting = False
+
+    @property
+    def capture_mode(self):
+        return self.capture or self.cfg.capture
 
     def start(self, output):
         self.starts += 1
         if not self.works:
             return False
         self.file, self.running = output, True
+        self.waiting = self.picking and self.capture_mode == "portal"
         return True
+
+    def waiting_for_pick(self):
+        return self.running and self.waiting
+
+    def forget_pick(self):
+        self.forgotten += 1
+
+    forgotten = 0
 
     def is_running(self):
         return self.running
 
     def stop(self, timeout=30):
-        self.running, self.file = False, None
+        self.running, self.file, self.waiting = False, None, False
 
     def adopt_leftover(self):
         return False
@@ -394,3 +410,193 @@ def test_the_programs_with_sound_are_logged_once(make, caplog):
     clock2.now += daemon.AUDIO_CHECK_AFTER
     d2.check_session(100)
     assert "isn't among them" in caplog.text
+
+
+def test_a_new_version_waits_for_the_session_the_cutting_and_the_hook(make, monkeypatch):
+    d, clock, _ = make()
+    monkeypatch.setattr(daemon.service, "installed_version", lambda: "0.6.0")
+    d.updates.running = "0.5.0"
+
+    def ready():
+        clock.now += daemon.service.UPDATE_CHECK_SECONDS
+        return d.update_ready()
+    assert not ready()                 # seen once: maybe still being installed
+    d.start_session("Retail", "Wow.exe", 7)
+    assert not ready()                 # recording
+    d.recorder.running = False
+    d.end_session()
+    wait_for_cutter(d)
+    release = threading.Event()
+    hook = threading.Thread(target=release.wait, args=(5,))
+    hook.start()
+    d._hooks.append(hook)
+    assert not ready()                 # an after_clips upload is running
+    release.set()
+    hook.join()
+    clock.now += 1
+    assert not d.update_ready()        # too soon after the last check
+    assert ready()
+
+
+def test_run_restarts_into_a_new_version_when_idle(make, monkeypatch):
+    d, clock, _ = make()
+    d.cfg.poll_interval = 0
+    monkeypatch.setattr(daemon, "find_wow", lambda: None)
+    monkeypatch.setattr(daemon, "process_pending", lambda *a, **k: [])
+    calls = []
+
+    def find():
+        if not calls:
+            wait_for_cutter(d)         # what an earlier run left: cut at the start
+        clock.now += 30
+        calls.append(1)
+        if len(calls) > 50:
+            d._stop.set()
+        return None
+    monkeypatch.setattr(daemon, "find_wow_process", find)
+    monkeypatch.setattr(daemon.service, "installed_version", lambda: "0.6.0")
+    d.updates.running = "0.5.0"
+    restarted = []
+    monkeypatch.setattr(d, "restart_into_new_version", lambda: restarted.append(1))
+    d.run()
+    assert restarted == [1] and len(calls) < 50
+    assert d.status.data["state"] == state.STOPPED
+
+
+# ── The screen-share dialog ──
+
+def test_waiting_for_a_pick_isnt_recording(make):
+    d, _, _ = make()
+    d.recorder.picking = True
+    d.start_session("Retail", "Wow.exe", pid=100)
+    assert d.status.data["state"] == state.NOT_RECORDING and d.status.data["picking"]
+    assert d.status.data["problem"] == daemon.PICK_PROBLEM
+    assert d.status.data["recording_file"] is None
+    for _ in range(daemon.MAX_RESTARTS + 1):   # waiting, not dead: never restarted
+        d.check_session(100)
+    assert d.recorder.starts == 1
+    d.recorder.waiting = False                 # picked
+    d.check_session(100)
+    assert d.status.data["state"] == state.RECORDING and d.status.data["problem"] is None
+    assert d.status.data["recording_file"] == str(d.recorder.file)
+
+
+def test_closing_the_dialog_without_a_pick_ends_this_sessions_recording(make):
+    d, _, _ = make()
+    d.recorder.picking = True
+    d.start_session("Retail", "Wow.exe", pid=100)
+    d.recorder.running = False                 # the dialog was cancelled
+    for _ in range(3):
+        d.check_session(100)
+    assert d.recorder.starts == 1              # no dialog again and again
+    assert d.status.data["state"] == state.NOT_RECORDING and not d.status.data["picking"]
+
+
+def test_wow_closed_while_waiting_isnt_a_recorded_session(make, monkeypatch):
+    d, _, _ = make()
+    d.recorder.picking = True
+    d.start_session("Retail", "Wow.exe", pid=100)
+    monkeypatch.setattr(daemon, "process_pending", lambda cfg, stop=None, in_use=None: [])
+    d.end_session()
+    wait_for_cutter(d)
+    assert "session_ended" not in d.notifier.sent
+
+
+def test_record_monitor_instead_for_this_session_only(make):
+    d, clock, _ = make()
+    d.cfg.monitor = "DP-2"
+    d.recorder.picking = True
+    d.start_session("Retail", "Wow.exe", pid=100)
+    assert state.request_monitor(True) is None
+    d.check_session(100)
+    assert d.recorder.capture_mode == "DP-2" and d.recorder.starts == 2
+    assert d.status.data["state"] == state.RECORDING and d.status.data["monitor_switch"]
+    assert d.status.data["capture"] == "DP-2"
+    assert state.request_pause(True) is None   # another request keeps this one
+    d.check_session(100)
+    assert d.recorder.capture_mode == "DP-2" and d.status.data["state"] == state.PAUSED
+    state.request_pause(False)
+    assert state.request_monitor(False) is None
+    d.check_session(100)
+    assert d.recorder.capture_mode == "portal" and d.status.data["picking"]
+    state.request_monitor(True)
+    d.check_session(100)
+    d.end_session()
+    d.start_session("Retail", "Wow.exe", pid=200)
+    assert d.recorder.capture_mode == "portal"  # the next session is the window again
+    assert not d.status.data["monitor_switch"]
+
+
+def test_monitor_instead_defaults_to_the_first_screen(make):
+    d, _, _ = make()
+    d.start_session("Retail", "Wow.exe", pid=100)
+    state.request_monitor(True)
+    d.check_session(100)
+    assert d.recorder.capture_mode == "screen"
+
+
+def test_waiting_for_pick_reads_the_recorders_output(tmp_path, monkeypatch):
+    from linux_wow_recorder import recorder
+    r = recorder.Recorder(config.from_dict(config.load_raw(tmp_path / "missing.toml")))
+    monkeypatch.setattr(r, "is_running", lambda: True)
+    assert not r.waiting_for_pick()            # nothing started
+    r.output_log = tmp_path / "out.log"
+    r.output_log.write_text("gsr info: gsr_capture_portal_setup_dbus: Start\n")
+    assert r.waiting_for_pick()
+    with open(r.output_log, "a") as f:
+        f.write('gsr info: pipewire: stream 0x1 previous state: "paused", new state: "streaming" '
+                '(error: none)\n')
+    assert not r.waiting_for_pick()
+    r.capture = "DP-1"
+    r.output_log.write_text("")
+    r._streaming = False
+    assert not r.waiting_for_pick()            # a monitor has no dialog
+    assert r.command(tmp_path / "x.mkv")[1:3] == ["-w", "DP-1"]
+    assert "-restore-portal-session" not in r.command(tmp_path / "x.mkv")
+
+
+def test_pick_another_window(make):
+    d, _, _ = make()
+    d.start_session("Retail", "Wow.exe", pid=100)
+    assert d.status.data["state"] == state.RECORDING
+    d.recorder.picking = True                  # the dialog opens again once the pick is forgotten
+    assert state.request_repick() is None
+    d.check_session(100)
+    assert d.recorder.forgotten == 1 and d.recorder.starts == 2
+    assert d.status.data["picking"] and d.status.data["problem"] == daemon.PICK_PROBLEM
+    d.check_session(100)
+    assert d.recorder.starts == 2              # acted on once
+    d.recorder.waiting = False
+    d.check_session(100)
+    assert d.status.data["state"] == state.RECORDING
+
+
+def test_pick_another_window_does_nothing_for_a_monitor(make):
+    d, _, _ = make()
+    d.cfg.capture = "DP-1"
+    d.start_session("Retail", "Wow.exe", pid=100)
+    state.request_repick()
+    d.check_session(100)
+    assert d.recorder.forgotten == 0 and d.recorder.starts == 1
+
+
+def test_forget_pick_removes_the_saved_pick(tmp_path, monkeypatch):
+    from linux_wow_recorder import recorder
+    tokens = (tmp_path / "a" / "restore_token", tmp_path / "missing" / "restore_token")
+    tokens[0].parent.mkdir()
+    tokens[0].write_text("x")
+    monkeypatch.setattr(recorder, "RESTORE_TOKENS", tokens)
+    recorder.Recorder(config.from_dict(config.load_raw(tmp_path / "missing.toml"))).forget_pick()
+    assert not tokens[0].exists()
+
+
+def test_raid_pulls_are_one_line_per_raid_in_discord():
+    from linux_wow_recorder.combatlog import Run
+    pulls = [Run(boss, 0, 100, f"Heroic {r.capitalize()}", result=r,
+                 raid="Liberation of Undermine", difficulty="Heroic", pull=1)
+             for boss, r in (("Vexie", "wipe"), ("Vexie", "kill"), ("Rik Reverb", "wipe"))]
+    pulls.append(Run("Vexie", 0, 100, "LFR Wipe", result="wipe",
+                     raid="Liberation of Undermine", difficulty="LFR", pull=1))
+    assert daemon.raid_summary(pulls) == [
+        "• Liberation of Undermine (Heroic): 3 pulls, kills: Vexie",
+        "• Liberation of Undermine (LFR): 1 pull, no kills"]

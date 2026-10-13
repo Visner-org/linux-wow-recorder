@@ -66,3 +66,63 @@ def test_tray_menu_follows_the_service(tmp_path, monkeypatch, qapp_or_skip):
     assert "Resume recording" in texts() and t.title.text() == "Paused for this session"
     assert "Folders and logs" in texts() and "Quit and stop recording" in texts()
     t.tray.hide()
+
+
+def test_the_app_restarts_for_a_new_version_only_with_no_window_open(qapp_or_skip, monkeypatch):
+    t = tray.Tray.__new__(tray.Tray)   # just what check_update uses
+    restarted = []
+    t.restart = lambda: restarted.append(1)
+
+    class Window:
+        def __init__(self, visible):
+            self.visible = visible
+
+        def isVisible(self):
+            return self.visible
+    t.clips_window, t.settings_window, t.log_window = Window(True), None, Window(False)
+    t.updates = type("W", (), {"check": lambda self: "0.6.0"})()
+    t.check_update()
+    assert restarted == []             # the clips window is open
+    t.clips_window.visible = False
+    t.check_update()
+    assert restarted == [1]
+    t.updates = type("W", (), {"check": lambda self: None})()
+    t.check_update()
+    assert restarted == [1]
+
+
+def test_a_new_release_is_told_once_and_stays_in_the_menu(tmp_path, monkeypatch, qapp_or_skip):
+    import types
+    from linux_wow_recorder import config, updates
+    monkeypatch.setattr(config, "CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(service, "state", lambda: "active")
+    monkeypatch.setattr(tray.ServiceWatcher, "_subscribe", lambda self: False)
+    cfg = types.SimpleNamespace(check_updates=True)
+    monkeypatch.setattr(tray.Tray, "_config", lambda self, quiet=False: cfg)
+    asked = []
+
+    class Check:   # answers at once, without the network
+        def __init__(self):
+            asked.append(1)
+            self.done, self.version = True, "99.0.0"
+    monkeypatch.setattr(updates, "Check", Check)
+    t = tray.Tray(qapp_or_skip)
+    popups = []
+    monkeypatch.setattr(t.tray, "showMessage", lambda *a: popups.append(a[1]))
+
+    t.check_release()
+    t.refresh()
+    assert asked == [1] and popups == ["Version 99.0.0 is out."]
+    assert t.release_action.isVisible() and t.release_action.text() == "Version 99.0.0 is out..."
+    t.check_release()                  # a day hasn't passed: GitHub isn't asked again
+    t.refresh()
+    assert asked == [1] and len(popups) == 1   # and it's said once
+
+    t2 = tray.Tray(qapp_or_skip)       # after a restart: the menu line without asking
+    t2.refresh()
+    assert asked == [1] and t2.release_action.isVisible()
+
+    cfg.check_updates = False          # turned off: no line, no checks
+    t.check_release()
+    t.refresh()
+    assert not t.release_action.isVisible() and asked == [1]

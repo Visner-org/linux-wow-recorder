@@ -290,3 +290,76 @@ def test_parse_log_time_without_a_year():
     assert parse_log_time("10/8/2026 19:03:12.000+5.5") == datetime.datetime(
         2026, 10, 8, 13, 33, 12, tzinfo=datetime.UTC).timestamp()
     assert parse_log_time("2/30/2026 19:03:12.000") is None
+
+
+# ── Raids: a run per boss pull ──
+
+def raid_boss(t, name="Vexie", diff=17, encounter=3009, inst=2769):
+    return (T0 + t, "ENCOUNTER_START", [str(encounter), name, str(diff), "25", str(inst)])
+
+
+def raid_boss_end(t, killed, name="Vexie", diff=17, encounter=3009):
+    return (T0 + t, "ENCOUNTER_END", [str(encounter), name, str(diff), "25",
+                                      "1" if killed else "0", "120000"])
+
+
+def test_raid_pulls_are_runs():
+    runs = find_runs([
+        zone(0, 2769, "Liberation of Undermine", 17),
+        raid_boss(100),
+        died(150, "Player-1-AAA", "Tank-Realm-US"),
+        raid_boss_end(250, killed=False),
+        raid_boss(400),
+        aura(410, 2825, dest="Player-1-AAA"), aura(410, 57724, dest="Player-1-AAA"),
+        raid_boss_end(700, killed=True),
+        raid_boss(900, "Cauldron of Carnage", encounter=3010),
+        raid_boss_end(910, False, "Cauldron of Carnage", encounter=3010),   # reset at once
+        zone(1200, 0, "Undermine", 0),
+    ])
+    wipe, kill = runs
+    assert (wipe.name, wipe.raid, wipe.label, wipe.result, wipe.pull) == (
+        "Vexie", "Liberation of Undermine", "LFR Wipe", "wipe", 1)
+    assert wipe.start == T0 + 100 and wipe.end == T0 + 250 and wipe.length == "2m30s"
+    assert [d.name for d in wipe.deaths] == ["Tank-Realm-US"]
+    assert [(e.name, e.killed) for e in wipe.encounters] == [("Vexie", False)]
+    assert (kill.label, kill.pull, kill.difficulty) == ("LFR Kill", 2, "LFR")
+    assert [lust.name for lust in kill.lusts] == ["Bloodlust"] and not kill.deaths
+    assert kill.encounters[0].killed and kill.is_raid and not kill.level
+
+
+def test_raid_kills_only_or_none():
+    events = [zone(0, 2769, "Liberation of Undermine", 15),
+              raid_boss(100, diff=15), raid_boss_end(250, False, diff=15),
+              raid_boss(300, diff=15), raid_boss_end(310, True, diff=15)]   # a short kill counts
+    assert [r.label for r in find_runs(events)] == ["Heroic Wipe", "Heroic Kill"]
+    assert [r.label for r in find_runs(events, raids="kills")] == ["Heroic Kill"]
+    assert find_runs(events, raids="off") == []
+
+
+def test_a_raid_pull_without_an_end():
+    runs = find_runs([
+        zone(0, 2769, "Liberation of Undermine", 16),
+        raid_boss(100, diff=16),
+        zone(200, 0, "Undermine", 0),        # disconnected or hearthed mid-pull
+        zone(300, 2769, "Liberation of Undermine", 16),
+        raid_boss(400, diff=16),
+        raid_boss(600, diff=16),             # crashed: no END before the next pull
+        raid_boss_end(700, True, diff=16),
+    ])
+    assert [(r.result, r.pull, r.end - T0) for r in runs] == [
+        ("wipe", 1, 200), ("wipe", 2, 600), ("kill", 3, 700)]
+
+
+def test_a_log_started_inside_a_raid():
+    runs = find_runs([raid_boss(100, diff=14), raid_boss_end(400, True, diff=14)])
+    assert [(r.raid, r.label) for r in runs] == [("Raid", "Normal Kill")]
+
+
+def test_dungeon_bosses_arent_raid_pulls():
+    runs = find_runs([
+        zone(0, 2290, "Mists of Tirna Scithe", 2),
+        boss(100),
+        (T0 + 200, "ENCOUNTER_END", ["2397", "Boss", "2", "5", "1", "99000"]),
+        zone(500, 0, "Ardenweald", 0),
+    ])
+    assert [(r.label, r.is_raid) for r in runs] == [("Heroic", False)]

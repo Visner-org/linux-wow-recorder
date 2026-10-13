@@ -42,6 +42,9 @@ class Status:
             "recording_file": None,
             "free_gb": None,
             "problem": None,            # a short sentence while something is wrong
+            "picking": False,           # the screen-share dialog is waiting; nothing's recorded
+            "capture": None,            # what's recorded this session: "portal", "DP-1", ...
+            "monitor_switch": False,    # switched to the monitor ("Record monitor instead")
             "last_session": None,       # {"end", "clips": [paths], "problems": [sentences]}
             "updated": None,
         }
@@ -74,12 +77,30 @@ def request_pause(pause: bool, path: Path | None = None, status_path: Path | Non
     """Asks the service to stop recording for the rest of this WoW session (pause) or to record
     again. It applies to the session running now only: the next time WoW starts, it records.
     Returns why it can't, or None."""
+    return _request(path, status_path, pause=pause)
+
+
+def request_monitor(monitor: bool, path: Path | None = None, status_path: Path | None = None) -> str | None:
+    """Asks the service to record the monitor (config's `monitor`) instead of the window picked
+    in the screen-share dialog, or the window again, for this WoW session only. Returns why it
+    can't, or None."""
+    return _request(path, status_path, monitor=monitor)
+
+
+def request_repick(path: Path | None = None, status_path: Path | None = None) -> str | None:
+    """Asks the service to open the screen-share dialog again, to pick another window."""
+    return _request(path, status_path, repick=time.time())
+
+
+def _request(path: Path | None, status_path: Path | None, **asked) -> str | None:
+    """Writes asked into the control file, keeping this session's other requests."""
     path, status = path or CONTROL_FILE, read(status_path or STATUS_FILE)
     if status is None:
         return "The recorder service isn't running."
     if not status.get("session_start"):
         return "WoW isn't running."
-    data = {"pause": pause, "session": status["session_start"], "asked": time.time()}
+    data = _requests(status["session_start"], path)
+    data.update(asked, session=status["session_start"], asked=time.time())
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_name(path.name + ".tmp")
@@ -90,13 +111,28 @@ def request_pause(pause: bool, path: Path | None = None, status_path: Path | Non
     return None
 
 
-def pause_requested(session_start: float, path: Path | None = None) -> bool:
-    """Whether recording is paused for the session that started at session_start."""
+def _requests(session_start: float, path: Path | None = None) -> dict:
+    """The control file's requests for the session that started at session_start."""
     try:
         data = json.loads((path or CONTROL_FILE).read_text())
     except (OSError, ValueError):
-        return False
-    return bool(isinstance(data, dict) and data.get("pause") and data.get("session") == session_start)
+        return {}
+    return data if isinstance(data, dict) and data.get("session") == session_start else {}
+
+
+def pause_requested(session_start: float, path: Path | None = None) -> bool:
+    """Whether recording is paused for the session that started at session_start."""
+    return bool(_requests(session_start, path).get("pause"))
+
+
+def repick_requested(session_start: float, path: Path | None = None) -> float:
+    """When another pick in the screen-share dialog was last asked for (0: never)."""
+    return float(_requests(session_start, path).get("repick") or 0)
+
+
+def monitor_requested(session_start: float, path: Path | None = None) -> bool:
+    """Whether the session that started at session_start is to record the monitor."""
+    return bool(_requests(session_start, path).get("monitor"))
 
 
 def clear_requests(path: Path | None = None):

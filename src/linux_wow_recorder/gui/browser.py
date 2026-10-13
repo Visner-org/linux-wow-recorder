@@ -1,8 +1,10 @@
 """The clip browser: the clips list, a player, and a timeline of bosses, deaths and lusts."""
 
+import html
 import os
 import shlex
 import time
+from pathlib import Path
 
 from PySide6.QtCore import (QEvent, QFile, QFileSystemWatcher, QLineF, QPointF, QProcess, QRectF,
                             QSettings, QSize, Qt, QTimer, QUrl, Signal)
@@ -25,6 +27,7 @@ from . import model, theme
 
 COLUMNS = ["Date", "Dungeon", "Level", "Result", "Length", "Deaths", "Kept"]
 SESSION_COLUMNS = ["Date", "Dungeons", "Level", "Runs", "Length", "Deaths", "Kept"]
+RAID_COLUMNS = ["Date", "Boss", "Pull", "Result", "Length", "Deaths", "Kept"]
 PREVIEW_MS = 3000
 CLIP_ROLE = Qt.UserRole + 2          # a card's model.ClipInfo
 THUMB = QSize(128, 72)               # a card's picture
@@ -228,6 +231,7 @@ class ClipBrowser(QWidget):
         self.mode_group = QButtonGroup(self)
         self.mode_buttons = {}
         for mode, text, tip in ((model.KEYS, "Keystones", "A clip for each dungeon run"),
+                                (model.RAIDS, "Raids", "A clip for each raid boss pull"),
                                 (model.SESSIONS, "Full sessions",
                                  "The whole recording of each time you played")):
             b = QPushButton(text)
@@ -301,12 +305,26 @@ class ClipBrowser(QWidget):
         self.live_image = QLabel()
         self.live_image.setAlignment(Qt.AlignCenter)
         self.live_image.setMinimumHeight(120)
+        self.live_image.setWordWrap(True)   # for live_message
         self.live_caption = QLabel()
+        # While WoW runs with a window picked (or awaited) in the screen-share dialog.
+        self.live_switch = QPushButton(model.switch_text(False))
+        self.live_switch.clicked.connect(self.toggle_monitor)
+        self.live_switch.hide()
+        self.live_repick = QPushButton(model.REPICK_TEXT)
+        self.live_repick.clicked.connect(self.repick)
+        self.live_repick.hide()
+        switch_row = QHBoxLayout()
+        switch_row.addWidget(self.live_repick)
+        switch_row.addWidget(self.live_switch)
+        switch_row.addStretch(1)
         live_layout = QVBoxLayout(self.live_box)
         live_layout.addWidget(self.live_image)
         live_layout.addWidget(self.live_caption)
+        live_layout.addLayout(switch_row)
         self.live_box.hide()
         self.live_pixmap = QPixmap()
+        self.live_message = None   # why WoW isn't being recorded, shown instead of a frame
         self.live_process = None
         self.live_shown_paused = False   # the preview on screen has the paused overlay
         self.last_session_end = _UNREAD   # status.json's; a new one means new clips
@@ -336,6 +354,7 @@ class ClipBrowser(QWidget):
         # ── Right: player, timeline, details, actions ──
         self.video = QVideoWidget()
         self.video.setMinimumSize(480, 270)
+        self.video.setStyleSheet("background: black")   # no grey between the letterbox bars
         self.audio = QAudioOutput()
         self.player = QMediaPlayer()
         self.player.setAudioOutput(self.audio)
@@ -352,6 +371,9 @@ class ClipBrowser(QWidget):
         self.video_stack = QStackedWidget()
         self.video_stack.addWidget(self.video)
         self.video_stack.addWidget(self.no_video)
+        # A clip loaded but not played yet: black with the app's icon, not an empty frame.
+        self.poster = Poster()
+        self.video_stack.addWidget(self.poster)
 
         self.play_button = QPushButton(" Play")
         self.play_button.setObjectName("primary")
@@ -447,7 +469,8 @@ class ClipBrowser(QWidget):
         view = 1 if self.settings.value("view") == "table" else 0
         self.view_group.button(view).setChecked(True)
         self.list_stack.setCurrentIndex(view)
-        self.mode = model.SESSIONS if self.settings.value("mode") == model.SESSIONS else model.KEYS
+        mode = self.settings.value("mode")
+        self.mode = mode if mode in (model.RAIDS, model.SESSIONS) else model.KEYS
         self.mode_buttons[self.mode].setChecked(True)
         self.show_mode()
         self.reload()
@@ -501,10 +524,23 @@ class ClipBrowser(QWidget):
                 self.reload_timer.start()   # a session was just cut
             self.last_session_end = end
         path = status.get("recording_file") if status.get("state") == state.RECORDING else None
+        view = model.describe(status, "active")
+        self.live_switch.setVisible(view.can_switch)
+        self.live_switch.setText(model.switch_text(view.monitor_switch))
+        self.live_repick.setVisible(view.can_repick)
+        message = (status.get("problem") or "Not recording.") if (
+            status.get("state") == state.NOT_RECORDING and status.get("session_start")) else None
         if not path:
-            self.live_box.hide()
             self.live_pixmap = QPixmap()
+            self.live_message = message
+            self.live_box.setVisible(bool(message))
+            if message:
+                self.live_box.setTitle("Not recording")
+                self.live_caption.setText("")
+                self.show_live_pixmap()
             return
+        self.live_message = None
+        self.live_box.setTitle("Recording now")
         self.live_box.show()
         if self.live_pixmap.isNull():
             self.show_live_pixmap()   # room for the first frame, decoded even in the background
@@ -537,6 +573,23 @@ class ClipBrowser(QWidget):
             self.live_caption.setText("Couldn't read the recording yet")
         proc.deleteLater()
 
+    def toggle_monitor(self):
+        """Record monitor instead of the picked window, or the window again, this session."""
+        why = state.request_monitor(not (state.read() or {}).get("monitor_switch"))
+        if why:
+            QMessageBox.warning(self, APP_TITLE, why)
+        else:
+            self.live_switch.setEnabled(False)   # until the service has switched
+            QTimer.singleShot(PREVIEW_MS, lambda: self.live_switch.setEnabled(True))
+
+    def repick(self):
+        """Opens the screen-share dialog again, to record another window."""
+        if why := state.request_repick():
+            QMessageBox.warning(self, APP_TITLE, why)
+        else:
+            self.live_repick.setEnabled(False)   # until the service has restarted it
+            QTimer.singleShot(PREVIEW_MS, lambda: self.live_repick.setEnabled(True))
+
     def preview_paused(self) -> bool:
         """The live preview waits while the window is minimized or another window has focus."""
         return self.isMinimized() or not self.isActiveWindow()
@@ -545,6 +598,10 @@ class ClipBrowser(QWidget):
         # the column's width: the box's own is stale while it's hidden, before its first show
         w = max(160, self.live_box.parentWidget().contentsRect().width() - 40)
         paused = self.live_shown_paused = self.preview_paused()
+        if self.live_message:
+            self.live_image.setMinimumHeight(w * 9 // 16)
+            self.live_image.setText(f"<b style='font-size:15pt'>{html.escape(self.live_message, quote=False)}</b>")
+            return
         if self.live_pixmap.isNull():
             # a frame's room held from the start, so the first frame doesn't push the page down
             self.live_image.setMinimumHeight(w * 9 // 16)
@@ -641,7 +698,8 @@ class ClipBrowser(QWidget):
     def fill_list(self, *_args, select=None):
         select = str(select or (self.current.path if self.current else "")) or None
         key = "all" if self.mode == model.SESSIONS else self.filter_group.checkedButton().property("key")
-        shown = [c for c in self.clips if model.matches(c, key, self.search.text().strip())]
+        shown = [c for c in self.clips if model.in_mode(c, self.mode)
+                 and model.matches(c, key, self.search.text().strip())]
 
         self.cards.blockSignals(True)
         self.cards.clear()
@@ -661,7 +719,7 @@ class ClipBrowser(QWidget):
             item = SortItem([
                 time.strftime("%Y-%m-%d %H:%M", time.localtime(c.started)),
                 c.dungeon,
-                f"+{c.level}" if c.level else "",
+                f"#{c.pull}" if c.pull else f"+{c.level}" if c.level else "",
                 c.result_text,
                 c.length,
                 "" if c.deaths is None else str(c.deaths),
@@ -669,7 +727,7 @@ class ClipBrowser(QWidget):
             ])
             item.setData(0, Qt.UserRole, str(c.path))
             item.setData(0, Qt.UserRole + 1, c.started)
-            item.setData(2, Qt.UserRole + 1, c.level or 0)
+            item.setData(2, Qt.UserRole + 1, c.pull or c.level or 0)
             item.setData(5, Qt.UserRole + 1, c.deaths or 0)
             self.tree.addTopLevelItem(item)
         self.tree.setSortingEnabled(True)
@@ -678,12 +736,13 @@ class ClipBrowser(QWidget):
         self.tree.blockSignals(False)
 
         paths = [str(c.path) for c in shown]
-        self.count.setText(f"{len(shown)} of {len(self.clips)} "
+        total = sum(model.in_mode(c, self.mode) for c in self.clips)
+        self.count.setText(f"{len(shown)} of {total} "
                            + ("full sessions" if self.mode == model.SESSIONS else "clips"))
         self.select(select if select in paths else (paths[0] if paths else None))
 
     def set_mode(self, mode: str):
-        """Keystones (clips) or Full sessions (the recordings)."""
+        """Keystones (dungeon clips), Raids (boss pull clips) or Full sessions (the recordings)."""
         if mode == self.mode:
             return
         self.mode = mode
@@ -693,11 +752,19 @@ class ClipBrowser(QWidget):
         self.reload()
 
     def show_mode(self):
-        sessions = self.mode == model.SESSIONS
-        for b in self.filter_group.buttons():   # results are per run
-            b.setVisible(not sessions)
-        self.search.setPlaceholderText("Search dungeons")
-        self.tree.setHeaderLabels(SESSION_COLUMNS if sessions else COLUMNS)
+        sessions, raids = self.mode == model.SESSIONS, self.mode == model.RAIDS
+        filters = model.RAID_FILTERS if raids else model.FILTERS
+        buttons = self.filter_group.buttons()
+        relabel = [b.property("key") for b in buttons] != list(filters)
+        for b, (key, label) in zip(buttons, filters.items(), strict=True):
+            b.setVisible(not sessions)   # results are per run
+            b.setProperty("key", key)
+            b.setText(label)
+        if relabel:   # Kills isn't Completed: back to All
+            buttons[0].setChecked(True)
+        self.search.setPlaceholderText("Search bosses and raids" if raids else "Search dungeons")
+        self.tree.setHeaderLabels(SESSION_COLUMNS if sessions else RAID_COLUMNS if raids
+                                  else COLUMNS)
 
     def set_view(self, view: int):
         self.list_stack.setCurrentIndex(view)
@@ -725,8 +792,11 @@ class ClipBrowser(QWidget):
         if not clip:
             self.player.setSource(QUrl())
             sessions = self.mode == model.SESSIONS
-            if self.clips:
+            raids = self.mode == model.RAIDS
+            if any(model.in_mode(c, self.mode) for c in self.clips):
                 empty = "Pick a full session from the list." if sessions else "Pick a clip from the list."
+            elif raids:
+                empty = "Raid boss clips show up here after your first boss pull."
             elif sessions:
                 empty = ("Full recordings show up here once a session has been cut into clips. "
                          "They're kept for as long as Settings > Clips and storage > "
@@ -735,16 +805,17 @@ class ClipBrowser(QWidget):
                 empty = "Clips show up here after your first dungeon run."
             self.no_video.setText(empty)
             self.video_stack.setCurrentWidget(self.no_video)
-            what = "full sessions" if sessions else "clips"
-            self.title.setText(f"No {what} yet" if not self.clips else f"No {what} match")
+            what = "full sessions" if sessions else "raid clips" if raids else "clips"
+            listed = any(model.in_mode(c, self.mode) for c in self.clips)
+            self.title.setText(f"No {what} yet" if not listed else f"No {what} match")
             self.result_chip.setText("")
             self.result_chip.setStyleSheet("")
             self.facts.setText("")
             self.events.clear()
             self.timeline.set_clip(0, {})
             return
-        self.video_stack.setCurrentWidget(self.video)
         if not same_file:
+            self.video_stack.setCurrentWidget(self.poster)
             self.player.setSource(QUrl.fromLocalFile(str(clip.path)))
         self.show_details(clip)
 
@@ -802,16 +873,19 @@ class ClipBrowser(QWidget):
     def show_details(self, clip: model.ClipInfo):
         d = clip.details
         level = f" +{clip.level}" if clip.level else ""
-        self.title.setText(f"{clip.dungeon}{level}")
+        self.title.setText(f"{clip.dungeon}, pull {clip.pull}" if clip.pull else f"{clip.dungeon}{level}")
         self.title.setToolTip(str(clip.path))
         self.result_chip.setText(clip.result_text)
         self.result_chip.setStyleSheet(chip_style(clip.result, self.palette()))
         facts = [time.strftime("%a %Y-%m-%d %H:%M", time.localtime(clip.started))]
-        if not clip.is_session:
+        if clip.is_raid:
+            facts.append(clip.raid)
+            facts.append(f"pull {clip.length}")
+        elif not clip.is_session:
             facts.append(f"run {clip.length}")
         elif clip.length:
             facts.append(f"recorded {clip.length}")
-        if clip.bosses_killed is not None:
+        if clip.bosses_killed is not None and not clip.is_raid:
             bosses = {e["name"] for e in d.get("encounters", [])}
             facts.append(f"{clip.bosses_killed}/{len(bosses)} bosses killed" if bosses
                          else "no bosses")
@@ -894,6 +968,8 @@ class ClipBrowser(QWidget):
 
     def on_state(self, s):
         playing = s == QMediaPlayer.PlayingState
+        if playing and self.current:
+            self.video_stack.setCurrentWidget(self.video)
         self.play_button.setIcon(self.style().standardIcon(QStyle.SP_MediaPause if playing
                                                            else QStyle.SP_MediaPlay))
         self.play_button.setText(" Pause" if playing else " Play")
@@ -915,6 +991,8 @@ class ClipBrowser(QWidget):
 
     def seek(self, seconds: float):
         self.player.setPosition(int(seconds * 1000))
+        if self.current:
+            self.video_stack.setCurrentWidget(self.video)   # the frame sought to
         self.timeline.set_position(seconds)
 
     def keyPressEvent(self, event):
@@ -1060,11 +1138,11 @@ class ClipCard(QStyledItemDelegate):
         else:
             p.fillRect(pic, pal.mid())
         p.setClipping(False)
-        if clip.level:   # "+12" on the picture's corner
+        if clip.level or clip.pull:   # "+12", or a pull's "#3", on the picture's corner
             font = QFont(option.font)
             font.setBold(True)
             p.setFont(font)
-            label = f"+{clip.level}"
+            label = f"#{clip.pull}" if clip.pull else f"+{clip.level}"
             w = p.fontMetrics().horizontalAdvance(label) + 10
             badge = QRectF(pic.left() + 4, pic.top() + 4, w, p.fontMetrics().height() + 2)
             p.setPen(Qt.NoPen)
@@ -1095,8 +1173,7 @@ class ClipCard(QStyledItemDelegate):
         y = r.top() + fm.height() + 8
         chip_w = fm.horizontalAdvance(clip.result_text) + 16
         chip = QRectF(x, y, chip_w, fm.height() + 2)
-        edge = (theme.color("good", pal) if clip.result == "completed" else
-                theme.color("warning", pal) if clip.result == "abandoned" else theme.muted(pal))
+        edge = result_color(clip.result, pal)
         p.setPen(QPen(text if selected else edge, 1))
         p.setBrush(Qt.NoBrush)
         p.drawRoundedRect(chip.adjusted(0.5, 0.5, -0.5, -0.5), chip.height() / 2, chip.height() / 2)
@@ -1151,6 +1228,22 @@ def trash_icon(palette) -> QIcon:
     return icon
 
 
+class Poster(QWidget):
+    """Black, with the app's icon in the middle: the player before a clip is played."""
+
+    def __init__(self):
+        super().__init__()
+        self.icon = QIcon(str(Path(__file__).with_name("icon.svg")))
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.fillRect(self.rect(), Qt.black)
+        side = min(self.width(), self.height()) // 4
+        if side > 0 and not self.icon.isNull():
+            self.icon.paint(p, (self.width() - side) // 2, (self.height() - side) // 2, side, side)
+        p.end()
+
+
 def paused_pixmap(pixmap: QPixmap) -> QPixmap:
     """The last preview frame, dimmed, with PREVIEW_PAUSED over it."""
     out = QPixmap(pixmap)
@@ -1198,11 +1291,16 @@ def event_icon(kind: str, palette) -> QIcon:
     return QIcon(pix)
 
 
+def result_color(result: str, palette) -> QColor:
+    """Completed keys and raid kills good, abandoned keys and wipes a warning, the rest muted."""
+    return (theme.color("good", palette) if result in ("completed", "kill") else
+            theme.color("warning", palette) if result in ("abandoned", "wipe") else theme.muted(palette))
+
+
 def chip_style(result: str, palette) -> str:
     """The result as a chip: text in the text colour, outlined in the result's status colour
     (completed: good; abandoned: warning; no key: neutral)."""
-    edge = (theme.color("good", palette) if result == "completed" else
-            theme.color("warning", palette) if result == "abandoned" else theme.muted(palette))
+    edge = result_color(result, palette)
     return (f"QLabel {{ border: 1px solid {edge.name()}; border-radius: 9px; padding: 1px 9px;"
             f" color: palette(window-text); }}")
 

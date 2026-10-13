@@ -1,6 +1,7 @@
 # User guide
 
-Linux WoW Recorder records your World of Warcraft sessions and cuts one clip per dungeon run.
+Linux WoW Recorder records your World of Warcraft sessions and cuts one clip per dungeon run,
+and one per raid boss pull.
 It runs in the background: start WoW and play, and when you close WoW, the clips are waiting.
 
 - [Which edition](#which-edition)
@@ -34,9 +35,10 @@ start with the command line and add the desktop app later, or the other way roun
 ## Privacy
 
 Everything stays on your computer: recordings, clips, settings and logs. The app has no
-telemetry, update checks or crash reporting, and no account. The only connection it can make is a
-message to the Discord or Fluxer webhooks you add yourself, and those messages never include log
-lines, paths or anyone's character name. The full details, and how to check them yourself, are
+telemetry or crash reporting, and no account. It connects to the internet only if you ask it to:
+a message to the Discord or Fluxer webhooks you add yourself, which never includes log lines,
+paths or anyone's character name, and, if you tick it at setup or in Settings > About, a daily
+question to GitHub about the newest version, which sends nothing about you. The full details, and how to check them yourself, are
 in the [README](../README.md#privacy).
 
 ## Before you install
@@ -66,12 +68,12 @@ And in WoW:
 ### Nobara or Fedora (RPM)
 
 ```bash
-sudo dnf install ./linux-wow-recorder-0.5.0-1.fc44.noarch.rpm
+sudo dnf install ./linux-wow-recorder-0.6.0-1.fc44.noarch.rpm
 ```
 
 dnf installs gpu-screen-recorder, ffmpeg and Qt from your distro's repos along with it. The app
-appears in the menu as **Linux WoW Recorder**. To update, install the newer RPM the same way,
-then `systemctl --user restart linux-wow-recorder`. The RPM is built for one Fedora release
+appears in the menu as **Linux WoW Recorder**. To update, install the newer RPM the same way.
+The service and the tray app restart into the new version by themselves within a few minutes, but only when it's safe: the service waits until WoW is closed, the clips are cut and any After clips command has finished, and the tray app waits until its windows are closed. (Updating from 0.5.0 or earlier needs one restart by hand: `systemctl --user restart linux-wow-recorder`, and quit and start the tray app.) The RPM is built for one Fedora release
 (`fc44` is Fedora/Nobara 44); on another release, build it there with
 `./packaging/build-rpm.sh` (needs `uv` and `rpm-build`).
 
@@ -87,8 +89,8 @@ cd linux-wow-recorder/packaging/aur
 makepkg -si
 ```
 
-To update, `git pull` and run `makepkg -si` again, then
-`systemctl --user restart linux-wow-recorder`. The uv route below works on Arch too.
+To update, `git pull` and run `makepkg -si` again; the app restarts into it as with the RPM
+above. The uv route below works on Arch too.
 
 ### Other distros (CachyOS, Arch, Bazzite, SteamOS, Ubuntu, ...)
 
@@ -114,8 +116,8 @@ linux-wow-recorder setup
 
 pipx works the same way: `pipx install 'linux-wow-recorder[gui] @ git+https://github.com/Visner-org/linux-wow-recorder'`.
 
-To update later, run `uv tool upgrade linux-wow-recorder`, then
-`systemctl --user restart linux-wow-recorder`.
+To update later, run `uv tool upgrade linux-wow-recorder`; the app restarts into it as with the
+RPM above.
 
 ## Setting it up
 
@@ -162,7 +164,11 @@ service. Everything else is in the config file (see the [reference](reference.md
   window to record only WoW: notifications and other windows stay out of the video, and
   alt-tabbing shows WoW's last frame instead of your desktop. A picked screen is remembered;
   whether a picked window is remembered from one WoW session to the next depends on your desktop,
-  so the dialog may come back each time. It never needs root.
+  so the dialog may come back each time. It never needs root. Nothing is recorded until you pick:
+  while the dialog waits (it can open behind WoW), the tray and the clips window say so and
+  offer **Record monitor instead**, which records the monitor set under "Monitor instead" for
+  the rest of that session. Picked the wrong window? **Pick another window** (tray menu, or under
+  the clips window's preview) forgets the pick and opens the dialog again.
 - **A monitor** (`DP-1`, `HDMI-A-1`, ...): just that monitor. With more than one screen, this
   is usually what you want.
 - **Whole screen** (`screen`): the first monitor in `gpu-screen-recorder --list-capture-options`,
@@ -205,7 +211,11 @@ the tray icon starts. To close the app completely, use **Quit** in the tray menu
 - **Left-click** opens the clip browser.
 - **Right-click** opens the menu: the status and the last session, then Clips, **Pause
   recording this session** (while WoW runs: nothing more is recorded until WoW closes, and the
-  next session records as usual; Resume undoes it), Settings, and a Folders and logs submenu.
+  next session records as usual; Resume undoes it), **Record monitor instead** (while a window is
+  picked or awaited: records your "Monitor instead" for the rest of this session; **Record the
+  window again** undoes it), **Pick another window** (while recording a picked window: opens the
+  screen-share dialog again), Settings, and a Folders and logs submenu. With update checks on,
+  **Version X is out...** appears when there's a newer version, and opens its release page.
 
 You also get a desktop notification when clips are ready or something goes wrong.
 
@@ -236,8 +246,9 @@ extension. KDE and most other desktops show them as they are.
   leave a clip's `.json` (and `.jpg`) in `clips/` when you move the video, it keeps its picture,
   deaths, lusts and bosses, even if the copy was renamed with hyphens for spaces. The app never
   changes anything in those folders, and Keep and "Keep clips" don't apply there.
-- **Keystones / Full sessions**, above the list: Keystones lists the clips, one per dungeon run;
-  Full sessions lists the whole recordings they were cut from, one each time you played, with
+- **Keystones / Raids / Full sessions**, above the list: Keystones lists the clips, one per
+  dungeon run; Raids lists one per raid boss pull ("#3" is the third pull of that boss), filtered
+  with All / Kills / Wipes and searched by boss or raid; Full sessions lists the whole recordings they were cut from, one each time you played, with
   every run in them on the timeline and in the events (each run holding its boss pulls). Full
   recordings are kept for as long as Settings > Clips and storage > "Keep full recordings" says
   (3 days unless you change it; Forever keeps them all); ☆ Keep keeps one forever. A recording
@@ -284,7 +295,7 @@ the channel's or community's settings > Webhooks. Then choose which messages to 
 | WoW started | WoW started and recording began | no |
 | WoW closed | WoW closed and the recording was saved | no |
 | Clips ready | clips were cut, listing each run with bosses killed, deaths and lusts | yes |
-| No runs | a session had no dungeon runs | no |
+| No runs | a session had no dungeon runs or raid pulls | no |
 | No combat log | no combat log covers a session (logging was off?) | yes |
 | Recording failed | the recorder didn't start, or stopped mid-session | yes |
 | Low disk space | free space is low, or recording stopped because the drive is nearly full | yes |
@@ -452,12 +463,20 @@ They come straight from the combat log, and haven't been checked against every c
 
 ## Uninstalling
 
+In the desktop app: **Settings > Advanced > Uninstall...**. Or in a terminal:
+
 ```bash
-linux-wow-recorder uninstall-service
-linux-wow-recorder-gui --autostart off      # desktop app only
-sudo dnf remove linux-wow-recorder          # RPM install
-uv tool uninstall linux-wow-recorder        # or, for uv: (pipx uninstall linux-wow-recorder)
+linux-wow-recorder uninstall
 ```
 
-Your config (`~/.config/linux-wow-recorder/`) and your recordings and clips are left alone;
-delete them by hand if you want them gone.
+Either one stops the recorder and removes its service, login and menu entries, settings and logs.
+It asks whether to delete your recordings and clips too (no, unless you tick it); if you do, only
+its own `sessions/`, `processed/` and `clips/` folders go, never anything else in your output
+folder, nor clips in your other folders. Installed with uv or pipx, the program is removed too.
+Installed as an RPM or Arch package, it tells you the command that finishes the job, since that
+needs your password:
+
+```bash
+sudo dnf remove linux-wow-recorder          # RPM
+sudo pacman -R linux-wow-recorder           # Arch package
+```

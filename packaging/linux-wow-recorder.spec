@@ -57,6 +57,24 @@ if [ "$1" -eq 0 ]; then
 fi
 
 %changelog
+* Tue Oct 13 2026 Linux WoW Recorder - 0.6.0-1
+- After an update, the service and the tray app restart into the new version by themselves:
+  the service once WoW is closed and the clips are cut, the tray app once its windows are closed
+- A clean uninstall: Settings > Advanced > Uninstall..., or the uninstall command
+- While the screen-share dialog waits for a pick, nothing is recorded and the app now says so
+  (tray, clips window); closing WoW then no longer waits 30 s
+- Record monitor instead: for a session, from the tray or the clips window (Settings: Monitor
+  instead)
+- Pick another window: forgets the screen-share pick and opens the dialog again (tray, clips
+  window)
+- The player is black with the app's icon until a clip plays (was an empty grey frame)
+- Raids: a clip per boss pull (kills and wipes), in the clips window's new Raids view, and one
+  Discord line per raid; Settings > Clips and storage > Raid boss clips (every pull, kills
+  only, or none)
+- New versions: if you turn it on (setup asks; Settings > About), the tray app asks GitHub once a
+  day for the newest version and says when one is out. Nothing about you is sent; installing
+  is up to you. "Check now" asks once.
+
 * Mon Oct 12 2026 Linux WoW Recorder - 0.5.0-1
 - Sound: "Only WoW's sound" recorded silence; the game's sound is "World of Warcraft" in PipeWire
 - A key WoW announces again after a crash stays one run (was split into Abandoned + Completed)

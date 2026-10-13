@@ -1,13 +1,14 @@
 """The tray icon and its menu."""
 
+import logging
 import os
 import subprocess
 import sys
 import time
 from pathlib import Path
 
-from PySide6.QtCore import (SLOT, QDeadlineTimer, QLineF, QLockFile, QObject, QRectF, Qt, QThread,
-                            QTimer, QUrl, Slot)
+from PySide6.QtCore import (SLOT, QDeadlineTimer, QLineF, QLockFile, QObject, QRectF, QSettings,
+                            Qt, QThread, QTimer, QUrl, Slot)
 from PySide6.QtDBus import QDBusConnection, QDBusInterface, QDBusMessage
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtGui import (QAction, QColor, QDesktopServices, QGuiApplication, QIcon, QPainter,
@@ -15,12 +16,13 @@ from PySide6.QtGui import (QAction, QColor, QDesktopServices, QGuiApplication, Q
 from PySide6.QtWidgets import (QApplication, QDialog, QMenu, QMessageBox, QPlainTextEdit,
                                QPushButton, QSystemTrayIcon, QVBoxLayout)
 
-from .. import APP_NAME, APP_TITLE, __version__, config, logs, service, state
+from .. import APP_NAME, APP_TITLE, __version__, config, logs, service, state, updates
 from ..clips import pending_recordings
 from ..config import ConfigError
 from . import desktop, model
 
 POLL_MS = 1000
+RELEASE_TIMER_MS = 15 * 60_000   # how often check_release looks whether a day has passed
 # systemctl runs this often when systemd's D-Bus signals can't be used, and once a minute anyway.
 SERVICE_POLL_S, SERVICE_RECHECK_S = 5, 60
 # Whether recordings are waiting: a folder listing, redone when the status changes or this often.
@@ -143,8 +145,10 @@ class ServiceWatcher(QObject):
 
 
 class Tray:
-    def __init__(self, app: QApplication):
+    def __init__(self, app: QApplication, restart=None):
+        """restart(): replaces the app with a newly installed version (run() makes it)."""
         self.app = app
+        self.restart = restart
         self.ink = None
         self.draw_icons()
         self.tray = QSystemTrayIcon(self.icons[model.OFF])
@@ -164,6 +168,11 @@ class Tray:
         self.pending_checked = 0.0
         self.last_end = None           # last_session["end"] already seen, for notifications
         self.last_problem = None
+        # A newer release on GitHub ([updates] check): when it was last asked, what it said,
+        # and which version a popup was already shown for, kept across restarts.
+        self.gui_settings = QSettings(str(config.CONFIG_DIR / "gui.ini"), QSettings.IniFormat)
+        self.release_check: updates.Check | None = None
+        self.release_enabled = False   # [updates] check, as last read
 
         # What's going on (read-only lines), then what to do, then the ways out.
         self.title = self.menu.addAction("")
@@ -177,7 +186,12 @@ class Tray:
         font.setBold(True)
         clips.setFont(font)
         self.pause_action = self.menu.addAction("Pause recording this session", self.toggle_pause)
+        self.switch_action = self.menu.addAction(model.switch_text(False), self.toggle_monitor)
+        self.repick_action = self.menu.addAction(model.REPICK_TEXT, self.repick)
         self.cut_action = self.menu.addAction("Cut waiting recordings now", self.cut_now)
+        self.release_action = self.menu.addAction("", lambda: QDesktopServices.openUrl(
+            QUrl(updates.RELEASES_PAGE)))
+        self.release_action.setVisible(False)
         self.menu.addAction("Settings...", self.show_settings)
         folders = self.menu.addMenu("Folders and logs")
         folders.addAction("Open clips folder", lambda: self.open_dir("clips_dir"))
@@ -196,6 +210,17 @@ class Tray:
         self.timer = QTimer()
         self.timer.timeout.connect(self.refresh)
         self.timer.start(POLL_MS)
+        # A newer version installed under the app: it restarts into it while no window is open.
+        self.updates = service.UpdateWatch()
+        self.update_timer = QTimer()
+        self.update_timer.timeout.connect(self.check_update)
+        self.update_timer.start(service.UPDATE_CHECK_SECONDS * 1000)
+        self.release_timer = QTimer()
+        self.release_timer.timeout.connect(self.check_release)
+        self.release_timer.start(RELEASE_TIMER_MS)
+        cfg = self._config(quiet=True)
+        self.release_enabled = bool(cfg and cfg.check_updates)   # the menu line before a check
+        QTimer.singleShot(60_000, self.check_release)   # not while the desktop is still starting
         self.refresh()
         self.tray.show()
 
@@ -224,6 +249,9 @@ class Tray:
         self.pause_action.setVisible(view.recording or view.paused)
         self.pause_action.setText("Resume recording" if view.paused
                                   else "Pause recording this session")
+        self.switch_action.setVisible(view.can_switch)
+        self.repick_action.setVisible(view.can_repick)
+        self.switch_action.setText(model.switch_text(view.monitor_switch))
         self.service_action.setEnabled(self.service_state != "not installed")
         if self.service_state == "not installed" and self.settings_window is None:
             self.show_settings()   # first run: nothing works until it's set up
@@ -231,6 +259,7 @@ class Tray:
         self.cut_action.setEnabled(not busy and self.process is None and self._has_pending(force))
         self.autostart_action.setChecked(desktop.autostart_enabled())
         self.notify(view)
+        self.show_release()
 
     def _replace_lines(self, old: list[QAction], lines: list[str], before: QAction) -> list[QAction]:
         """Read-only menu lines, rebuilt only when their text changes (an open menu would
@@ -252,7 +281,7 @@ class Tray:
         if last and self.last_end is not None and last["end"] != self.last_end:
             n = len(last.get("clips", []))
             self.tray.showMessage(APP_TITLE, f"{n} clip{'s' if n != 1 else ''} ready"
-                                  if n else "Session saved; no dungeon runs in it.",
+                                  if n else "Session saved; no runs or raid pulls in it.",
                                   self.icons[model.IDLE])
         if last:
             self.last_end = last["end"]
@@ -262,6 +291,49 @@ class Tray:
         if problem and problem != self.last_problem:
             self.tray.showMessage(APP_TITLE, problem, QSystemTrayIcon.Warning)
         self.last_problem = problem
+
+    def check_update(self):
+        """Restarts into a newly installed version, but only while none of the app's windows
+        are open, so nobody's clip or settings vanish under them."""
+        found = self.updates.check()
+        if not found or self.restart is None:
+            return
+        windows = (self.clips_window, self.settings_window, self.log_window)
+        if any(w is not None and w.isVisible() for w in windows):
+            return   # checked again in a minute
+        logging.getLogger(APP_NAME).info(f"Version {found} was installed; restarting into it.")
+        self.restart()
+
+    def check_release(self):
+        """Asks GitHub for the newest version, if that's turned on and a day has passed."""
+        cfg = self._config(quiet=True)
+        self.release_enabled = bool(cfg and cfg.check_updates)
+        if not self.release_enabled or self.release_check is not None:
+            return
+        checked = float(self.gui_settings.value("updates/checked", 0) or 0)
+        if time.time() - checked >= updates.CHECK_EVERY:
+            self.release_check = updates.Check()
+
+    def show_release(self):
+        """The answer to check_release: a menu line while a newer version is out, and a popup
+        once per version."""
+        check = self.release_check
+        if check is not None and check.done:
+            self.release_check = None
+            # Not reachable (offline, say): asked again in an hour, not a day.
+            self.gui_settings.setValue("updates/checked", time.time() if check.version else
+                                       time.time() - updates.CHECK_EVERY + 3600)
+            if check.version:
+                self.gui_settings.setValue("updates/latest", check.version)
+        latest = str(self.gui_settings.value("updates/latest", "") or "")
+        newer = self.release_enabled and updates.is_newer(latest, __version__)
+        self.release_action.setVisible(newer)
+        if not newer:
+            return
+        self.release_action.setText(f"Version {latest} is out...")
+        if self.gui_settings.value("updates/told", "") != latest:
+            self.gui_settings.setValue("updates/told", latest)
+            self.tray.showMessage(APP_TITLE, f"Version {latest} is out.", self.icons[model.IDLE])
 
     def draw_icons(self):
         self.ink = QGuiApplication.palette().color(QPalette.WindowText)
@@ -282,11 +354,25 @@ class Tray:
                               "Paused until WoW closes. What was recorded so far is kept.",
                               self.icons[model.IDLE])
 
-    def _config(self):
+    def toggle_monitor(self):
+        """Asks the service to record the monitor instead of the picked window, or the window
+        again, for this session."""
+        why = state.request_monitor(not (self.status or {}).get("monitor_switch"))
+        if why:
+            QMessageBox.warning(None, APP_TITLE, why)
+
+    def repick(self):
+        """Asks the service to open the screen-share dialog again."""
+        if why := state.request_repick():
+            QMessageBox.warning(None, APP_TITLE, why)
+
+    def _config(self, quiet: bool = False):
+        """The config, or None; a broken one is said in a message box unless quiet."""
         try:
             return config.load()
         except ConfigError as e:
-            QMessageBox.warning(None, APP_TITLE, str(e))
+            if not quiet:
+                QMessageBox.warning(None, APP_TITLE, str(e))
             return None
 
     def _has_pending(self, force: bool = False) -> bool:
@@ -403,6 +489,7 @@ class Tray:
         self.settings_window.activateWindow()
 
     def _after_save(self):
+        self.check_release()   # turned on (or off) just now
         self.refresh(force=True)
         if self.clips_window is not None:
             self.clips_window.reload()   # the clips folder may have changed
@@ -477,7 +564,17 @@ def run(start_hidden: bool = False) -> int:
     has_tray = QSystemTrayIcon.isSystemTrayAvailable()
     # With a tray, closing the window leaves the app in the tray; without one, it quits.
     app.setQuitOnLastWindowClosed(not has_tray)
-    tray = Tray(app)
+
+    def restart():
+        """Replaces this process with the newly installed version, in the tray. The lock and the
+        local server go first: the new one has the same process ID and would think it's
+        already running."""
+        server.close()
+        lock.unlock()
+        logging.shutdown()
+        os.execv(sys.executable, [sys.executable, "-m", "linux_wow_recorder.gui", "--tray"])
+
+    tray = Tray(app, restart if has_tray else None)
     server.newConnection.connect(lambda: (server.nextPendingConnection(), tray.show_window()))
     if not has_tray:
         QMessageBox.warning(None, APP_TITLE, "This desktop has no system tray, so the app closes "
