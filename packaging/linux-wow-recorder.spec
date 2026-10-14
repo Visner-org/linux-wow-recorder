@@ -57,6 +57,10 @@ if [ "$1" -eq 0 ]; then
 fi
 
 %changelog
+* Wed Oct 14 2026 Linux WoW Recorder - 0.7.0-1
+- Several clips at once: Ctrl+click or Shift+click in the clips window, then the trash can
+  (or Delete) moves them all to the trash
+
 * Tue Oct 13 2026 Linux WoW Recorder - 0.6.0-1
 - After an update, the service and the tray app restart into the new version by themselves:
   the service once WoW is closed and the clips are cut, the tray app once its windows are closed

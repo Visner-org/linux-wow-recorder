@@ -10,7 +10,7 @@ import pytest
 pytest.importorskip("pytestqt")
 pytest.importorskip("PySide6.QtMultimedia")
 
-from PySide6.QtCore import QFile  # noqa: E402
+from PySide6.QtCore import QFile, Qt  # noqa: E402
 from PySide6.QtWidgets import QMessageBox  # noqa: E402
 
 from linux_wow_recorder import config, service  # noqa: E402
@@ -133,6 +133,34 @@ def test_delete_moves_to_the_trash_and_asks_before_deleting_for_good(qtbot, cfg,
     w.delete()
     assert len(asked) == 3              # asked again before deleting for good
     assert not clip.exists() and not clip.with_suffix(".json").exists()
+
+
+def test_shift_and_ctrl_pick_several_clips_to_trash_at_once(qtbot, cfg, monkeypatch):
+    clips = [make_clip(cfg, f"{n}.mp4", dungeon="Ara-Kara", result="completed",
+                       label="+2 Completed", run_start=RUN_START + i * 3600)
+             for i, n in enumerate("abc")]
+    monkeypatch.setattr(browser.ClipBrowser, "next_thumbnail", lambda self: None)   # shown: no ffmpeg
+    w = browser.ClipBrowser()
+    qtbot.addWidget(w)
+    w.show()
+    asked = []
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: asked.append(a[2]) or QMessageBox.Yes)
+    trashed = []
+    monkeypatch.setattr(QFile, "moveToTrash", lambda path: trashed.append(path) or Path(path).unlink() or True)
+
+    # Newest first: c, b, a. Click c, then Ctrl+click a.
+    def card(row):
+        return w.cards.visualItemRect(w.cards.item(row)).center()
+    qtbot.mouseClick(w.cards.viewport(), Qt.LeftButton, pos=card(0))
+    qtbot.mouseClick(w.cards.viewport(), Qt.LeftButton, Qt.ControlModifier, pos=card(2))
+    assert [c.path for c in w.selected_clips()] == [clips[2], clips[0]]
+    assert "2 selected" in w.count.text()
+    assert w.current.path == clips[0]    # the last one clicked is shown
+
+    w.delete()
+    assert len(asked) == 1 and asked[0].startswith("Move 2 clips to the trash?")
+    assert not clips[0].exists() and not clips[2].exists() and clips[1].exists()
+    assert w.cards.count() == 1
 
 
 @pytest.fixture

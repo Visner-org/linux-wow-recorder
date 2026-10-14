@@ -68,7 +68,7 @@ And in WoW:
 ### Nobara or Fedora (RPM)
 
 ```bash
-sudo dnf install ./linux-wow-recorder-0.6.0-1.fc44.noarch.rpm
+sudo dnf install ./linux-wow-recorder-0.7.0-1.fc44.noarch.rpm
 ```
 
 dnf installs gpu-screen-recorder, ffmpeg and Qt from your distro's repos along with it. The app
@@ -269,6 +269,8 @@ extension. KDE and most other desktops show them as they are.
   player, show it in the file manager, run your `after_clips` command on it again (only there
   when one is set), and the red trash can: move it to the trash (with its details and picture;
   restore them from the trash to undo).
+- **Several at once**: Ctrl+click picks clips one by one, Shift+click a range. The trash can
+  (or the Delete key) then moves them all to the trash, after one question.
 
 New clips show up by themselves.
 

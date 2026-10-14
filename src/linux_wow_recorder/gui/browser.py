@@ -8,8 +8,8 @@ from pathlib import Path
 
 from PySide6.QtCore import (QEvent, QFile, QFileSystemWatcher, QLineF, QPointF, QProcess, QRectF,
                             QSettings, QSize, Qt, QTimer, QUrl, Signal)
-from PySide6.QtGui import (QColor, QDesktopServices, QFont, QIcon, QPainter, QPainterPath, QPen,
-                           QPixmap)
+from PySide6.QtGui import (QColor, QDesktopServices, QFont, QIcon, QKeySequence, QPainter,
+                           QPainterPath, QPen, QPixmap, QShortcut)
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import (QAbstractItemView, QButtonGroup, QFrame, QGroupBox, QHBoxLayout,
@@ -215,6 +215,7 @@ class ClipBrowser(QWidget):
         self.resize(1400, 860)
         self.clips: list[model.ClipInfo] = []
         self.current: model.ClipInfo | None = None
+        self.shown = 0   # clips in the list, after the filters and search
         self.hook_process = None
         try:
             self.cfg = config.load()
@@ -282,6 +283,7 @@ class ClipBrowser(QWidget):
         self.tree.header().setStretchLastSection(False)
         self.tree.currentItemChanged.connect(lambda item, _: self.select(item.data(0, Qt.UserRole) if item else None))
         self.tree.itemActivated.connect(lambda *_: self.player.play())
+        self.tree.setSelectionMode(QAbstractItemView.ExtendedSelection)   # Shift and Ctrl
 
         self.thumbs: dict[str, QPixmap] = {}
         self.thumb_queue: list[model.ClipInfo] = []
@@ -295,6 +297,10 @@ class ClipBrowser(QWidget):
         self.cards.setResizeMode(QListWidget.Adjust)
         self.cards.currentItemChanged.connect(lambda item, _: self.select(item.data(Qt.UserRole) if item else None))
         self.cards.itemActivated.connect(lambda *_: self.player.play())
+        self.cards.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        for view in (self.cards, self.tree):
+            view.itemSelectionChanged.connect(self.show_count)
+            QShortcut(QKeySequence.Delete, view, self.delete, context=Qt.WidgetShortcut)
         self.list_stack = QStackedWidget()
         self.list_stack.addWidget(self.cards)
         self.list_stack.addWidget(self.tree)
@@ -736,10 +742,24 @@ class ClipBrowser(QWidget):
         self.tree.blockSignals(False)
 
         paths = [str(c.path) for c in shown]
-        total = sum(model.in_mode(c, self.mode) for c in self.clips)
-        self.count.setText(f"{len(shown)} of {total} "
-                           + ("full sessions" if self.mode == model.SESSIONS else "clips"))
+        self.shown = len(shown)
         self.select(select if select in paths else (paths[0] if paths else None))
+        self.show_count()
+
+    def show_count(self):
+        total = sum(model.in_mode(c, self.mode) for c in self.clips)
+        text = f"{self.shown} of {total} " + ("full sessions" if self.mode == model.SESSIONS else "clips")
+        if (n := len(self.selected_clips())) > 1:
+            text += f", {n} selected"
+        self.count.setText(text)
+
+    def selected_clips(self) -> list[model.ClipInfo]:
+        """The clips picked with Shift or Ctrl in the list on show, in its order."""
+        view = self.list_stack.currentWidget()
+        paths = [i.data(Qt.UserRole) if view is self.cards else i.data(0, Qt.UserRole)
+                 for i in view.selectedItems()]
+        by_path = {str(c.path): c for c in self.clips}
+        return [by_path[p] for p in paths if p in by_path]
 
     def set_mode(self, mode: str):
         """Keystones (dungeon clips), Raids (boss pull clips) or Full sessions (the recordings)."""
@@ -769,20 +789,24 @@ class ClipBrowser(QWidget):
     def set_view(self, view: int):
         self.list_stack.setCurrentIndex(view)
         self.settings.setValue("view", "table" if view else "cards")
+        self.select(self.current.path if self.current else None)   # just the one, as in the other
+        self.show_count()
 
     def select(self, path: str | None):
         """Shows the clip at path (None: no clip) and marks it in both the cards and the table."""
         for i in range(self.cards.count()):
             if self.cards.item(i).data(Qt.UserRole) == path:
-                self.cards.blockSignals(True)
-                self.cards.setCurrentRow(i)
-                self.cards.blockSignals(False)
+                if self.cards.currentRow() != i:   # already: a click, maybe with Shift or Ctrl
+                    self.cards.blockSignals(True)
+                    self.cards.setCurrentRow(i)
+                    self.cards.blockSignals(False)
                 break
         for i in range(self.tree.topLevelItemCount()):
             if self.tree.topLevelItem(i).data(0, Qt.UserRole) == path:
-                self.tree.blockSignals(True)
-                self.tree.setCurrentItem(self.tree.topLevelItem(i))
-                self.tree.blockSignals(False)
+                if self.tree.currentItem() is not self.tree.topLevelItem(i):
+                    self.tree.blockSignals(True)
+                    self.tree.setCurrentItem(self.tree.topLevelItem(i))
+                    self.tree.blockSignals(False)
                 break
         clip = next((c for c in self.clips if str(c.path) == path), None)
         same_file = clip and self.current and clip.path == self.current.path
@@ -1058,27 +1082,40 @@ class ClipBrowser(QWidget):
                                 + (f"\n\n{out[-1500:]}" if out else f"\n\n{p.errorString()}"))
 
     def delete(self):
-        """Moves the clip and its details to the desktop's trash, so a slip can be undone.
-        Deletes them for good only if there's no trash and the user says so."""
-        clip = self.current
-        yes_no = QMessageBox.Yes | QMessageBox.No
-        what = "full recording" if clip.is_session else "clip"
-        # Removing a file needs write access to its folder; a read-only share or drive has none.
-        if not os.access(clip.path.parent, os.W_OK):
-            QMessageBox.information(self, APP_TITLE, f"This {what} is read only and can't be deleted.")
+        """Moves the selected clips (or the one shown) and their details to the desktop's trash,
+        so a slip can be undone. Deletes them for good only if there's no trash and the user
+        says so."""
+        clips = self.selected_clips() or ([self.current] if self.current else [])
+        if not clips:
             return
-        if QMessageBox.question(self, APP_TITLE, f"Move this {what} to the trash?\n\n{clip.path.name}",
+        yes_no = QMessageBox.Yes | QMessageBox.No
+        kind = "full recording" if self.mode == model.SESSIONS else "clip"
+        # Removing a file needs write access to its folder; a read-only share or drive has none.
+        writable = [c for c in clips if os.access(c.path.parent, os.W_OK)]
+        if not writable:
+            what = f"This {kind} is" if len(clips) == 1 else f"These {kind}s are"
+            QMessageBox.information(self, APP_TITLE, f"{what} read only and can't be deleted.")
+            return
+        what = f"this {kind}" if len(writable) == 1 else f"{len(writable)} {kind}s"
+        names = "\n".join(c.path.name for c in writable[:10])
+        if len(writable) > 10:
+            names += f"\n...and {len(writable) - 10} more"
+        if len(clips) > len(writable):
+            names += f"\n\n{len(clips) - len(writable)} read only, left alone."
+        if QMessageBox.question(self, APP_TITLE, f"Move {what} to the trash?\n\n{names}",
                                 yes_no, QMessageBox.No) != QMessageBox.Yes:
             return
         self.player.stop()
         self.player.setSource(QUrl())
-        candidates = [clip.path, sidecar_path(clip.path), thumbnail_path(clip.path)]
-        if clip.details_file:   # a moved clip's details and picture, left in clips/
-            candidates += [clip.details_file, thumbnail_path(clip.details_file)]
-        files = [f for f in dict.fromkeys(candidates) if f.exists()]
-        left = [f for f in files if not QFile.moveToTrash(str(f))]
+        left = []
+        for clip in writable:
+            candidates = [clip.path, sidecar_path(clip.path), thumbnail_path(clip.path)]
+            if clip.details_file:   # a moved clip's details and picture, left in clips/
+                candidates += [clip.details_file, thumbnail_path(clip.details_file)]
+            files = [f for f in dict.fromkeys(candidates) if f.exists()]
+            left += [f for f in files if not QFile.moveToTrash(str(f))]
         if left and QMessageBox.question(
-                self, APP_TITLE, f"There's no trash for this folder. Delete the {what} for good?",
+                self, APP_TITLE, f"There's no trash for this folder. Delete {what} for good?",
                 yes_no, QMessageBox.No) == QMessageBox.Yes:
             try:
                 for f in left:
