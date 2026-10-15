@@ -3,6 +3,8 @@
 import html
 import os
 import shlex
+import subprocess
+import tempfile
 import time
 from pathlib import Path
 
@@ -14,16 +16,17 @@ from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import (QAbstractItemView, QButtonGroup, QFrame, QGroupBox, QHBoxLayout,
                                QHeaderView, QLabel, QLineEdit, QListWidget, QListWidgetItem,
-                               QMessageBox, QPushButton, QSlider, QSplitter, QStackedWidget, QStyle,
+                               QMessageBox, QProgressDialog, QPushButton, QSlider, QSplitter, QStackedWidget, QStyle,
                                QStyledItemDelegate, QStyleOptionViewItem, QToolButton, QTreeWidget,
                                QTreeWidgetItem, QVBoxLayout, QWidget)
 
-from .. import APP_TITLE, __version__, config, live, service, state
-from ..clips import (read_sidecar, set_keep, sidecar_path, thumbnail_command, thumbnail_path,
-                     thumbnail_time)
+from .. import APP_TITLE, __version__, config, hidechat, live, service, state
+from ..clips import (media_length, read_sidecar, set_keep, sidecar_path, thumbnail_command,
+                     thumbnail_path, thumbnail_time, write_sidecar)
 from ..config import CONFIG_DIR
 from ..config import ConfigError
 from . import model, theme
+from .hidechat import HideChatDialog
 
 COLUMNS = ["Date", "Dungeon", "Level", "Result", "Length", "Deaths", "Kept"]
 SESSION_COLUMNS = ["Date", "Dungeons", "Level", "Runs", "Length", "Deaths", "Kept"]
@@ -217,6 +220,7 @@ class ClipBrowser(QWidget):
         self.current: model.ClipInfo | None = None
         self.shown = 0   # clips in the list, after the filters and search
         self.hook_process = None
+        self.chat_job = None   # the copy with the chat hidden being made
         try:
             self.cfg = config.load()
         except ConfigError as e:
@@ -394,13 +398,33 @@ class ClipBrowser(QWidget):
         self.volume.setRange(0, 100)
         self.volume.setValue(80)
         self.volume.setFixedWidth(90)
+        self.volume.setToolTip("Volume")
         self.volume.valueChanged.connect(lambda v: self.audio.setVolume(v / 100))
         self.audio.setVolume(0.8)
+        # A speaker before the volume slider (so it doesn't pass for a second timeline): mutes.
+        self.mute_button = QToolButton()
+        self.mute_button.setAutoRaise(True)
+        self.mute_button.setIconSize(QSize(20, 20))
+        self.mute_button.setFocusPolicy(Qt.NoFocus)   # Space plays, not this
+        self.mute_button.setCheckable(True)
+        self.mute_button.toggled.connect(self.set_muted)
+        self.set_muted(False)
+        # Full screen: only the video and these controls, the timeline included.
+        self.full_button = QToolButton()
+        self.full_button.setAutoRaise(True)
+        self.full_button.setIconSize(QSize(20, 20))
+        self.full_button.setFocusPolicy(Qt.NoFocus)   # Space plays, not this
+        self.full_button.clicked.connect(self.toggle_full_screen)
+        self.full_screen = False
+        self.was_maximized = False
         controls = QHBoxLayout()
         controls.addWidget(self.play_button)
         controls.addWidget(self.timeline, 1)
         controls.addWidget(self.time_label)
+        controls.addSpacing(6)
+        controls.addWidget(self.mute_button)
         controls.addWidget(self.volume)
+        controls.addWidget(self.full_button)
 
         self.title = QLabel()
         self.title.setStyleSheet("font-size: 20px; font-weight: 600;")
@@ -434,6 +458,9 @@ class ClipBrowser(QWidget):
             "Upload to YouTube: copies a description with chapters, opens YouTube's upload page "
             "and shows the clip to drag onto it", self.upload_to_youtube,
             "document-send", QStyle.SP_ArrowUp)
+        self.hide_chat_button = self._tool_button(
+            "Hide chat: makes a copy of the clip with a black box over the chat",
+            self.hide_chat, "view-hidden", QStyle.SP_DialogNoButton)
         # Only there when an after_clips command is set (Settings > Advanced).
         self.hook_button = self._tool_button("Run your after_clips command on this clip again",
                                              self.run_hook, "system-run", QStyle.SP_BrowserReload)
@@ -443,22 +470,33 @@ class ClipBrowser(QWidget):
         header.addWidget(self.title, 1)
         header.addWidget(self.result_chip, 0, Qt.AlignVCenter)
         header.addSpacing(12)
-        for b in (self.keep_button, open_button, folder_button, self.youtube_button,
-                  self.hook_button):
+        for b in (self.keep_button, open_button, folder_button, self.hide_chat_button,
+                  self.youtube_button, self.hook_button):
             header.addWidget(b, 0, Qt.AlignVCenter)
         header.addSpacing(10)
         header.addWidget(self.trash_button, 0, Qt.AlignVCenter)
-        self.action_widgets = [self.keep_button, open_button, folder_button, self.youtube_button,
-                               self.hook_button, self.trash_button]
+        self.action_widgets = [self.keep_button, open_button, folder_button, self.hide_chat_button,
+                               self.youtube_button, self.hook_button, self.trash_button]
+
+        # What full screen hides: the list, and the clip's details and actions.
+        self.left = left
+        self.details_panel = QWidget()
+        dv = QVBoxLayout(self.details_panel)
+        dv.setContentsMargins(0, 0, 0, 0)
+        dv.addLayout(header)
+        dv.addWidget(self.facts)
+        dv.addWidget(self.events, 1)
 
         right = QWidget()
         rv = QVBoxLayout(right)
         rv.setContentsMargins(0, 0, 0, 0)
         rv.addWidget(self.video_stack, 3)
         rv.addLayout(controls)
-        rv.addLayout(header)
-        rv.addWidget(self.facts)
-        rv.addWidget(self.events, 2)
+        rv.addWidget(self.details_panel, 2)
+        # Double-clicking the video goes full screen and back.
+        for w in (self.video, self.poster, *self.video.findChildren(QWidget)):
+            w.installEventFilter(self)
+        self.show_full_screen_button()
 
         split = QSplitter()
         split.addWidget(left)
@@ -729,7 +767,7 @@ class ClipBrowser(QWidget):
         for c in shown:
             item = SortItem([
                 time.strftime("%Y-%m-%d %H:%M", time.localtime(c.started)),
-                c.dungeon,
+                f"{c.dungeon} (chat hidden)" if c.chat_hidden else c.dungeon,
                 f"#{c.pull}" if c.pull else f"+{c.level}" if c.level else "",
                 c.result_text,
                 c.length,
@@ -927,6 +965,8 @@ class ClipBrowser(QWidget):
             facts.append(f"{size / 1e9:.1f} GB" if size >= 1e9 else f"{size / 1e6:.0f} MB")
         except OSError:
             pass
+        if d.get("chat_hidden"):
+            facts.append("chat hidden")
         if clip.elsewhere:
             facts.append(f"in {clip.path.parent}")
         self.facts.setText(" · ".join(facts))
@@ -959,6 +999,7 @@ class ClipBrowser(QWidget):
             "Keep this full recording forever, whatever \"Keep full recordings\" says"
             if clip.is_session else "Keep this clip forever, whatever \"Keep clips\" says")
         self.youtube_button.setVisible(not clip.is_session)
+        self.hide_chat_button.setVisible(not clip.is_session)
         self.hook_button.setVisible(bool(self.cfg and self.cfg.after_clips) and not clip.is_session
                                     and not clip.elsewhere)
 
@@ -1025,10 +1066,51 @@ class ClipBrowser(QWidget):
             self.video_stack.setCurrentWidget(self.video)   # the frame sought to
         self.timeline.set_position(seconds)
 
+    def set_muted(self, muted: bool):
+        self.audio.setMuted(muted)
+        self.volume.setEnabled(not muted)
+        self.mute_button.setIcon(QIcon.fromTheme(
+            "audio-volume-muted" if muted else "audio-volume-high",
+            self.style().standardIcon(QStyle.SP_MediaVolumeMuted if muted else QStyle.SP_MediaVolume)))
+        self.mute_button.setToolTip("Unmute" if muted else "Mute")
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.MouseButtonDblClick:
+            self.toggle_full_screen()
+            return True
+        return super().eventFilter(obj, event)
+
+    def toggle_full_screen(self):
+        """The video fills the screen, with the play button and timeline under it; again (or
+        Esc) goes back to the window as it was."""
+        self.full_screen = not self.full_screen
+        self.left.setVisible(not self.full_screen)
+        self.details_panel.setVisible(not self.full_screen)
+        if self.full_screen:
+            self.was_maximized = self.isMaximized()
+            self.showFullScreen()
+        elif self.was_maximized:
+            self.showMaximized()
+        else:
+            self.showNormal()
+        self.show_full_screen_button()
+
+    def show_full_screen_button(self):
+        if self.full_screen:
+            self.full_button.setIcon(QIcon.fromTheme(
+                "view-restore", self.style().standardIcon(QStyle.SP_TitleBarNormalButton)))
+            self.full_button.setToolTip("Leave full screen (Esc or F, or double-click the video)")
+        else:
+            self.full_button.setIcon(QIcon.fromTheme(
+                "view-fullscreen", self.style().standardIcon(QStyle.SP_TitleBarMaxButton)))
+            self.full_button.setToolTip("Full screen (F, or double-click the video)")
+
     def keyPressEvent(self, event):
         k = event.key()
         if k == Qt.Key_Space:
             self.toggle_play()
+        elif k == Qt.Key_F or (k == Qt.Key_Escape and self.full_screen):
+            self.toggle_full_screen()
         elif k in (Qt.Key_Left, Qt.Key_Right) and self.player.duration():
             step = -5000 if k == Qt.Key_Left else 5000
             self.player.setPosition(max(0, self.player.position() + step))
@@ -1059,6 +1141,107 @@ class ClipBrowser(QWidget):
         self.show_in_folder()
         QMessageBox.information(self, APP_TITLE, "Description copied. Drag the clip onto the "
                                 "YouTube page, then paste the description.")
+
+    def hide_chat(self):
+        """Asks where the chat is on a frame of the clip, then makes a copy with a black box
+        there, in the background."""
+        clip = self.current
+        if clip is None or self.chat_job or not self.cfg:
+            return
+        self.player.pause()
+        at = (self.player.position() / 1000 if self.player.position() > 0
+              else thumbnail_time(clip.details))
+        with tempfile.TemporaryDirectory() as tmp:
+            frame_file = Path(tmp) / "frame.jpg"
+            try:
+                subprocess.run(hidechat.frame_command(clip.path, at, frame_file),
+                               capture_output=True, timeout=60)
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+            frame = QPixmap(str(frame_file))
+        if frame.isNull():
+            QMessageBox.warning(self, APP_TITLE, "Couldn't read a picture from this clip.")
+            return
+        dialog = HideChatDialog(frame, hidechat.parse_box(self.settings.value("hide_chat_box")), self)
+        if dialog.exec() != HideChatDialog.Accepted:
+            return
+        self.settings.setValue("hide_chat_box", hidechat.box_text(dialog.box))
+        out = hidechat.output_path(clip.path, self.cfg.clips_dir)
+        part = out.with_name(out.name + ".part")
+        try:
+            out.parent.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            QMessageBox.warning(self, APP_TITLE, f"Couldn't make the copy: {e}")
+            return
+        length = (clip.details.get("clip_length") or media_length(clip.path)
+                  or self.player.duration() / 1000 or 1)
+        progress = QProgressDialog("Hiding the chat...", "Cancel", 0, int(length), self)
+        progress.setWindowTitle(APP_TITLE)
+        progress.setMinimumDuration(0)
+        progress.setAutoClose(False)
+        progress.setAutoReset(False)
+        progress.canceled.connect(self.cancel_hide_chat)
+        self.chat_job = {"clip": clip, "out": out, "part": part, "progress": progress,
+                         "tries": hidechat.commands(clip.path, part, dialog.box,
+                                                    hidechat.video_bitrate(clip.path)),
+                         "process": None, "error": "", "canceled": False}
+        self.hide_chat_button.setEnabled(False)
+        progress.show()
+        self.next_hide_chat_try()
+
+    def next_hide_chat_try(self):
+        job = self.chat_job
+        cmd = job["tries"].pop(0)
+        process = job["process"] = QProcess(self)
+        process.readyReadStandardOutput.connect(lambda: self.hide_chat_progress(process))
+        process.finished.connect(lambda *_: self.hide_chat_finished(process))
+        process.errorOccurred.connect(lambda e: e == QProcess.FailedToStart
+                                      and self.hide_chat_finished(process))
+        process.start(cmd[0], cmd[1:])
+
+    def hide_chat_progress(self, process: QProcess):
+        seconds = hidechat.progress_seconds(bytes(process.readAllStandardOutput()).decode(errors="replace"))
+        if seconds is not None and self.chat_job and self.chat_job["process"] is process:
+            self.chat_job["progress"].setValue(min(int(seconds), self.chat_job["progress"].maximum()))
+
+    def cancel_hide_chat(self):
+        if self.chat_job and self.chat_job["process"]:
+            self.chat_job["canceled"] = True
+            self.chat_job["process"].kill()
+
+    def hide_chat_finished(self, process: QProcess):
+        job = self.chat_job
+        if job is None or job["process"] is not process:
+            return   # errorOccurred and finished both came
+        job["process"] = None
+        process.deleteLater()
+        ok = (process.exitStatus() == QProcess.NormalExit and process.exitCode() == 0
+              and process.error() != QProcess.FailedToStart and job["part"].exists())
+        if not ok:
+            job["error"] = bytes(process.readAllStandardError()).decode(errors="replace").strip()
+            job["part"].unlink(missing_ok=True)
+            if job["tries"] and not job["canceled"]:
+                self.next_hide_chat_try()   # no such encoder here: the next one
+                return
+        self.chat_job = None
+        job["progress"].close()
+        self.hide_chat_button.setEnabled(True)
+        if job["canceled"]:
+            return
+        if not ok:
+            QMessageBox.warning(self, APP_TITLE, "Couldn't make the copy."
+                                + (f"\n\n{job['error'][-1500:]}" if job["error"] else ""))
+            return
+        try:
+            job["part"].replace(job["out"])
+            if job["clip"].details:
+                write_sidecar(job["out"], hidechat.copied_details(job["clip"].details))
+        except OSError as e:
+            QMessageBox.warning(self, APP_TITLE, f"Couldn't make the copy: {e}")
+            return
+        self.reload()
+        self.fill_list(select=job["out"])   # the copy
+        QMessageBox.information(self, APP_TITLE, "Copy made with the chat hidden.")
 
     def toggle_keep(self):
         clip = self.current
@@ -1142,6 +1325,8 @@ class ClipBrowser(QWidget):
         self.reload()
 
     def closeEvent(self, event):
+        if self.full_screen:   # opens as a window next time
+            self.toggle_full_screen()
         self.player.pause()
         self.live_timer.stop()
         super().closeEvent(event)
@@ -1234,6 +1419,15 @@ class ClipCard(QStyledItemDelegate):
         p.drawText(chip, Qt.AlignCenter, clip.result_text)
         p.drawText(QRectF(chip.right() + 10, y, width, chip.height()), Qt.AlignLeft | Qt.AlignVCenter,
                    clip.length)
+        if clip.chat_hidden:   # the copy made with Hide chat, beside its clip
+            cx = chip.right() + 10 + fm.horizontalAdvance(clip.length) + 14
+            icon = QIcon.fromTheme("view-hidden")
+            if not icon.isNull():
+                icon.paint(p, int(cx), int(y + (chip.height() - 16) / 2), 16, 16)
+                cx += 20
+            p.setPen(muted)
+            p.drawText(QRectF(cx, y, max(0.0, r.right() - cx), chip.height()),
+                       Qt.AlignLeft | Qt.AlignVCenter, "Chat hidden")
 
         # Line 3: when, deaths and lusts, with the timeline's marks.
         y = chip.bottom() + 6

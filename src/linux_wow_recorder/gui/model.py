@@ -239,6 +239,11 @@ class ClipInfo:
         return self.result if self.result in ("completed", "abandoned", "kill", "wipe") else "nokey"
 
     @property
+    def chat_hidden(self) -> bool:
+        """A copy made with Hide chat."""
+        return bool(self.details.get("chat_hidden"))
+
+    @property
     def is_raid(self) -> bool:
         """A raid boss pull's clip; its dungeon is the boss."""
         return self.details.get("kind") == "raid"

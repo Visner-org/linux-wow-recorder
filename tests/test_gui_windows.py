@@ -3,6 +3,8 @@
 They need the gui extra and the gui-test group: uv run --extra gui --group gui-test pytest
 """
 
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -14,7 +16,7 @@ from PySide6.QtCore import QFile, Qt  # noqa: E402
 from PySide6.QtWidgets import QMessageBox  # noqa: E402
 
 from linux_wow_recorder import config, service  # noqa: E402
-from linux_wow_recorder.clips import write_sidecar  # noqa: E402
+from linux_wow_recorder.clips import read_sidecar, write_sidecar  # noqa: E402
 from linux_wow_recorder.gui import browser, model, settings  # noqa: E402
 
 RUN_START = 1_800_000_000.0
@@ -533,3 +535,86 @@ def test_check_now_says_what_github_has(qtbot, cfg, fake_recorder, monkeypatch):
     w.check_now.click()
     qtbot.waitUntil(lambda: "99.0.0" in w.update_result.text(), timeout=3000)
     assert w.check_now.isEnabled()
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="needs ffmpeg")
+def test_hide_chat_makes_a_copy_with_a_black_box(qtbot, cfg, monkeypatch):
+    from linux_wow_recorder.gui import hidechat as hidechat_gui
+    clip = make_clip(cfg, "a.mp4", dungeon="Ara-Kara", level=2, result="completed",
+                     label="+2 Completed", clip_length=2.0, thumbnail="a.jpg", keep=True)
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "color=white:size=320x180:rate=10",
+                    "-t", "2", "-pix_fmt", "yuv420p", "-f", "mp4", str(clip)], check=True)
+    w = browser.ClipBrowser()
+    qtbot.addWidget(w)
+    shown = []
+
+    def pick(dialog):
+        shown.append(dialog.picker.frame.width())
+        dialog.picker.box = (0.0, 0.5, 0.5, 0.5)
+        return hidechat_gui.HideChatDialog.Accepted
+    monkeypatch.setattr(hidechat_gui.HideChatDialog, "exec", pick)
+    told = []
+    monkeypatch.setattr(QMessageBox, "information", lambda *a: told.append(a[2]))
+    assert w.hide_chat_button.isVisibleTo(w)
+    w.hide_chat()
+    qtbot.waitUntil(lambda: w.chat_job is None, timeout=60_000)
+    copy = cfg.clips_dir / "a (chat hidden).mp4"
+    assert shown == [320] and copy.exists() and told
+    assert not copy.with_name(copy.name + ".part").exists()
+    details = read_sidecar(copy)
+    assert details["chat_hidden"] and not details["keep"] and "thumbnail" not in details
+    assert w.current.path == copy and "chat hidden" in w.facts.text()
+    assert w.current.chat_hidden
+    assert sorted(w.tree.topLevelItem(i).text(1) for i in range(2)) == ["Ara-Kara", "Ara-Kara (chat hidden)"]
+    assert w.settings.value("hide_chat_box") == "0,0.5,0.5,0.5"
+
+
+def test_the_chat_box_is_drawn_moved_and_resized(qtbot):
+    from PySide6.QtCore import QPoint
+    from PySide6.QtGui import QPixmap
+    from linux_wow_recorder.gui.hidechat import BoxPicker
+    frame = QPixmap(640, 360)
+    picker = BoxPicker(frame, (0.0, 0.0, 0.1, 0.1))
+    qtbot.addWidget(picker)
+    picker.resize(640, 360)
+    qtbot.mousePress(picker, Qt.LeftButton, pos=QPoint(320, 180))   # outside: a new box
+    qtbot.mouseMove(picker, QPoint(480, 270))
+    qtbot.mouseRelease(picker, Qt.LeftButton, pos=QPoint(480, 270))
+    assert picker.box == (0.5, 0.5, 0.25, 0.25)
+    qtbot.mousePress(picker, Qt.LeftButton, pos=QPoint(400, 200))   # inside: moved
+    qtbot.mouseMove(picker, QPoint(80, 20))
+    qtbot.mouseRelease(picker, Qt.LeftButton, pos=QPoint(80, 20))
+    assert picker.box == (0.0, 0.0, 0.25, 0.25)
+    qtbot.mousePress(picker, Qt.LeftButton, pos=QPoint(160, 90))    # the corner: resized
+    qtbot.mouseMove(picker, QPoint(320, 180))
+    qtbot.mouseRelease(picker, Qt.LeftButton, pos=QPoint(320, 180))
+    assert picker.box == (0.0, 0.0, 0.5, 0.5)
+
+
+def test_full_screen_keeps_the_player_and_timeline(qtbot, cfg):
+    from PySide6.QtCore import QEvent
+    from PySide6.QtGui import QKeyEvent
+    make_clip(cfg, "a.mp4", dungeon="Ara-Kara", result="completed", label="+2 Completed")
+    w = browser.ClipBrowser()
+    qtbot.addWidget(w)
+    w.show()
+    w.full_button.click()
+    assert w.full_screen and w.isFullScreen()
+    assert not w.left.isVisible() and not w.details_panel.isVisible()
+    assert w.timeline.isVisible() and w.play_button.isVisible() and w.video_stack.isVisible()
+    w.keyPressEvent(QKeyEvent(QEvent.KeyPress, Qt.Key_Escape, Qt.NoModifier))
+    assert not w.full_screen and not w.isFullScreen()
+    assert w.left.isVisible() and w.details_panel.isVisible()
+    w.keyPressEvent(QKeyEvent(QEvent.KeyPress, Qt.Key_F, Qt.NoModifier))
+    assert w.full_screen
+    w.close()
+    assert not w.full_screen
+
+
+def test_the_speaker_mutes(qtbot, cfg):
+    w = browser.ClipBrowser()
+    qtbot.addWidget(w)
+    w.mute_button.click()
+    assert w.audio.isMuted() and not w.volume.isEnabled()
+    w.mute_button.click()
+    assert not w.audio.isMuted() and w.volume.isEnabled()

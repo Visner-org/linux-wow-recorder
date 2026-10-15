@@ -264,9 +264,14 @@ extension. KDE and most other desktops show them as they are.
 - **The events** below, one row per boss pull ("killed in 1:44 · 2 deaths") holding the deaths
   and lusts during it; wipes and pulls with deaths are opened. Clicking a row plays from a few
   seconds before it.
-- **Keys**: space plays and pauses; the left and right arrows skip 5 seconds.
+- **Keys**: space plays and pauses; the left and right arrows skip 5 seconds; F goes full
+  screen and back (Esc leaves it too).
+- **Full screen**: the button at the end of the timeline, F, or a double-click on the video.
+  The video fills the screen with Play and the timeline under it.
+- **Volume**: the slider after the time; the speaker before it mutes and unmutes.
 - **Buttons**: **Play**; beside the title, ☆ Keep (keep it forever), open it in your own video
-  player, show it in the file manager, upload it to YouTube (see
+  player, show it in the file manager, hide the chat (see [Hiding the chat](#hiding-the-chat)),
+  upload it to YouTube (see
   [To YouTube](#to-youtube)), run your `after_clips` command on it again (only there
   when one is set), and the red trash can: move it to the trash (with its details and picture;
   restore them from the trash to undo).
@@ -381,6 +386,27 @@ the file name, for example "2026-10-14 20-05 Temple of Sethraliss +12 Completed 
 - If you also use an `after_clips` command that moves clips off this computer (like
   `fireshare-upload`), upload from where the clip is now: add that folder to "Also show
   clips from" and the button finds it there.
+
+### Hiding the chat
+
+To share a clip without your chat (whispers, guild chat), the clip browser's hide button (an
+eye, beside "show in folder") makes a copy with a black box over it. It's only done when you
+ask; normal clips are never changed.
+
+1. Pick the clip (pause it on a moment where the chat shows, if you like) and press the button.
+2. Drag a box over your chat on the picture: drag inside the box to move it, its red corner to
+   resize it, or anywhere else to draw a new one. The box is remembered for next time.
+3. **Make copy.** A progress bar shows how far it is; you can keep using the window.
+
+The copy is saved beside the clip as "... (chat hidden).mp4" (in `clips/` if the clip's folder
+is read only) and shows up in the list like any clip, so the YouTube button works on it too.
+
+- The box is in the same spot for the whole clip. If you move your chat frame in WoW, move
+  the box too.
+- The video has to be encoded again, unlike cutting. With an NVIDIA card that takes about a
+  seventh of the clip's length (a 20-minute clip: about 3 minutes); on AMD or Intel graphics
+  (VA-API) or the CPU it's slower.
+- The copy is deleted after "Keep clips" days like other clips; ☆ Keep it to keep it.
 
 ### Keeping clips somewhere else
 

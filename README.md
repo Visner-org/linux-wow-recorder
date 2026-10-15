@@ -10,6 +10,10 @@ check for a new version on GitHub if you turn that on. See [Privacy](#privacy).
 
 <!-- Screenshot: the clip browser with a run's timeline. Add docs/screenshot.png before publishing. -->
 
+**New in 0.8.0:** clips are cut about twice as fast; **Hide chat** makes a copy of a clip with
+a black box over your chat; an **Upload to YouTube** button; and **full screen** in the clip
+browser, with the timeline still at the bottom.
+
 **Docs:** [user guide](docs/user-guide.md) (install, setup, everyday use, troubleshooting) ·
 [reference](docs/reference.md) (commands, every setting, file formats) ·
 [development](docs/development.md) (how it works, the code, the rules for changes)
@@ -39,7 +43,12 @@ WoW closes
 - **Records the whole screen, one monitor, or only the WoW window**, picked in your desktop's
   screen-share dialog, so notifications and other windows stay out of the video.
 - **Desktop app (optional):** a tray icon (grey: waiting, red: recording, amber: cutting clips),
-  a clip browser with a timeline of pulls, deaths and lusts, and a settings window.
+  a clip browser with a timeline of pulls, deaths and lusts (full screen too), and a settings
+  window.
+- **Hide chat:** when you ask, makes a copy of a clip with a black box over your chat, so you can
+  share it without whispers or guild chat. Your clips are never changed.
+- **Upload to YouTube:** one button copies a description with chapters (each boss pull, kill or
+  wipe), opens YouTube's upload page in your browser and shows the clip to drag onto it.
 - **Retail, Classic, PTR and beta**, and new WoW versions it doesn't know yet (it goes by the
   game's folder).
 
@@ -67,8 +76,17 @@ This app is built so you never have to wonder what it sends or where.
   your computer's details, or anyone's character name.** When something goes wrong, the message
   says so and points to the log on your computer.
 - Clips go nowhere unless you set up your own `after_clips` command (for example an `rsync` to
-  your server). The app doesn't upload anything itself: the clip browser's YouTube button
-  only opens YouTube's upload page in your browser, and you drag the clip there.
+  your server), or upload one yourself.
+- **The Upload to YouTube button doesn't upload anything.** It opens youtube.com/upload in your
+  own web browser, copies a description to your clipboard and shows the clip in your file
+  manager. The app makes no connection to YouTube or Google and never sees your account: you
+  drag the clip onto the page and your browser does the upload, signed in as you. Nothing
+  happens until you press the button, and you can close the page without uploading. The
+  description has the dungeon, key level, result, length, date, death count and boss pulls; no
+  character names.
+- **Your chat can be in your clips.** WoW's chat is part of the picture, whispers and guild chat
+  included. Before sharing a clip, Hide chat makes a copy with a black box over it, on your
+  computer.
 
 **What stays on your computer: everything else.**
 
