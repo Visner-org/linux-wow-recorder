@@ -479,6 +479,55 @@ def event_rows(details: dict) -> list[EventRow]:
     return sorted(rows, key=lambda r: r.at)
 
 
+
+# ── YouTube ──
+
+YOUTUBE_UPLOAD_URL = "https://www.youtube.com/upload"
+
+
+def chapter_time(seconds: float) -> str:
+    """A YouTube chapter time: "4:05", or "1:02:05" past an hour."""
+    h, rest = divmod(int(max(0, seconds)), 3600)
+    return f"{h}:{rest // 60:02d}:{rest % 60:02d}" if h else mmss(rest)
+
+
+def youtube_chapters(details: dict) -> list[tuple[float, str]]:
+    """The clip's chapters: the start, the run starting and each boss pull, or [] when that's
+    too few for YouTube (it wants 3 or more, starting at 0:00, each 10 s or longer)."""
+    marks = [(0.0, "Start")]
+    if details.get("run_offset"):
+        marks.append((details["run_offset"], "Run starts"))
+    pulls: dict[str, int] = {}
+    for e in sorted(details.get("encounters", []), key=lambda e: e["start"]):
+        pulls[e["name"]] = pulls.get(e["name"], 0) + 1
+        result = "" if e.get("end") is None else " (kill)" if e.get("killed") else " (wipe)"
+        again = f" pull {pulls[e['name']]}" if pulls[e["name"]] > 1 else ""
+        marks.append((e["start"], f"{e['name']}{again}{result}"))
+    chapters = []
+    for at, text in marks:
+        if not chapters or at - chapters[-1][0] >= 10:
+            chapters.append((at, text))
+    return chapters if len(chapters) >= 3 else []
+
+
+def youtube_description(clip: ClipInfo) -> str:
+    """A description to paste into YouTube's upload page (which takes the title from the file
+    name): the run in a sentence, then its chapters."""
+    if clip.is_raid:
+        about = f"{clip.raid}: {clip.dungeon}, {clip.label}, pull {clip.pull}, {clip.length}"
+    else:
+        about = f"{clip.dungeon} {clip.label}, {clip.length}"
+    facts = [about, time.strftime("%Y-%m-%d", time.localtime(clip.started))]
+    if clip.deaths is not None:
+        facts.append(f"{clip.deaths} death{'s' if clip.deaths != 1 else ''}")
+    lines = [", ".join(facts) + "."]
+    chapters = youtube_chapters(clip.details)
+    if chapters:
+        lines += ["", *(f"{chapter_time(at)} {text}" for at, text in chapters)]
+    # YouTube refuses descriptions with angle brackets.
+    return "\n".join(lines).replace("<", "").replace(">", "") + "\n"
+
+
 # ── The settings window's checks ──
 
 OK, INFO, WARNING, ERROR = "ok", "info", "warning", "error"

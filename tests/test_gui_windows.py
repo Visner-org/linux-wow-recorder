@@ -92,6 +92,23 @@ def test_clip_browser_lists_filters_and_shows_details(qtbot, cfg):
     assert w.title.text() == "No clips match"
 
 
+
+def test_upload_to_youtube_copies_a_description_and_opens_the_page(qtbot, cfg, monkeypatch):
+    from PySide6.QtGui import QDesktopServices, QGuiApplication
+    make_clip(cfg, "a.mp4", dungeon="Ara-Kara", level=2, result="completed", label="+2 Completed")
+    w = browser.ClipBrowser()
+    qtbot.addWidget(w)
+    opened, shown, told = [], [], []
+    monkeypatch.setattr(QDesktopServices, "openUrl", lambda url: opened.append(url.toString()))
+    monkeypatch.setattr(w, "show_in_folder", lambda: shown.append(w.current.path))
+    monkeypatch.setattr(QMessageBox, "information", lambda *a: told.append(a[2]))
+    assert w.youtube_button.isVisibleTo(w)
+    w.upload_to_youtube()
+    assert QGuiApplication.clipboard().text().startswith("Ara-Kara +2 Completed, 8m00s, ")
+    assert opened == [model.YOUTUBE_UPLOAD_URL] and shown == [w.current.path]
+    assert told and "paste" in told[0]
+
+
 def test_clip_browser_picks_up_the_first_clip(qtbot, cfg):
     w = browser.ClipBrowser()
     qtbot.addWidget(w)

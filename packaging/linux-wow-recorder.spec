@@ -59,6 +59,8 @@ fi
 %changelog
 * Wed Oct 14 2026 Linux WoW Recorder - 0.8.0-1
 - Cutting clips is much faster
+- YouTube button in the clips window: copies a description with chapters, opens the upload page
+  and shows the clip to drag onto it
 
 * Wed Oct 14 2026 Linux WoW Recorder - 0.7.0-1
 - Several clips at once: Ctrl+click or Shift+click in the clips window, then the trash can

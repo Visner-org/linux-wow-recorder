@@ -266,7 +266,8 @@ extension. KDE and most other desktops show them as they are.
   seconds before it.
 - **Keys**: space plays and pauses; the left and right arrows skip 5 seconds.
 - **Buttons**: **Play**; beside the title, ☆ Keep (keep it forever), open it in your own video
-  player, show it in the file manager, run your `after_clips` command on it again (only there
+  player, show it in the file manager, upload it to YouTube (see
+  [To YouTube](#to-youtube)), run your `after_clips` command on it again (only there
   when one is set), and the red trash can: move it to the trash (with its details and picture;
   restore them from the trash to undo).
 - **Several at once**: Ctrl+click picks clips one by one, Shift+click a range. The trash can
@@ -354,6 +355,32 @@ sizes, send them in pieces with `/api/upload/token/chunked` instead (each reques
 `chunkPart` from 1, `totalChunks`, a `checkSum` of your choice grouping the pieces, `fileName`,
 `fileSize`; Fireshare answers 202 until the last piece). Keep the token out of the config file
 and out of the script if others can read them: anyone with it can upload as you.
+
+### To YouTube
+
+The clip browser's upload button (beside "show in folder") makes a YouTube upload quick, but
+the app doesn't upload anything itself: your browser does. One click:
+
+1. copies a description: the run in a sentence, then chapters (the start, the run starting
+   and each boss pull, kill or wipe), which YouTube turns into chapter marks on the video
+2. opens YouTube's upload page in your browser
+3. shows the clip in your file manager
+
+Drag the clip onto the YouTube page and paste the description. YouTube takes the title from
+the file name, for example "2026-10-14 20-05 Temple of Sethraliss +12 Completed (34m58s)".
+
+- Chapters need at least three marks 10 seconds apart, so a raid pull or a run with one boss
+  gets the sentence only.
+- New YouTube accounts can only upload videos up to 15 minutes until they verify a phone
+  number (YouTube Studio > Settings > Channel > Feature eligibility). Most dungeon clips are
+  longer.
+- A clip of 2 to 4 GB takes a while on a slow upload; YouTube keeps processing it after the
+  upload finishes, and HD versions show up last.
+- Choose Private, Unlisted or Public on YouTube's last page. Unlisted is handy for sharing a
+  run with your group.
+- If you also use an `after_clips` command that moves clips off this computer (like
+  `fireshare-upload`), upload from where the clip is now: add that folder to "Also show
+  clips from" and the button finds it there.
 
 ### Keeping clips somewhere else
 

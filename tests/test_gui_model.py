@@ -1,3 +1,6 @@
+import time
+from pathlib import Path
+
 from linux_wow_recorder.gui import model
 
 NOW = 1_800_000_000.0
@@ -166,6 +169,27 @@ def test_timeline_spans():
     [lust] = model.lust_spans(DETAILS, 80.0)
     assert (lust.start, lust.end, lust.text) == (61.0, 80.0, "Bloodlust (Shammy)")   # cut at the end
     assert model.seek_target(61.0) == 58.0 and model.seek_target(1.0) == 0.0
+
+
+
+def test_youtube_chapters_and_description():
+    # Start, the run starting, each pull; a second pull of a boss says so.
+    assert model.youtube_chapters(DETAILS) == [
+        (0.0, "Start"), (30.0, "Run starts"), (60.0, "Avanoxx (kill)"),
+        (300.0, "Anub'zekt (wipe)"), (400.0, "Anub'zekt pull 2")]
+    # Too close together (under 10 s) or too few: YouTube wouldn't make chapters of them.
+    assert model.youtube_chapters({"run_offset": 5.0, "encounters": [
+        {"name": "Avanoxx", "start": 60.0, "end": 120.0, "killed": True}]}) == []
+    assert model.chapter_time(3725) == "1:02:05" and model.chapter_time(245) == "4:05"
+
+    clip = model.clip_info(Path("a.mp4"), {**DETAILS, "run_start": 1_800_000_000.0,
+                                           "dungeon": "Ara-Kara <City>", "level": 10,
+                                           "label": "+10 Completed", "result": "completed",
+                                           "run_length": "8m00s", "deaths_total": 3})
+    text = model.youtube_description(clip)
+    day = time.strftime("%Y-%m-%d", time.localtime(1_800_000_000))
+    assert text.startswith(f"Ara-Kara City +10 Completed, 8m00s, {day}, 3 deaths.\n\n0:00 Start\n")
+    assert text.endswith("6:40 Anub'zekt pull 2\n")
 
 
 def test_field_checks(tmp_path):

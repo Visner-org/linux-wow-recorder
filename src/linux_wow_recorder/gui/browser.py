@@ -8,8 +8,8 @@ from pathlib import Path
 
 from PySide6.QtCore import (QEvent, QFile, QFileSystemWatcher, QLineF, QPointF, QProcess, QRectF,
                             QSettings, QSize, Qt, QTimer, QUrl, Signal)
-from PySide6.QtGui import (QColor, QDesktopServices, QFont, QIcon, QKeySequence, QPainter,
-                           QPainterPath, QPen, QPixmap, QShortcut)
+from PySide6.QtGui import (QColor, QDesktopServices, QFont, QGuiApplication, QIcon, QKeySequence,
+                           QPainter, QPainterPath, QPen, QPixmap, QShortcut)
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import (QAbstractItemView, QButtonGroup, QFrame, QGroupBox, QHBoxLayout,
@@ -430,6 +430,10 @@ class ClipBrowser(QWidget):
                                         "document-open", QStyle.SP_DialogOpenButton)
         folder_button = self._tool_button("Show in folder", self.show_in_folder,
                                           "folder-open", QStyle.SP_DirOpenIcon)
+        self.youtube_button = self._tool_button(
+            "Upload to YouTube: copies a description with chapters, opens YouTube's upload page "
+            "and shows the clip to drag onto it", self.upload_to_youtube,
+            "document-send", QStyle.SP_ArrowUp)
         # Only there when an after_clips command is set (Settings > Advanced).
         self.hook_button = self._tool_button("Run your after_clips command on this clip again",
                                              self.run_hook, "system-run", QStyle.SP_BrowserReload)
@@ -439,12 +443,13 @@ class ClipBrowser(QWidget):
         header.addWidget(self.title, 1)
         header.addWidget(self.result_chip, 0, Qt.AlignVCenter)
         header.addSpacing(12)
-        for b in (self.keep_button, open_button, folder_button, self.hook_button):
+        for b in (self.keep_button, open_button, folder_button, self.youtube_button,
+                  self.hook_button):
             header.addWidget(b, 0, Qt.AlignVCenter)
         header.addSpacing(10)
         header.addWidget(self.trash_button, 0, Qt.AlignVCenter)
-        self.action_widgets = [self.keep_button, open_button, folder_button, self.hook_button,
-                               self.trash_button]
+        self.action_widgets = [self.keep_button, open_button, folder_button, self.youtube_button,
+                               self.hook_button, self.trash_button]
 
         right = QWidget()
         rv = QVBoxLayout(right)
@@ -953,6 +958,7 @@ class ClipBrowser(QWidget):
         self.keep_button.setToolTip(
             "Keep this full recording forever, whatever \"Keep full recordings\" says"
             if clip.is_session else "Keep this clip forever, whatever \"Keep clips\" says")
+        self.youtube_button.setVisible(not clip.is_session)
         self.hook_button.setVisible(bool(self.cfg and self.cfg.after_clips) and not clip.is_session
                                     and not clip.elsewhere)
 
@@ -1043,6 +1049,16 @@ class ClipBrowser(QWidget):
             f"array:string:{QUrl.fromLocalFile(str(self.current.path)).toString()}", "string:"])
         if not ok:
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.current.path.parent)))
+
+    def upload_to_youtube(self):
+        """Copies the clip's description, opens YouTube's upload page in the browser and shows
+        the clip in the file manager, to drag onto it. The browser does the upload."""
+        self.player.pause()
+        QGuiApplication.clipboard().setText(model.youtube_description(self.current))
+        QDesktopServices.openUrl(QUrl(model.YOUTUBE_UPLOAD_URL))
+        self.show_in_folder()
+        QMessageBox.information(self, APP_TITLE, "Description copied. Drag the clip onto the "
+                                "YouTube page, then paste the description.")
 
     def toggle_keep(self):
         clip = self.current

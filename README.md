@@ -67,7 +67,8 @@ This app is built so you never have to wonder what it sends or where.
   your computer's details, or anyone's character name.** When something goes wrong, the message
   says so and points to the log on your computer.
 - Clips go nowhere unless you set up your own `after_clips` command (for example an `rsync` to
-  your server). The app doesn't upload anything itself.
+  your server). The app doesn't upload anything itself: the clip browser's YouTube button
+  only opens YouTube's upload page in your browser, and you drag the clip there.
 
 **What stays on your computer: everything else.**
 
