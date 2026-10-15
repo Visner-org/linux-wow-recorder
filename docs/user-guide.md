@@ -68,7 +68,7 @@ And in WoW:
 ### Nobara or Fedora (RPM)
 
 ```bash
-sudo dnf install ./linux-wow-recorder-0.8.0-1.fc44.noarch.rpm
+sudo dnf install ./linux-wow-recorder-0.8.2-1.fc44.noarch.rpm
 ```
 
 dnf installs gpu-screen-recorder, ffmpeg and Qt from your distro's repos along with it. The app
@@ -190,8 +190,13 @@ Which runs become clips:
 - **Dungeons without a key** (Normal, Heroic, Mythic 0, Timewalking, Follower), from entering to
   leaving, if a boss was pulled.
 
-Clips are named like `2026-10-08 19-03 Kings' Rest +12 Completed (24m52s).mp4`. A completed
+Clips are named like `2026-10-08 19-03 Kings' Rest +12 Timed (24m52s).mp4`. A completed
 key's length is the in-game timer.
+
+A completed key is **Timed** or **Over time**, by the dungeon's time limit. The combat log
+doesn't have the limits, so the app keeps a list of the current and last season's dungeons and
+updates it each season. A dungeon not on it yet says "Completed". The clip browser also shows the
+keystone upgrade ("Timed +2") and the time left or over.
 
 ### The window and the tray icon (desktop app)
 
@@ -277,6 +282,8 @@ extension. KDE and most other desktops show them as they are.
   restore them from the trash to undo).
 - **Several at once**: Ctrl+click picks clips one by one, Shift+click a range. The trash can
   (or the Delete key) then moves them all to the trash, after one question.
+- **Less on screen**: Settings > Clips and storage > Clips window turns off the Raids view, the
+  Full sessions view, the Hide chat button and the YouTube button. All are on by default.
 
 New clips show up by themselves.
 
@@ -372,7 +379,7 @@ the app doesn't upload anything itself: your browser does. One click:
 3. shows the clip in your file manager
 
 Drag the clip onto the YouTube page and paste the description. YouTube takes the title from
-the file name, for example "2026-10-14 20-05 Temple of Sethraliss +12 Completed (34m58s)".
+the file name, for example "2026-10-14 20-05 Temple of Sethraliss +12 Timed (20m58s)".
 
 - Chapters need at least three marks 10 seconds apart, so a raid pull or a run with one boss
   gets the sentence only.

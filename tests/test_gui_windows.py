@@ -618,3 +618,31 @@ def test_the_speaker_mutes(qtbot, cfg):
     assert w.audio.isMuted() and not w.volume.isEnabled()
     w.mute_button.click()
     assert not w.audio.isMuted() and w.volume.isEnabled()
+
+
+def test_settings_can_hide_parts_of_the_clips_window(qtbot, cfg, fake_recorder, monkeypatch):
+    monkeypatch.setattr(service, "state", lambda: "active")
+    installed = []
+    monkeypatch.setattr(service, "install", lambda: installed.append(1))
+    monkeypatch.setattr(settings.desktop, "install_autostart", lambda: None)
+    monkeypatch.setattr(settings.desktop, "remove_autostart", lambda: None)
+    make_clip(cfg, "a.mp4", dungeon="Ara-Kara", result="completed", label="+2 Completed")
+    b = browser.ClipBrowser()
+    qtbot.addWidget(b)
+    b.set_mode(model.SESSIONS)
+    assert b.mode_buttons[model.SESSIONS].isVisibleTo(b)
+
+    w = settings.SettingsWindow()
+    qtbot.addWidget(w)
+    qtbot.waitUntil(lambda: w.save_button.text() == "Save", timeout=3000)
+    for key in ("full_sessions", "youtube", "raids", "hide_chat"):
+        w.window_parts[key].setChecked(False)
+    qtbot.waitUntil(lambda: not w.check_timer.isActive(), timeout=2000)
+    assert w.save_button.text() == "Save"   # the desktop app's: no restart
+    w.save()
+    assert installed == []
+
+    b.reload()
+    assert b.mode == model.KEYS and b.current is not None   # back to Keystones
+    assert not any(btn.isVisibleTo(b) for btn in b.mode_buttons.values())
+    assert not b.youtube_button.isVisibleTo(b) and not b.hide_chat_button.isVisibleTo(b)

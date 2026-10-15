@@ -34,6 +34,14 @@ NOTIFY_EVENTS = {
 # [clips] raids: which raid boss pulls get a clip.
 RAID_CHOICES = {"all": "Every pull, kills and wipes", "kills": "Kills only", "off": "None"}
 
+# [clips_window]: what the clips window shows, each on by default. key -> what Settings calls it.
+CLIPS_WINDOW = {
+    "raids": "Raids view",
+    "full_sessions": "Full sessions view",
+    "hide_chat": "Hide chat button",
+    "youtube": "Upload to YouTube button",
+}
+
 # An audio source meaning WoW's own sound. The recorder turns it into gpu-screen-recorder's
 # "app:Wow.exe|app:World of Warcraft" for the WoW it found (recorder.audio_source).
 WOW_SOUND = "wow"
@@ -83,6 +91,7 @@ DEFAULTS = {
         "notify": {key: default for key, (default, _) in NOTIFY_EVENTS.items()},
     },
     "hooks": {"after_clips": ""},
+    "clips_window": {key: True for key in CLIPS_WINDOW},
     # Off until chosen: setup asks (the settings window's first run, or `setup`).
     "updates": {"check": False},
     "daemon": {"poll_interval": 5},
@@ -120,6 +129,8 @@ class Config:
     raids: str = "all"  # raid boss pulls clipped: "all", "kills" or "off"
     check_updates: bool = False   # the tray app asks GitHub once a day for a newer version
     other_clip_dirs: list[Path] = field(default_factory=list)   # the clip browser's, read only
+    # What the clips window shows (CLIPS_WINDOW keys); only the desktop app reads it.
+    clips_window: dict[str, bool] = field(default_factory=lambda: {k: True for k in CLIPS_WINDOW})
 
     # Everything the app writes is in these three folders, never loose in output_dir, so the
     # retention cleanup can't touch anything else the user keeps there.
@@ -213,6 +224,7 @@ def from_dict(data: dict) -> Config:
             poll_interval=max(1, int(data["daemon"]["poll_interval"])),
             detailed_logging=bool(data["logging"]["detailed"]),
             other_clip_dirs=[Path(f).expanduser() for f in _list(c["other_folders"]) if f.strip()],
+            clips_window={k: bool(v) for k, v in data["clips_window"].items()},
         )
     except (TypeError, ValueError) as e:
         raise ConfigError(f"Bad value in the config: {e}") from e
@@ -273,6 +285,8 @@ def render(data: dict) -> str:
     """The config file for data (a dict shaped like DEFAULTS), with comments."""
     p, r, c, s, d = (data[k] for k in ("paths", "recorder", "clips", "storage", "discord"))
     width = max(len(k) for k in NOTIFY_EVENTS)
+    clips_window = "\n".join(f"{k} = {_toml(bool(data['clips_window'].get(k, True)))}  # {label}"
+                              for k, label in CLIPS_WINDOW.items())
     notify = "\n".join(f"{k:<{width}} = {_toml(bool(d['notify'].get(k, default)))}  # {desc}"
                        for k, (default, desc) in NOTIFY_EVENTS.items())
     return f"""\
@@ -343,6 +357,10 @@ webhook_urls = {_webhook_list(d["webhook_urls"])}
 # Optional command run after clips are cut, with the new clips' paths added as arguments,
 # e.g. "~/bin/upload-clips.sh". Empty = none.
 after_clips = {_toml(data["hooks"]["after_clips"])}
+
+[clips_window]
+# What the clips window shows (only the desktop app reads these): false hides it
+{clips_window}
 
 [updates]
 # Ask GitHub once a day whether a newer version is out (the tray app says so; installing it is

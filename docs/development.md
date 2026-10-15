@@ -156,6 +156,27 @@ When the log enters an instance with a difficulty the app doesn't know, the serv
 `Not a dungeon this app knows: <name> (difficulty N)`. If it's a 5-player dungeon, add `N` to
 `DUNGEON_DIFFICULTIES` with its name, and add a test.
 
+### A new M+ season
+
+The combat log has a key's time but not the dungeon's limit, so `keytimers.py` lists them, by
+challengeModeID (`CHALLENGE_MODE_START`'s third field). When a season starts, add its dungeons
+from Raider.IO's static data (expansion 11 is Midnight) and drop seasons older than the last:
+
+```bash
+curl -s 'https://raider.io/api/v1/mythic-plus/static-data?expansion_id=11' > static-data.json
+python3 - static-data.json <<'EOF'
+import json, sys
+season = json.load(open(sys.argv[1]))["seasons"][0]
+print("    #", season["name"])
+for d in season["dungeons"]:
+    print(f'    {d["challenge_mode_id"]}: ({json.dumps(d["name"])}, {d["keystone_timer_seconds"]}),')
+EOF
+```
+
+Check a few against real runs (a timed key raises the rating at the end of `CHALLENGE_MODE_END`;
+one over time doesn't). Until then, the new dungeons' keys say "Completed". Only this
+development step uses Raider.IO; the app doesn't.
+
 ### Adding a lust
 
 Add the buff's spell ID to `LUST_BUFFS` with its name and the debuff it leaves. If that debuff is

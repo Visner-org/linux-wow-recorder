@@ -731,6 +731,7 @@ class ClipBrowser(QWidget):
                 self.watcher.removePaths(watched)
             if folders:
                 self.watcher.addPaths(folders)
+        self.show_parts()
         if not self.cfg:
             self.clips = []
         elif self.mode == model.SESSIONS:
@@ -743,6 +744,22 @@ class ClipBrowser(QWidget):
         self.fill_list(select=selected)
         if self.isVisible():
             self.update_checklist()
+
+    def part_on(self, part: str) -> bool:
+        """Whether Settings > Clips window has this part (a config.CLIPS_WINDOW key) on."""
+        return not self.cfg or self.cfg.clips_window.get(part, True)
+
+    def show_parts(self):
+        """The views Settings > Clips window has on; Keystones alone needs no button."""
+        raids, sessions = self.part_on("raids"), self.part_on("full_sessions")
+        self.mode_buttons[model.RAIDS].setVisible(raids)
+        self.mode_buttons[model.SESSIONS].setVisible(sessions)
+        self.mode_buttons[model.KEYS].setVisible(raids or sessions)
+        if (self.mode == model.RAIDS and not raids) or (self.mode == model.SESSIONS and not sessions):
+            self.mode = model.KEYS
+            self.mode_buttons[model.KEYS].setChecked(True)
+            self.current = None
+            self.show_mode()
 
     def fill_list(self, *_args, select=None):
         select = str(select or (self.current.path if self.current else "")) or None
@@ -943,13 +960,15 @@ class ClipBrowser(QWidget):
         self.title.setText(f"{clip.dungeon}, pull {clip.pull}" if clip.pull else f"{clip.dungeon}{level}")
         self.title.setToolTip(str(clip.path))
         self.result_chip.setText(clip.result_text)
-        self.result_chip.setStyleSheet(chip_style(clip.result, self.palette()))
+        self.result_chip.setStyleSheet(chip_style(clip.status, self.palette()))
         facts = [time.strftime("%a %Y-%m-%d %H:%M", time.localtime(clip.started))]
         if clip.is_raid:
             facts.append(clip.raid)
             facts.append(f"pull {clip.length}")
         elif not clip.is_session:
             facts.append(f"run {clip.length}")
+            if clip.time_left:
+                facts.append(clip.time_left)
         elif clip.length:
             facts.append(f"recorded {clip.length}")
         if clip.bosses_killed is not None and not clip.is_raid:
@@ -998,8 +1017,8 @@ class ClipBrowser(QWidget):
         self.keep_button.setToolTip(
             "Keep this full recording forever, whatever \"Keep full recordings\" says"
             if clip.is_session else "Keep this clip forever, whatever \"Keep clips\" says")
-        self.youtube_button.setVisible(not clip.is_session)
-        self.hide_chat_button.setVisible(not clip.is_session)
+        self.youtube_button.setVisible(not clip.is_session and self.part_on("youtube"))
+        self.hide_chat_button.setVisible(not clip.is_session and self.part_on("hide_chat"))
         self.hook_button.setVisible(bool(self.cfg and self.cfg.after_clips) and not clip.is_session
                                     and not clip.elsewhere)
 
@@ -1411,7 +1430,7 @@ class ClipCard(QStyledItemDelegate):
         y = r.top() + fm.height() + 8
         chip_w = fm.horizontalAdvance(clip.result_text) + 16
         chip = QRectF(x, y, chip_w, fm.height() + 2)
-        edge = result_color(clip.result, pal)
+        edge = result_color(clip.status, pal)
         p.setPen(QPen(text if selected else edge, 1))
         p.setBrush(Qt.NoBrush)
         p.drawRoundedRect(chip.adjusted(0.5, 0.5, -0.5, -0.5), chip.height() / 2, chip.height() / 2)
@@ -1541,7 +1560,8 @@ def event_icon(kind: str, palette) -> QIcon:
 def result_color(result: str, palette) -> QColor:
     """Completed keys and raid kills good, abandoned keys and wipes a warning, the rest muted."""
     return (theme.color("good", palette) if result in ("completed", "kill") else
-            theme.color("warning", palette) if result in ("abandoned", "wipe") else theme.muted(palette))
+            theme.color("warning", palette) if result in ("abandoned", "wipe", "overtime")
+            else theme.muted(palette))
 
 
 def chip_style(result: str, palette) -> str:

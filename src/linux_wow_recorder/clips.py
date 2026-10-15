@@ -196,6 +196,7 @@ def sidecar_for(run: Run, clip_start: float, length: float, recording: Path) -> 
         "run_end": run.end,
         "run_length": run.length,
         "timer": run.timer,
+        "time_limit": run.time_limit,
         "clip_start": clip_start,
         "clip_length": round(length, 1),
         "run_offset": round(max(0.0, run.start - clip_start), 1),

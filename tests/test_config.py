@@ -87,3 +87,14 @@ def test_other_folders(tmp_path):
     config.save(data, tmp_path / "c.toml")
     cfg = config.load(tmp_path / "c.toml")
     assert cfg.other_clip_dirs == [Path("~/server clips").expanduser()]
+
+
+def test_clips_window_parts_are_on_unless_turned_off(tmp_path):
+    path = tmp_path / "config.toml"
+    data = config.load_raw(path)
+    assert config.from_dict(data).clips_window == {k: True for k in config.CLIPS_WINDOW}
+    data["clips_window"]["youtube"] = False
+    config.save(data, path)
+    assert "youtube = false" in path.read_text()
+    assert config.load(path).clips_window["youtube"] is False
+    assert config.load(path).clips_window["full_sessions"] is True

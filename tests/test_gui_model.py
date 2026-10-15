@@ -137,6 +137,27 @@ def test_result_text_comes_from_the_result_not_the_label(tmp_path):
     assert info.result_text == "Abandoned" and info.filter_key == "abandoned"
 
 
+def test_completed_keys_say_timed_or_over_time(tmp_path):
+    from linux_wow_recorder.clips import read_sidecar, write_sidecar
+    for name, details in (
+            # cut before time_limit was in the details: from the table, by name
+            ("a.mp4", {"dungeon": "Den of Nalorakk", "timer": 2189.5}),
+            ("b.mp4", {"dungeon": "Somewhere", "timer": 1000.0, "time_limit": 1800}),
+            ("c.mp4", {"dungeon": "New Dungeon", "timer": 1000.0}),
+            # no timer in the details: the length in the details or the name
+            ("d.mp4", {"dungeon": "Kings' Rest", "run_length": "24m52s"})):
+        (tmp_path / name).write_bytes(b"x")
+        write_sidecar(tmp_path / name, {"result": "completed", "level": 12,
+                                        "label": "+12 Completed", **details})
+    by = {c.path.name: c for c in model.load_clips(tmp_path, read_sidecar)}
+    a, b, c = by["a.mp4"], by["b.mp4"], by["c.mp4"]
+    assert (a.result_text, a.status, a.time_left) == ("Over time", "overtime", "4m29s over")
+    assert (b.result_text, b.status, b.time_left) == ("Timed +3", "completed", "13m20s left")
+    assert (c.result_text, c.status, c.time_left) == ("Completed", "completed", "")
+    assert (by["d.mp4"].result_text, by["d.mp4"].time_left) == ("Timed +2", "8m08s left")
+    assert a.filter_key == b.filter_key == "completed"
+
+
 DETAILS = {
     "run_offset": 30.0,
     "encounters": [{"name": "Avanoxx", "start": 60.0, "end": 120.0, "killed": True},

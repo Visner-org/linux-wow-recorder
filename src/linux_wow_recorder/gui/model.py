@@ -8,7 +8,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .. import state
+from .. import keytimers, state
 
 # Icon names; tray.py draws one for each.
 IDLE, RECORDING, PROCESSING, ATTENTION, OFF = "idle", "recording", "processing", "attention", "off"
@@ -257,11 +257,53 @@ class ClipInfo:
         return self.details.get("pull")
 
     @property
+    def timer(self) -> float | None:
+        """A completed key's in-game time, s: from its details, or the length in its name (a
+        completed key's is the in-game time) for clips cut without one."""
+        if self.result != "completed":
+            return None
+        if self.details.get("timer"):
+            return self.details["timer"]
+        m = re.fullmatch(r"(\d+)m(\d{2})s", self.length or "")
+        return int(m[1]) * 60 + int(m[2]) if m else None
+
+    @property
+    def time_limit(self) -> int | None:
+        """A completed key's dungeon's time limit, s: from its details, or the table for clips
+        cut before they had it. None if not known."""
+        if not self.timer:
+            return None
+        return self.details.get("time_limit") or keytimers.time_limit(dungeon=self.dungeon)
+
+    @property
+    def upgrade(self) -> int | None:
+        """A completed key's keystone levels gained (0: over time), or None if not known."""
+        limit = self.time_limit
+        return keytimers.upgrade(self.timer, limit) if limit else None
+
+    @property
+    def status(self) -> str:
+        """The result, with "overtime" for a key completed over time (for its colour)."""
+        return "overtime" if self.upgrade == 0 else self.result
+
+    @property
     def result_text(self) -> str:
-        """The result for people: "Completed", "Heroic", "LFR Kill", ..."""
+        """The result for people: "Timed +2", "Over time", "Heroic", "LFR Kill", ..."""
         if self.is_raid and not self.chip:
             return self.label
+        if not self.chip and self.upgrade is not None:
+            return f"Timed +{self.upgrade}" if self.upgrade else "Over time"
         return self.chip or self.result.capitalize()
+
+    @property
+    def time_left(self) -> str:
+        """A completed key's time to spare, "6m48s left", or "4m31s over"; "" if not known."""
+        limit = self.time_limit
+        if not limit:
+            return ""
+        spare = limit - self.timer
+        m, s = divmod(int(abs(spare)), 60)
+        return f"{m}m{s:02d}s {'left' if spare >= 0 else 'over'}"
 
     @property
     def is_session(self) -> bool:

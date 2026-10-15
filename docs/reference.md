@@ -106,6 +106,20 @@ file take their defaults, and unknown ones are ignored.
 |---|---|---|
 | `after_clips` | `""` | a command run after each session (in the background), with the new clips' paths added as arguments. `~` is expanded in the program's path. It's split like a shell would, but not run through one, so pipes and `&&` need a script. |
 
+### `[clips_window]`
+
+What the clips window shows. Only the desktop app reads these (Settings > Clips and storage >
+Clips window); `false` hides it.
+
+| Key | Default | |
+|---|---|---|
+| `raids` | `true` | the Raids view (raid boss pull clips) |
+| `full_sessions` | `true` | the Full sessions view (the whole recordings) |
+| `hide_chat` | `true` | the Hide chat button |
+| `youtube` | `true` | the Upload to YouTube button |
+
+With both views off, the Keystones button is hidden too.
+
 ### `[updates]`
 
 | Key | Default | |
@@ -180,13 +194,14 @@ over two recordings gets one clip from each, each with its own part).
 {
   "version": 1,
   "dungeon": "Ara-Kara, City of Echoes",
-  "label": "+11 Completed",
+  "label": "+11 Timed",
   "level": 11,
   "result": "completed",
   "run_start": 1791694680.0,
   "run_end": 1791696281.0,
   "run_length": "26m41s",
   "timer": 1601.0,
+  "time_limit": 1800,
   "clip_start": 1791694670.0,
   "clip_length": 1626.0,
   "run_offset": 10.0,
@@ -211,13 +226,14 @@ over two recordings gets one clip from each, each with its own part).
 |---|---|
 | `version` | the format's version; it goes up if fields change meaning |
 | `dungeon` | the dungeon's name as WoW logs it; a raid pull's boss |
-| `label` | `"+11 Completed"`, `"+10 Abandoned"`, or a difficulty: `"Heroic"`, `"Mythic"`, `"Normal"`, `"Timewalking"`, `"Follower"`; a raid pull's difficulty and result: `"Heroic Kill"`, `"LFR Wipe"` |
+| `label` | `"+11 Timed"`, `"+11 Over time"`, `"+11 Completed"` (a dungeon whose time limit the app doesn't know), `"+10 Abandoned"`, or a difficulty: `"Heroic"`, `"Mythic"`, `"Normal"`, `"Timewalking"`, `"Follower"`; a raid pull's difficulty and result: `"Heroic Kill"`, `"LFR Wipe"` |
 | `level` | the keystone level, or `null` without a key |
 | `result` | `"completed"`, `"abandoned"`, or the difficulty in lower case; a raid pull's `"kill"` or `"wipe"` |
 | `kind`, `raid`, `difficulty`, `pull` | a raid pull's only: `"raid"`, the raid's name, its difficulty (`"LFR"`, `"Normal"`, `"Heroic"`, `"Mythic"`, ...), and the pull's number on that boss and difficulty in the recording, from 1 |
 | `run_start`, `run_end` | when the run started and ended |
 | `run_length` | the in-game timer for a completed key, the run's length otherwise |
 | `timer` | a completed key's in-game time in seconds, death penalties included; `null` otherwise |
+| `time_limit` | a completed key's dungeon's time limit in seconds (`keytimers.py`); `null` if not known. Clips cut before 0.8.1 don't have it; the clip browser looks the dungeon up by name |
 | `clip_start`, `clip_length` | where the clip starts, and how long it is |
 | `run_offset` | how far into the clip the run starts (`pad_before`, unless the recording started later) |
 | `bosses_killed`, `deaths_total` | over the whole run |

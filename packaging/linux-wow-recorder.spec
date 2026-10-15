@@ -57,6 +57,14 @@ if [ "$1" -eq 0 ]; then
 fi
 
 %changelog
+* Thu Oct 15 2026 Linux WoW Recorder - 0.8.2-1
+- Completed keys say Timed or Over time, by the dungeon's time limit; the clips window shows the
+  keystone upgrade and the time left or over
+
+* Thu Oct 15 2026 Linux WoW Recorder - 0.8.1-1
+- Settings > Clips and storage > Clips window: turn off the Raids and Full sessions views and the
+  Hide chat and YouTube buttons
+
 * Thu Oct 15 2026 Linux WoW Recorder - 0.8.0-1
 - Cutting clips is much faster
 - YouTube button in the clips window: copies a description with chapters, opens the upload page

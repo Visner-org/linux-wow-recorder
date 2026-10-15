@@ -24,9 +24,9 @@ def test_an_evening_of_keys():
     # more fields than the wiki lists, and Murder Row's sub-zone fires ZONE_CHANGE. The first
     # Kings' Rest was restarted after 3 minutes: too short to keep.
     assert [summary(r) for r in runs_in("WoWCombatLog-100826_185919.txt")] == [
-        ("Kings' Rest", "+12 Completed", "24m52s", 3, ["Bloodlust"] * 3, [True] * 4),
-        ("Ruby Life Pools", "+8 Completed", "19m06s", 3, ["Bloodlust"] * 2, [True] * 3),
-        ("Murder Row", "+8 Completed", "22m52s", 3, ["Bloodlust"] * 2, [True, False, True, True, True]),
+        ("Kings' Rest", "+12 Timed", "24m52s", 3, ["Bloodlust"] * 3, [True] * 4),
+        ("Ruby Life Pools", "+8 Timed", "19m06s", 3, ["Bloodlust"] * 2, [True] * 3),
+        ("Murder Row", "+8 Timed", "22m52s", 3, ["Bloodlust"] * 2, [True, False, True, True, True]),
     ]
 
 

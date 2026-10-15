@@ -47,7 +47,8 @@ PAGES = ("Folders and capture", "Sound", "Clips and storage", "Notifications", "
 FIELD_PAGE = {"combat_log_dir": 0, "output_dir": 0, "stop_below_gb": 2, "other_folders": 2,
               "webhooks": 3, "recorder_command": 4, "after_clips": 4}
 # Settings only the desktop app reads: changing them doesn't restart the service.
-APP_ONLY = (("clips", "other_folders"), ("updates", "check"))
+APP_ONLY = (("clips", "other_folders"), ("updates", "check"),
+            *(("clips_window", key) for key in config.CLIPS_WINDOW))
 WIZARD = (("Folders", "Where WoW writes its combat log, and where recordings and clips go."),
           ("What to record", "The picture and the sound. Everything else can wait for Settings."),
           ("Try it", "A 5-second recording to check the picture and the sound. Then Finish "
@@ -187,7 +188,8 @@ class SettingsWindow(QDialog):
             [_heading("Folders"), p["folders"], _heading("What to record"), p["capture"],
              p["test"]],
             [_heading("Sound"), p["sound"]],
-            [_heading("Clips"), p["clips"], _heading("Storage"), p["storage"]],
+            [_heading("Clips"), p["clips"], _heading("Storage"), p["storage"],
+             _heading("Clips window"), self.clips_window_part()],
             [_heading("Discord or Fluxer messages"), p["notify"]],
             [_heading("Recorder"), p["recorder"], _heading("After clips"), p["hook"],
              _heading("Background service"), p["service"], _heading("Logs"), p["logging"],
@@ -451,6 +453,15 @@ class SettingsWindow(QDialog):
         form.addRow("Raid boss clips",
                     _field(self.raids, _hint("A clip per boss pull. Pulls under 30 s are skipped.")))
         return _section(form, _heading("Also show clips from"), self.other_folders_part())
+
+    def clips_window_part(self) -> QWidget:
+        self.window_parts = {}
+        for key, label in config.CLIPS_WINDOW.items():
+            box = QCheckBox(label)
+            box.setChecked(bool(self.data["clips_window"].get(key, True)))
+            box.toggled.connect(self.update_checks)
+            self.window_parts[key] = box
+        return _section(*self.window_parts.values())
 
     def other_folders_part(self) -> QWidget:
         """Folders on this computer the clip browser lists clips from, besides clips/."""
@@ -839,6 +850,8 @@ class SettingsWindow(QDialog):
         d["hooks"]["after_clips"] = self.hook.text().strip()
         d["logging"]["detailed"] = self.detailed.isChecked()
         d["updates"]["check"] = self.check_updates.isChecked()
+        if hasattr(self, "window_parts"):   # not in the first-run wizard
+            d["clips_window"] = {k: b.isChecked() for k, b in self.window_parts.items()}
         return d
 
     def update_checks(self):

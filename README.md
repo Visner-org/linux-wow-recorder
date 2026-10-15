@@ -8,11 +8,12 @@ its boss pulls, deaths and lusts, and a tray icon shows when it's recording.
 network traffic it can make is a Discord or Fluxer message if you add a webhook, and a daily
 check for a new version on GitHub if you turn that on. See [Privacy](#privacy).
 
-<!-- Screenshot: the clip browser with a run's timeline. Add docs/screenshot.png before publishing. -->
+![The clip browser: Mythic+ clips with their results, and a run's timeline of boss pulls, deaths and lusts](docs/screenshot.png)
 
-**New in 0.8.0:** clips are cut about twice as fast; **Hide chat** makes a copy of a clip with
-a black box over your chat; an **Upload to YouTube** button; and **full screen** in the clip
-browser, with the timeline still at the bottom.
+**New in 0.8.2:** completed keys say **Timed** (with the keystone upgrade, "Timed +2") or **Over
+time**, and Settings can hide the parts of the clip browser you don't use. **0.8.0** brought
+cutting about twice as fast, **Hide chat** (a copy of a clip with a black box over your chat), an
+**Upload to YouTube** button, and **full screen** with the timeline still at the bottom.
 
 **Docs:** [user guide](docs/user-guide.md) (install, setup, everyday use, troubleshooting) ·
 [reference](docs/reference.md) (commands, every setting, file formats) ·
@@ -28,7 +29,7 @@ WoW closes
     keys too, if they lasted 5 minutes), dungeons without a key from entering to leaving
     (if a boss was pulled), and each raid boss pull from pull to kill or wipe
   → one clip per run is cut out of the recording (no re-encode, takes seconds), named like
-    "2026-10-08 19-03 Kings' Rest +12 Completed (24m52s).mp4", with a .json file beside it
+    "2026-10-08 19-03 Kings' Rest +12 Timed (24m52s).mp4", with a .json file beside it
     listing the boss pulls (kills and wipes), deaths, and each Bloodlust/Heroism/Time Warp/
     Primal Rage/Fury of the Aspects/drums
   → the full recording is kept for 3 days, then deleted
@@ -153,7 +154,7 @@ an issue.
 Download the `.rpm` from [Releases](../../releases), then:
 
 ```bash
-sudo dnf install ./linux-wow-recorder-0.8.0-1.fc44.noarch.rpm
+sudo dnf install ./linux-wow-recorder-0.8.2-1.fc44.noarch.rpm
 ```
 
 dnf brings in gpu-screen-recorder, ffmpeg and Qt. Open **Linux WoW Recorder** from the app

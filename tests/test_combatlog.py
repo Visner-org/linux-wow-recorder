@@ -84,7 +84,7 @@ def test_a_key_resumed_after_a_crash_is_one_run():
         (T0 + 1100, "ENCOUNTER_END", ["2143", "King Dazar", "8", "5", "1", "99824"]),
         key_end(1400, 1762, 10, 1_442_631),
     ])
-    assert (run.label, run.start, run.end, run.length) == ("+10 Completed", T0 + 31, T0 + 1400, "24m02s")
+    assert (run.label, run.start, run.end, run.length) == ("+10 Timed", T0 + 31, T0 + 1400, "24m02s")
     assert [e.name for e in run.encounters] == ["The Golden Serpent", "King Dazar"]
     assert [(l.name, l.time - T0) for l in run.lusts] == [("Time Warp", 600)]
 
@@ -363,3 +363,21 @@ def test_dungeon_bosses_arent_raid_pulls():
         zone(500, 0, "Ardenweald", 0),
     ])
     assert [(r.label, r.is_raid) for r in runs] == [("Heroic", False)]
+
+
+def test_a_completed_key_is_timed_or_over_time_by_its_dungeons_limit():
+    def run(ms, name="Murder Row"):   # 34 minutes
+        return find_runs([
+            zone(0, 2290, name, 8),
+            (T0 + 10, "CHALLENGE_MODE_START", [name, "2290", "587", "12", "[10", "9]"]),
+            boss(100),
+            key_end(2200, 2290, 12, ms),
+        ])[0]
+    timed = run(1_600_000)
+    assert (timed.label, timed.result, timed.time_limit) == ("+12 Timed", "completed", 2040)
+    over = run(2_046_000)   # 34m06s: by 6 seconds, as on 10-14
+    assert (over.label, over.result) == ("+12 Over time", "completed")
+    # A dungeon not in the table (a new season's, before an update): "Completed" as before.
+    unknown = find_runs([zone(0, 2290, "New Dungeon", 8), key_start(10, 2290, "New Dungeon", 12),
+                         boss(100), key_end(1700, 2290, 12, 1_600_000)])[0]
+    assert (unknown.label, unknown.time_limit) == ("+12 Completed", None)

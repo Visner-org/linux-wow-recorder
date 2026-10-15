@@ -10,6 +10,8 @@ from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import keytimers
+
 log = logging.getLogger(__name__)
 
 # ZONE_CHANGE difficulty IDs of dungeons run without a keystone. Keystone runs (8) are found
@@ -104,6 +106,7 @@ class Run:
     raid: str = ""               # a raid pull's raid ("Liberation of Undermine"); "" otherwise
     difficulty: str = ""         # a raid pull's: "Heroic", "LFR", ...
     pull: int | None = None      # a raid pull's number on this boss and difficulty, from 1
+    time_limit: int | None = None   # a completed key's dungeon's limit (keytimers), s
 
     @property
     def is_raid(self) -> bool:
@@ -256,8 +259,14 @@ class _RunFinder:
     def close_key(self, t: float, completed: bool = False, timer_ms: int = 0):
         key, self.key = self.key, None
         if completed:
-            self.runs.append(key.to_run(t, f"+{key.level} Completed", "completed",
-                                        timer_ms / 1000 if timer_ms > 0 else None))
+            timer = timer_ms / 1000 if timer_ms > 0 else None
+            limit = keytimers.time_limit(key.challenge, key.name)
+            # "Completed" when the dungeon's limit isn't known (a new season's dungeon).
+            done = ("Completed" if not (timer and limit) else
+                    "Timed" if keytimers.upgrade(timer, limit) else "Over time")
+            run = key.to_run(t, f"+{key.level} {done}", "completed", timer)
+            run.time_limit = limit
+            self.runs.append(run)
         else:
             self.runs.append(key.to_run(key.left_at or t, f"+{key.level} Abandoned", "abandoned"))
 
