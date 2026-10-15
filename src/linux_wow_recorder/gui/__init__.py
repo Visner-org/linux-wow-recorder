@@ -1,8 +1,9 @@
 """The desktop app: a window for clips and settings, and a tray icon that shows what the service
 is doing. Closing the window leaves the app in the tray.
 
-It only reads the service's status file and controls the service through systemd, so closing it
-never stops a recording. Needs PySide6: install the app with the `gui` extra.
+It reads the service's status file and controls the service through systemd: opening the app
+starts the service, and quitting stops it, unless it's set to start at login. Needs PySide6:
+install the app with the `gui` extra.
 """
 
 import argparse

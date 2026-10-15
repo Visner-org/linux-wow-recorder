@@ -161,9 +161,16 @@ def cmd_setup(args) -> int:
         print("  " + _sent(Notifier(cfg).send("", "Test message: setup works.", force=True)))
     if ask_yes("Record 5 seconds to test the recorder?", True):
         cmd_test_recorder(args)
-    if ask_yes("Start it now and at every login (systemd user service)?", True):
+    print("\n6. Starting it")
+    print("   Without the desktop app, the recorder is a background service that STARTS AT EVERY")
+    print("   LOGIN and records whenever WoW runs, until you remove it. It runs as you (a systemd")
+    print("   user service), never as root.")
+    print(f"   To stop that later: `{APP_NAME} uninstall-service`.")
+    print(f"   Or answer no, and run `{APP_NAME} run` in a terminal when you play.")
+    if ask_yes("Start it now and at EVERY LOGIN?", True):
         return cmd_install_service(args)
-    print(f"Start it later with `{APP_NAME} install-service`, or run `{APP_NAME} run` in a terminal.")
+    print(f"Not started. Run `{APP_NAME} run` in a terminal when you play, or "
+          f"`{APP_NAME} install-service` to start it at every login.")
     return 0
 
 
@@ -311,7 +318,8 @@ def cmd_install_service(args) -> int:
     except RuntimeError as e:
         print(f"Couldn't install the service: {e}")
         return 1
-    print(f"Installed and started {service.UNIT_NAME}. Log: {logs.LOG_DIR / 'recorder.log'}")
+    print(f"Installed and started {service.UNIT_NAME}. It starts at every login from now on;")
+    print(f"`{APP_NAME} uninstall-service` stops that. Log: {logs.LOG_DIR / 'recorder.log'}")
     return 0
 
 
@@ -387,8 +395,8 @@ def main():
         ("pause", cmd_pause, "stop recording for the rest of this WoW session"),
         ("resume", cmd_pause, "record again after pause"),
         ("test-webhooks", cmd_test_webhooks, "send a test message to every webhook"),
-        ("install-service", cmd_install_service, "run at every login (systemd user service)"),
-        ("uninstall-service", cmd_uninstall_service, "remove the systemd user service"),
+        ("install-service", cmd_install_service, "start the recorder at EVERY LOGIN (systemd user service)"),
+        ("uninstall-service", cmd_uninstall_service, "stop starting at login: remove the service"),
     ]:
         sub.add_parser(name, help=help_text).set_defaults(func=func)
     # The old name, from when only Discord was supported.

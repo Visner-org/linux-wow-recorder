@@ -204,8 +204,10 @@ class Tray:
         self.autostart_action = self.menu.addAction("Show this icon at login", self.toggle_autostart)
         self.autostart_action.setCheckable(True)
         self.menu.addSeparator()
-        self.menu.addAction("Hide tray icon (keeps recording)", app.quit)
+        # Only when the service starts at login: otherwise it runs while the app is open.
+        self.hide_action = self.menu.addAction("Hide tray icon (keeps recording)", app.quit)
         self.menu.addAction("Quit and stop recording", self.quit_all)
+        self.start_with_app()
 
         self.timer = QTimer()
         self.timer.timeout.connect(self.refresh)
@@ -258,6 +260,7 @@ class Tray:
         busy = view.recording or (self.status or {}).get("state") == state.PROCESSING
         self.cut_action.setEnabled(not busy and self.process is None and self._has_pending(force))
         self.autostart_action.setChecked(desktop.autostart_enabled())
+        self.hide_action.setVisible(service.at_login())
         self.notify(view)
         self.show_release()
 
@@ -439,6 +442,22 @@ class Tray:
             "The recording so far is saved and cut after the next session.")
         return answer == QMessageBox.Yes
 
+    def start_with_app(self):
+        """Opening the app starts the recorder (unless it's not set up yet, or already
+        running): it records while the app is open."""
+        if self.service.current(force=True) in ("inactive", "failed"):
+            try:
+                service.start()
+            except RuntimeError as e:
+                QMessageBox.warning(None, APP_TITLE, f"The recorder didn't start: {e}")
+
+    def stop_with_app(self):
+        """The app closing (without a tray, its window) stops the recorder, unless it starts at
+        login. Without waiting: systemd saves the recording."""
+        if not service.at_login() and self.service.current(force=True) in ("active", "activating"):
+            subprocess.run(["systemctl", "--user", "stop", "--no-block", service.UNIT_NAME],
+                           capture_output=True)
+
     def toggle_service(self):
         running = self._service_running()
         if running and not self._ok_to_stop():
@@ -575,10 +594,11 @@ def run(start_hidden: bool = False) -> int:
         os.execv(sys.executable, [sys.executable, "-m", "linux_wow_recorder.gui", "--tray"])
 
     tray = Tray(app, restart if has_tray else None)
+    app.aboutToQuit.connect(tray.stop_with_app)
     server.newConnection.connect(lambda: (server.nextPendingConnection(), tray.show_window()))
     if not has_tray:
         QMessageBox.warning(None, APP_TITLE, "This desktop has no system tray, so the app closes "
-                            "with its window (the recorder service keeps running). On GNOME, "
+                            "with its window. On GNOME, "
                             "install the \"AppIndicator and KStatusNotifierItem Support\" "
                             "extension.")
     if not start_hidden or not has_tray:

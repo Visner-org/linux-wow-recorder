@@ -13,7 +13,7 @@
 
 | Command | Does |
 |---|---|
-| `setup` | asks for the folders and options and writes the config; offers a test recording and the service |
+| `setup` | asks for the folders and options and writes the config; offers a test recording, then to start the recorder **at every login** (the service) |
 | `run` | watches for WoW and records, in the foreground (what the service runs) |
 | `status` | the config, the service and what it's doing, and any problem with the setup; exit code 1 if there is one |
 | `process` | cuts the recordings waiting in `sessions/` now; refuses while WoW is running |
@@ -21,7 +21,7 @@
 | `test-recorder` | records 5 seconds to `<output>/test-recording.mkv`; refuses while the service is recording |
 | `pause`, `resume` | stops recording for the rest of this WoW session (what was recorded so far is kept), or records again; the next session always records |
 | `test-webhooks` | sends a test message to every webhook and names any that failed (`test-discord` is the old name) |
-| `install-service` | installs and starts the systemd user service, which runs at every login |
+| `install-service` | installs and starts the systemd user service, which then **starts at every login** until `uninstall-service` (the desktop app's Settings > Advanced does the same with its "Record from every login" tick) |
 | `uninstall-service` | stops and removes the service; the config and recordings stay |
 | `uninstall` | a clean uninstall (Settings > Advanced > Uninstall... runs it): stops and removes the service, the autostart and menu entries the app wrote, the config, logs and runtime files, and for a uv or pipx install the program too; an RPM or Arch package is removed with the `dnf`/`pacman` command it prints. Recordings and clips stay unless asked: `--delete-recordings` removes `sessions/`, `processed/` and `clips/` (nothing else in the output folder, nor other folders' clips). `--yes` asks nothing; `--keep-program` leaves the program installed |
 | `logs [-n LINES]` | where the logs are, and the service log's last lines (40) |
@@ -144,7 +144,7 @@ With both views off, the Keystones button is hidden too.
 |---|---|
 | `~/.config/linux-wow-recorder/config.toml` | the config |
 | `~/.config/linux-wow-recorder/gui.ini` | the desktop app's own choices: the clips window's view, and when GitHub was last asked about a new version and what it said |
-| `~/.config/systemd/user/linux-wow-recorder.service` | the service, written by `install-service` |
+| `~/.config/systemd/user/linux-wow-recorder.service` | the service, written by `install-service` or the desktop app's setup; it starts at login only when linked into `default.target.wants/` (enabled) |
 | `~/.config/autostart/linux-wow-recorder-gui.desktop` | starts the tray icon at login |
 | `~/.local/share/applications/linux-wow-recorder-gui.desktop` | the app menu entry |
 | `~/.local/state/linux-wow-recorder/recorder.json` | the recorder's process, so a restarted service can stop one left running |

@@ -10,8 +10,9 @@ check for a new version on GitHub if you turn that on. See [Privacy](#privacy).
 
 ![The clip browser: Mythic+ clips with their results, and a run's timeline of boss pulls, deaths and lusts](docs/screenshot.png)
 
-**New in 0.8.2:** completed keys say **Timed** (with the keystone upgrade, "Timed +2") or **Over
-time**, and Settings can hide the parts of the clip browser you don't use. **0.8.0** brought
+**New in 0.8.3:** nothing starts at login unless you choose it: the recorder runs while the app
+is open. **0.8.2:** completed keys say **Timed** (with the keystone upgrade, "Timed +2") or
+**Over time**, and Settings can hide the parts of the clip browser you don't use. **0.8.0** brought
 cutting about twice as fast, **Hide chat** (a copy of a clip with a black box over your chat), an
 **Upload to YouTube** button, and **full screen** with the timeline still at the bottom.
 
@@ -36,9 +37,11 @@ WoW closes
   → optional: a Discord or Fluxer message, and your own command run on the new clips
 ```
 
-- **Starts by itself.** A background service (systemd user service) watches for WoW. Launch the
-  game however you like: Battle.net under Lutris, Heroic, Bottles, Faugus, Steam/Proton or plain
-  Wine, Flatpak or not.
+- **Records while the app is open.** Open Linux WoW Recorder, then launch the game however you
+  like: Battle.net under Lutris, Heroic, Bottles, Faugus, Steam/Proton or plain Wine, Flatpak or
+  not. It notices WoW starting and closing by itself. Nothing runs until you open the app, and
+  Quit stops it. If you'd rather not think about it, Settings > Advanced can start it at every
+  login instead. Either way it runs as you (a systemd user service), never as root.
 - **Records only WoW's sound** by default, so Discord voice and music stay out of your clips.
   All desktop sound, your microphone, or no sound are options.
 - **Records the whole screen, one monitor, or only the WoW window**, picked in your desktop's
@@ -154,7 +157,7 @@ an issue.
 Download the `.rpm` from [Releases](../../releases), then:
 
 ```bash
-sudo dnf install ./linux-wow-recorder-0.8.2-1.fc44.noarch.rpm
+sudo dnf install ./linux-wow-recorder-0.8.3-1.fc44.noarch.rpm
 ```
 
 dnf brings in gpu-screen-recorder, ffmpeg and Qt. Open **Linux WoW Recorder** from the app
@@ -166,7 +169,6 @@ Fedora/Nobara 44).
 ```bash
 sudo pacman -S --needed python ffmpeg uv gpu-screen-recorder
 uv tool install 'linux-wow-recorder[gui] @ git+https://github.com/Visner-org/linux-wow-recorder'
-linux-wow-recorder-gui --autostart on   # tray icon at login, and an app menu entry
 linux-wow-recorder-gui
 ```
 
@@ -188,7 +190,6 @@ comes from Flathub.
 flatpak install flathub com.dec05eba.gpu_screen_recorder
 curl -LsSf https://astral.sh/uv/install.sh | sh   # installs uv into ~/.local/bin
 uv tool install 'linux-wow-recorder[gui] @ git+https://github.com/Visner-org/linux-wow-recorder'
-linux-wow-recorder-gui --autostart on
 linux-wow-recorder-gui
 ```
 
@@ -202,12 +203,17 @@ sudo apt install python3 ffmpeg      # or your distro's equivalent
 flatpak install flathub com.dec05eba.gpu_screen_recorder
 curl -LsSf https://astral.sh/uv/install.sh | sh   # or: pipx, see the user guide
 uv tool install 'linux-wow-recorder[gui] @ git+https://github.com/Visner-org/linux-wow-recorder'
-linux-wow-recorder-gui --autostart on
 linux-wow-recorder-gui
 ```
 
 **Without the desktop app**, leave out `[gui]` (it saves ~400 MB of Qt) and run
 `linux-wow-recorder setup` instead: it asks the same questions in the terminal.
+
+> **The command-line version starts at every login.** With no app to open, setup's last
+> question installs the recorder as a background service that starts every time you log in
+> and records whenever WoW runs. It runs as you, never as root.
+> `linux-wow-recorder uninstall-service` stops that; or answer no and run
+> `linux-wow-recorder run` in a terminal when you play.
 
 ### GPUs
 
@@ -229,7 +235,8 @@ The settings window (or `linux-wow-recorder setup`) asks for:
    microphone.
 5. **Discord or Fluxer webhooks**: optional, and off until you add one.
 
-Then record a 5-second test, and save: the background service starts and runs at every login.
+Then record a 5-second test, and save. It records whenever the app is open; Settings > Advanced
+can start it at every login instead.
 
 KDE and most desktops show tray icons as they are. Stock GNOME needs the
 [AppIndicator and KStatusNotifierItem Support](https://extensions.gnome.org/extension/615/appindicator-support/)
@@ -283,7 +290,7 @@ linux-wow-recorder test-webhooks       # a test message to every webhook
 linux-wow-recorder process             # cut what's waiting now
 linux-wow-recorder pause               # stop recording until WoW closes (resume: record again)
 linux-wow-recorder keep <clip>...      # keep clips forever (--undo to let them expire)
-linux-wow-recorder install-service     # run at every login
+linux-wow-recorder install-service     # start the recorder at EVERY LOGIN
 linux-wow-recorder uninstall-service
 linux-wow-recorder uninstall           # remove everything (Settings > Advanced > Uninstall... too)
 linux-wow-recorder logs                # where the logs are, and the last lines

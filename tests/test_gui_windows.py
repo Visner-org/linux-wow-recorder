@@ -244,7 +244,8 @@ def test_saving_restarts_the_service_only_when_the_config_changed(qtbot, cfg, fa
                                                                   monkeypatch):
     monkeypatch.setattr(service, "state", lambda: "active")
     installed = []
-    monkeypatch.setattr(service, "install", lambda: installed.append(1))
+    monkeypatch.setattr(service, "install",   # records restarts only
+                        lambda at_login=True, restart=True: restart and installed.append(at_login))
     monkeypatch.setattr(settings.desktop, "install_autostart", lambda: None)
     monkeypatch.setattr(settings.desktop, "remove_autostart", lambda: None)
     w = settings.SettingsWindow()
@@ -623,7 +624,8 @@ def test_the_speaker_mutes(qtbot, cfg):
 def test_settings_can_hide_parts_of_the_clips_window(qtbot, cfg, fake_recorder, monkeypatch):
     monkeypatch.setattr(service, "state", lambda: "active")
     installed = []
-    monkeypatch.setattr(service, "install", lambda: installed.append(1))
+    monkeypatch.setattr(service, "install",   # records restarts only
+                        lambda at_login=True, restart=True: restart and installed.append(at_login))
     monkeypatch.setattr(settings.desktop, "install_autostart", lambda: None)
     monkeypatch.setattr(settings.desktop, "remove_autostart", lambda: None)
     make_clip(cfg, "a.mp4", dungeon="Ara-Kara", result="completed", label="+2 Completed")
@@ -646,3 +648,28 @@ def test_settings_can_hide_parts_of_the_clips_window(qtbot, cfg, fake_recorder, 
     assert b.mode == model.KEYS and b.current is not None   # back to Keystones
     assert not any(btn.isVisibleTo(b) for btn in b.mode_buttons.values())
     assert not b.youtube_button.isVisibleTo(b) and not b.hide_chat_button.isVisibleTo(b)
+
+
+def test_first_run_starts_nothing_at_login(qtbot, no_config, fake_recorder, monkeypatch):
+    w = settings.SettingsWindow()
+    qtbot.addWidget(w)
+    assert w.wizard
+    assert not w.service_at_login.isChecked() and not w.tray_at_login.isChecked()
+
+
+def test_saving_can_turn_recording_at_login_on_and_off(qtbot, cfg, fake_recorder, monkeypatch):
+    monkeypatch.setattr(service, "state", lambda: "active")
+    calls = []
+    monkeypatch.setattr(service, "install",
+                        lambda at_login=True, restart=True: calls.append((at_login, restart)))
+    monkeypatch.setattr(service, "at_login", lambda: False)
+    monkeypatch.setattr(settings.desktop, "install_autostart", lambda: None)
+    monkeypatch.setattr(settings.desktop, "remove_autostart", lambda: None)
+    w = settings.SettingsWindow()
+    qtbot.addWidget(w)
+    assert not w.service_at_login.isChecked()
+    w.service_at_login.setChecked(True)
+    qtbot.waitUntil(lambda: not w.check_timer.isActive(), timeout=2000)
+    assert w.save_button.text() == "Save"   # enabling alone doesn't restart it
+    w.save()
+    assert calls == [(True, False)]

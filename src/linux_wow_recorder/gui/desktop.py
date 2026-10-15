@@ -46,12 +46,17 @@ def install_autostart() -> Path:
     """Starts the app in the tray at login, and lists it in the app menu so it can be reopened."""
     AUTOSTART_FILE.parent.mkdir(parents=True, exist_ok=True)
     AUTOSTART_FILE.write_text(desktop_entry(autostart=True))
+    install_menu_entry()
+    return AUTOSTART_FILE
+
+
+def install_menu_entry():
+    """Lists the app in the app menu, unless a package already does (the RPM, Arch)."""
     if not SYSTEM_MENU_FILE.exists():
         MENU_FILE.parent.mkdir(parents=True, exist_ok=True)
         MENU_FILE.write_text(desktop_entry(autostart=False))
         ICON_FILE.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(Path(__file__).with_name("icon.svg"), ICON_FILE)
-    return AUTOSTART_FILE
 
 
 def remove_autostart():

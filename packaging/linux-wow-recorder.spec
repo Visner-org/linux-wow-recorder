@@ -57,6 +57,11 @@ if [ "$1" -eq 0 ]; then
 fi
 
 %changelog
+* Thu Oct 15 2026 Linux WoW Recorder - 0.8.3-1
+- Nothing starts at login by default: the recorder runs while the app is open; Settings >
+  Advanced can start it at every login
+- The command-line setup says plainly that it starts the recorder at every login
+
 * Thu Oct 15 2026 Linux WoW Recorder - 0.8.2-1
 - Completed keys say Timed or Over time, by the dungeon's time limit; the clips window shows the
   keystone upgrade and the time left or over

@@ -68,7 +68,7 @@ And in WoW:
 ### Nobara or Fedora (RPM)
 
 ```bash
-sudo dnf install ./linux-wow-recorder-0.8.2-1.fc44.noarch.rpm
+sudo dnf install ./linux-wow-recorder-0.8.3-1.fc44.noarch.rpm
 ```
 
 dnf installs gpu-screen-recorder, ffmpeg and Qt from your distro's repos along with it. The app
@@ -103,7 +103,6 @@ With the desktop app:
 
 ```bash
 uv tool install 'linux-wow-recorder[gui] @ git+https://github.com/Visner-org/linux-wow-recorder'
-linux-wow-recorder-gui --autostart on   # tray icon at login, and an app menu entry
 linux-wow-recorder-gui
 ```
 
@@ -113,6 +112,10 @@ Command line only:
 uv tool install 'linux-wow-recorder @ git+https://github.com/Visner-org/linux-wow-recorder'
 linux-wow-recorder setup
 ```
+
+> **Command line only means it starts at every login.** There's no app to open, so setup ends
+> by offering to install the recorder as a background service that starts every time you log
+> in (see [Command line](#command-line) below).
 
 pipx works the same way: `pipx install 'linux-wow-recorder[gui] @ git+https://github.com/Visner-org/linux-wow-recorder'`.
 
@@ -141,7 +144,7 @@ a short setup opens by itself, in three steps:
    choose the WoW window or its monitor.
 3. **Try it**: **Save and record a 5-second test**. The result shows under the button, and the
    video is saved as `test-recording.mkv` in the output folder. Watch it to check the picture and
-   sound. **Finish** installs the background service and shows the tray icon at every login.
+   sound. **Finish** sets up the recorder service; it records while the app is open.
 
 Everything else (clips and storage, Discord messages, the recorder command, logs) is in
 Settings later, on pages down the left. A line under a field says when something's wrong with
@@ -155,8 +158,15 @@ linux-wow-recorder setup
 
 It asks for the two folders, what to record, which sound (only WoW's, the default; all desktop
 sound; or none) and whether to add your microphone, and Discord or
-Fluxer webhooks (optional). Then it offers a 5-second test recording and to install the background
-service. Everything else is in the config file (see the [reference](reference.md#config-file)).
+Fluxer webhooks (optional). Then it offers a 5-second test recording. Everything else is in the
+config file (see the [reference](reference.md#config-file)).
+
+> **Its last question starts the recorder at every login.** Without the desktop app, the
+> recorder is a background service (a systemd user service: it runs as you, never as root) that
+> starts every time you log in and records whenever WoW runs, until you remove it with
+> `linux-wow-recorder uninstall-service`. Answer no to start it yourself instead:
+> `linux-wow-recorder run` in a terminal while you play (Ctrl+C stops it and saves the
+> recording).
 
 ### What to record
 
@@ -200,10 +210,18 @@ keystone upgrade ("Timed +2") and the time left or over.
 
 ### The window and the tray icon (desktop app)
 
-Opening the app shows its window, with its icon on the taskbar. Closing the window doesn't quit:
-the app stays in the tray (it tells you the first time), and recording carries on either way.
-Open it from the menu again, or left-click the tray icon, to get the window back. At login only
-the tray icon starts. To close the app completely, use **Quit** in the tray menu.
+Opening the app shows its window, with its icon on the taskbar, and starts the recorder.
+Closing the window doesn't quit: the app stays in the tray (it tells you the first time), and
+keeps recording. Open it from the menu again, or left-click the tray icon, to get the window
+back. To stop, use **Quit and stop recording** in the tray menu.
+
+**Nothing starts at login** unless you choose it, in Settings > Advanced:
+
+- **Record from every login, without opening this app**: the recorder service starts at login
+  by itself, and keeps recording after the app is closed. It runs as you (a systemd user
+  service in `~/.config/systemd/user/`), never as root, and stops when you log out.
+- **Show the tray icon at login**: the tray icon starts at login (only the icon, not the
+  window), and with it the recorder.
 
 | Icon | Means |
 |---|---|
@@ -224,10 +242,9 @@ the tray icon starts. To close the app completely, use **Quit** in the tray menu
 
 You also get a desktop notification when clips are ready or something goes wrong.
 
-Closing the tray icon doesn't stop the recording: the service does the recording, not the
-icon: **Hide tray icon (keeps recording)** does just that. To stop both, use **Quit and stop
-recording**. If the service is set
-to start at login, it comes back at the next login; untick that in Settings to stop it for good.
+**Quit and stop recording** stops both (it asks first while WoW is being recorded; the recording
+so far is saved). When the recorder is set to start at login, the menu also has **Hide tray
+icon (keeps recording)**, and the recorder comes back at the next login.
 
 On GNOME, tray icons need the
 [AppIndicator and KStatusNotifierItem Support](https://extensions.gnome.org/extension/615/appindicator-support/)

@@ -1,4 +1,5 @@
-"""Installs the app as a systemd user service, so it runs whenever the user is logged in."""
+"""Installs the app as a systemd user service (no root: it lives in ~/.config and stops at
+logout). It runs while the desktop app is open, or from every login if the user wants that."""
 
 import os
 import shutil
@@ -47,15 +48,29 @@ def _systemctl(*args: str) -> subprocess.CompletedProcess:
     return subprocess.run(["systemctl", "--user", *args], capture_output=True, text=True)
 
 
-def install():
+def install(at_login: bool = True, restart: bool = True):
+    """Writes the unit, starts it at every login or not, and (re)starts it now."""
     UNIT_FILE.parent.mkdir(parents=True, exist_ok=True)
     UNIT_FILE.write_text(unit_text())
     _systemctl("daemon-reload")
     # restart, not start: if it's already running, it picks up the new config or version.
-    for action in ("enable", "restart"):
+    for action in ("enable" if at_login else "disable", *(["restart"] if restart else [])):
         result = _systemctl(action, UNIT_NAME)
         if result.returncode != 0:
             raise RuntimeError(result.stderr.strip())
+
+
+def at_login() -> bool:
+    """Whether it starts at every login (enabled), without running systemctl: `systemctl
+    enable` links the unit into default.target.wants."""
+    return (UNIT_FILE.parent / "default.target.wants" / UNIT_NAME).exists()
+
+
+def start():
+    """Starts it now, for this session only (the desktop app opening)."""
+    result = _systemctl("start", UNIT_NAME)
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip())
 
 
 def uninstall():

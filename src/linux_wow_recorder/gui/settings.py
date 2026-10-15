@@ -563,12 +563,16 @@ class SettingsWindow(QDialog):
 
     def service_part(self) -> QWidget:
         self.service_state = _hint()
-        self.service_at_login = QCheckBox("Record at every login (systemd user service)")
-        self.service_at_login.setChecked(self.first_run or self.service_now != "not installed")
+        # Both off at first: nothing runs until the app is opened.
+        self.service_at_login = QCheckBox("Record from every login, without opening this app")
+        self.service_at_login.setChecked(not self.first_run and service.at_login())
         self.tray_at_login = QCheckBox("Show the tray icon at login")
-        self.tray_at_login.setChecked(self.first_run or desktop.autostart_enabled())
+        self.tray_at_login.setChecked(not self.first_run and desktop.autostart_enabled())
         self.update_service_state()
-        return _section(self.service_state, self.service_at_login, self.tray_at_login)
+        return _section(self.service_state, self.service_at_login,
+                        _hint("Otherwise it records while this app is open. It runs as you "
+                              "(a systemd user service), never as root."),
+                        self.tray_at_login)
 
     def logging_part(self) -> QWidget:
         self.detailed = QCheckBox("Detailed logging (for tracking down a problem)")
@@ -900,10 +904,8 @@ class SettingsWindow(QDialog):
         return a != b
 
     def needs_restart(self, data: dict | None = None) -> bool:
-        """Saving restarts the service if it's to run and the config changed, or starts it if
-        it isn't running. The two login checkboxes alone don't."""
-        if not self.service_at_login.isChecked():
-            return False
+        """Saving restarts the service if the config changed, or starts it if it isn't running
+        (the app is open, so it records). The two login checkboxes alone don't."""
         running = self.service_now in ("active", "activating")
         return self.service_changed(data) or not running
 
@@ -954,17 +956,15 @@ class SettingsWindow(QDialog):
             return
         self.saved_data = copy.deepcopy(self.data)
         try:
-            if self.service_at_login.isChecked():
-                if restart:
-                    service.install()   # (re)writes the unit and restarts it with the new config
-            elif self.service_now != "not installed":
-                service.uninstall()
+            # (Re)writes the unit, starts it at login or not, and restarts it with the new config.
+            service.install(at_login=self.service_at_login.isChecked(), restart=restart)
         except RuntimeError as e:
             QMessageBox.warning(self, APP_TITLE, f"Saved, but the service didn't start: {e}")
         if self.tray_at_login.isChecked():
             desktop.install_autostart()
         else:
             desktop.remove_autostart()
+            desktop.install_menu_entry()   # to open it again (a uv install has no other)
         if self.on_saved:
             self.on_saved()
         self.accept()
