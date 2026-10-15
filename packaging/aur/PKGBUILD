@@ -12,7 +12,7 @@ depends=('python' 'pyside6' 'qt6-multimedia' 'gpu-screen-recorder' 'ffmpeg' 'gre
 makedepends=('python-build' 'python-installer' 'python-hatchling')
 checkdepends=('python-pytest')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/$pkgver.tar.gz")
-sha256sums=('cc8e3ec3be5c87c85ee5e66f4af66670a452dc7c03603c36e16e2bb2426c95e0')
+sha256sums=('800fca97587b204104b72caae50e43933e7c32c752615d91dfbb059aa403699f')
 
 build() {
   cd "$pkgname-$pkgver"
