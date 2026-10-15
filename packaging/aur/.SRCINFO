@@ -18,6 +18,6 @@ pkgbase = linux-wow-recorder
 	depends = systemd
 	depends = hicolor-icon-theme
 	source = linux-wow-recorder-0.8.0.tar.gz::https://github.com/Visner-org/linux-wow-recorder/archive/refs/tags/0.8.0.tar.gz
-	sha256sums = 7714ead75262c2d868faaaa2682b800f014ad4326fa462dcad1b28851330c483
+	sha256sums = cc8e3ec3be5c87c85ee5e66f4af66670a452dc7c03603c36e16e2bb2426c95e0
 
 pkgname = linux-wow-recorder
