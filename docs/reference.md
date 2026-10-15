@@ -142,7 +142,8 @@ file take their defaults, and unknown ones are ignored.
 | `<output>/clips/` | the clips (`.mp4`), their details (`.json`) and pictures (`.jpg`) |
 
 Recordings are `.mkv`, which stays playable even if the recorder is killed. Clips are `.mp4`
-with faststart, so they play in browsers and web galleries before they're fully downloaded.
+with the index at the front (written once, in space kept for it), so they play in browsers and
+web galleries before they're fully downloaded.
 
 ## Logs
 

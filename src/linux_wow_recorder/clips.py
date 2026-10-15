@@ -211,6 +211,24 @@ def sidecar_for(run: Run, clip_start: float, length: float, recording: Path) -> 
     }
 
 
+# Room kept at the front of a clip for its index (moov): about 1 KB per second is used at 30 fps
+# with Opus audio, so this leaves plenty for 60 fps or more audio packets.
+MOOV_BYTES_PER_SECOND = 4096
+MOOV_BYTES_EXTRA = 1_000_000
+
+
+def cut_command(src: Path, offset: float, length: float, part: Path, faststart: bool) -> list[str]:
+    """ffmpeg copying length s from offset s into part, no re-encode. -ss before -i starts on
+    the keyframe before the run. The index goes at the front, so players and web galleries can
+    start the clip before it's fully loaded: written once into space kept for it (moov_size),
+    or with faststart, a second pass that rewrites the whole clip (twice the disk work)."""
+    index = (["-movflags", "+faststart"] if faststart
+             else ["-moov_size", str(int(MOOV_BYTES_EXTRA + MOOV_BYTES_PER_SECOND * length))])
+    return ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+            "-ss", f"{offset:.3f}", "-i", str(src), "-t", f"{length:.3f}",
+            "-map", "0:v", "-map", "0:a?", "-c", "copy", *index, "-f", "mp4", str(part)]
+
+
 def cut_clip(cfg: Config, src: Path, rec_start: float, rec_end: float, run: Run) -> Path | None:
     """Cuts run's clip out of src and writes its sidecar. None if ffmpeg failed."""
     offset, stop = clip_window(cfg, rec_start, rec_end, run)
@@ -218,15 +236,13 @@ def cut_clip(cfg: Config, src: Path, rec_start: float, rec_end: float, run: Run)
     out = cfg.clips_dir / clip_name(run, rec_start, rec_end)
     part = out.with_name(out.name + ".part")
     log.info(f"Cutting {out.name}")
-    # Stream copy, no re-encode. -ss before -i starts on the keyframe before the run, and
-    # faststart lets players and web galleries start the clip before it's fully loaded.
-    result = subprocess.run(
-        ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
-         "-ss", f"{offset:.3f}", "-i", str(src), "-t", f"{stop - offset:.3f}",
-         "-map", "0:v", "-map", "0:a?", "-c", "copy", "-movflags", "+faststart",
-         "-f", "mp4", str(part)],
-        capture_output=True, text=True, timeout=1800,
-    )
+    result = subprocess.run(cut_command(src, offset, stop - offset, part, faststart=False),
+                            capture_output=True, text=True, timeout=1800)
+    if result.returncode != 0:
+        # The index didn't fit the space kept for it (shouldn't happen): the slow way.
+        log.warning(f"Cutting {out.name} again with faststart:\n{result.stderr.strip()}")
+        result = subprocess.run(cut_command(src, offset, stop - offset, part, faststart=True),
+                                capture_output=True, text=True, timeout=1800)
     if result.returncode != 0:
         part.unlink(missing_ok=True)
         log.error(f"ffmpeg failed on {out.name}:\n{result.stderr}")

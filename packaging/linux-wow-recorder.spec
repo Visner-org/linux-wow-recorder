@@ -57,6 +57,9 @@ if [ "$1" -eq 0 ]; then
 fi
 
 %changelog
+* Wed Oct 14 2026 Linux WoW Recorder - 0.8.0-1
+- Cutting clips is much faster
+
 * Wed Oct 14 2026 Linux WoW Recorder - 0.7.0-1
 - Several clips at once: Ctrl+click or Shift+click in the clips window, then the trash can
   (or Delete) moves them all to the trash

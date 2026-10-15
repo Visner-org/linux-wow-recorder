@@ -68,7 +68,7 @@ And in WoW:
 ### Nobara or Fedora (RPM)
 
 ```bash
-sudo dnf install ./linux-wow-recorder-0.7.0-1.fc44.noarch.rpm
+sudo dnf install ./linux-wow-recorder-0.8.0-1.fc44.noarch.rpm
 ```
 
 dnf installs gpu-screen-recorder, ffmpeg and Qt from your distro's repos along with it. The app

@@ -68,6 +68,8 @@ def test_cuts_a_session_into_clips(tmp_path):
         ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(clip)],
         capture_output=True, text=True).stdout)
     assert 140 <= duration <= 150   # 120 s run, 10 s before, 15 s after, keyframe slack
+    head = clip.read_bytes()[:64]
+    assert head[4:8] == b"ftyp" and head[36:40] == b"moov"   # index first, for web players
     details = read_sidecar(clip)
     assert details["dungeon"] == "Mists of Tirna Scithe" and details["level"] == 7
     assert details["result"] == "completed" and details["keep"] is False
@@ -227,6 +229,39 @@ def test_a_cut_that_comes_out_short_fails_and_is_retried(tmp_path, monkeypatch, 
     assert list(cfg.clips_dir.iterdir()) == []         # no short clip, no .part left
     assert rec.exists()                                # stays in sessions/ for next time
     assert "came out short (1133 s of 1691 s)" in caplog.text
+
+
+def test_a_cut_whose_index_doesnt_fit_is_cut_again_with_faststart(tmp_path, monkeypatch, caplog):
+    from linux_wow_recorder import clips
+    cfg = make_cfg(tmp_path)
+    cfg.sessions_dir.mkdir()
+    rec = cfg.sessions_dir / "2026-10-12_14-07-45.mkv"
+    rec.write_bytes(b"\0" * 2_000_000)
+    end = 1_800_000_000.0
+    start = end - 2557
+    monkeypatch.setattr(clips, "recording_span", lambda path: (start, end))
+    run = Run("Temple of Sethraliss", start + 415, start + 2081, "+10 Completed", 1666.7,
+              level=10, result="completed")
+    monkeypatch.setattr(clips, "combat_logs_between", lambda *a: [tmp_path / "log.txt"])
+    monkeypatch.setattr(clips, "read_log_events", lambda logs: [])
+    monkeypatch.setattr(clips, "find_runs", lambda events, minutes, raids: [run])
+    calls = []
+
+    def ffmpeg(cmd, **kw):
+        calls.append(cmd)
+        if "-moov_size" in cmd:
+            return subprocess.CompletedProcess(cmd, 234, "", "reserved_moov_size is too small")
+        Path(cmd[-1]).write_bytes(b"clip")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+    monkeypatch.setattr(clips.subprocess, "run", ffmpeg)
+    monkeypatch.setattr(clips, "media_length", lambda path: 1691.0)
+    monkeypatch.setattr(clips, "make_thumbnail", lambda clip, details: None)
+
+    [result] = process_pending(cfg)
+    assert result.problem is None and len(result.clips) == 1
+    assert ["-moov_size" in c for c in calls] == [True, False]
+    assert "+faststart" in calls[1]
+    assert "again with faststart" in caplog.text
 
 
 def test_cleanup_takes_a_full_recordings_details_and_picture_and_skips_kept_ones(tmp_path):
