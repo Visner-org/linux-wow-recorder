@@ -271,6 +271,25 @@ def test_saving_restarts_the_service_only_when_the_config_changed(qtbot, cfg, fa
     assert config.load().other_clip_dirs == [cfg.output_dir]   # saved all the same
 
 
+def test_switching_to_a_picked_window_asks_again(qtbot, cfg, fake_recorder, monkeypatch):
+    data = config.load_raw()
+    data["recorder"]["capture"] = "DP-2"
+    config.save(data)
+    monkeypatch.setattr(service, "state", lambda: "active")
+    monkeypatch.setattr(service, "install", lambda at_login=True, restart=True: None)
+    monkeypatch.setattr(settings.desktop, "install_autostart", lambda: None)
+    monkeypatch.setattr(settings.desktop, "remove_autostart", lambda: None)
+    forgotten = []
+    monkeypatch.setattr(settings.recorder, "forget_pick", lambda: forgotten.append(1))
+    w = settings.SettingsWindow()
+    qtbot.addWidget(w)
+    w.save()                                   # still a monitor: the old pick stays
+    assert forgotten == []
+    w.capture.setCurrentIndex(w.capture.findData("portal"))
+    w.save()
+    assert forgotten == [1] and config.load().capture == "portal"
+
+
 def test_a_problem_marks_its_page(qtbot, cfg, fake_recorder):
     w = settings.SettingsWindow()
     qtbot.addWidget(w)

@@ -19,7 +19,8 @@ from PySide6.QtWidgets import (QAbstractButton, QApplication, QButtonGroup, QChe
                                QScrollArea, QSizePolicy, QSpinBox, QStackedWidget, QVBoxLayout,
                                QWidget)
 
-from .. import APP_TITLE, REPO_URL, __version__, config, logs, service, state, uninstall, updates
+from .. import (APP_TITLE, REPO_URL, __version__, config, logs, recorder, service, state,
+                uninstall, updates)
 from ..cli import find_recorder_command
 from ..config import CONFIG_FILE, MAX_WEBHOOKS, NOTIFY_EVENTS, ConfigError
 from ..notify import Notifier
@@ -954,6 +955,9 @@ class SettingsWindow(QDialog):
             return
         if self.changed(data) and not self.write():
             return
+        if data["recorder"]["capture"] == "portal" and (
+                self.saved_data is None or self.saved_data["recorder"]["capture"] != "portal"):
+            recorder.forget_pick()   # an old pick would be reused without asking
         self.saved_data = copy.deepcopy(self.data)
         try:
             # (Re)writes the unit, starts it at login or not, and restarts it with the new config.

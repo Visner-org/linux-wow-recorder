@@ -73,7 +73,7 @@ DEFAULTS = {
         "command": "gpu-screen-recorder",
         "capture": "portal",
         "monitor": "",
-        "fps": 60,
+        "fps": 30,
         "quality": "",
         "audio": [WOW_SOUND],
         "extra_args": [],

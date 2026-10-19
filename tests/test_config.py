@@ -26,7 +26,7 @@ def test_missing_keys_get_defaults(tmp_path):
     path = tmp_path / "config.toml"
     path.write_text('[paths]\noutput_dir = "/tmp"\n[discord.notify]\nno_runs = true\n')
     cfg = config.load(path)
-    assert cfg.fps == 60
+    assert cfg.fps == 30
     assert cfg.notify["no_runs"] is True and cfg.notify["clips_ready"] is True
 
 

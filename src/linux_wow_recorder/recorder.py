@@ -80,6 +80,14 @@ def _signal_group(pid: int, sig: int):
         pass
 
 
+def forget_pick():
+    """Forgets the window (or screen) picked in the screen-share dialog, so the next start
+    asks again."""
+    for token in RESTORE_TOKENS:
+        with contextlib.suppress(OSError):
+            token.unlink(missing_ok=True)
+
+
 class Recorder:
     def __init__(self, cfg: Config):
         self.cfg = cfg
@@ -162,11 +170,7 @@ class Recorder:
         return not self._streaming
 
     def forget_pick(self):
-        """Forgets the window (or screen) picked in the screen-share dialog, so the next start
-        asks again."""
-        for token in RESTORE_TOKENS:
-            with contextlib.suppress(OSError):
-                token.unlink(missing_ok=True)
+        forget_pick()
 
     def is_running(self) -> bool:
         if self.proc is not None:

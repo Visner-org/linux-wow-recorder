@@ -10,7 +10,8 @@ check for a new version on GitHub if you turn that on. See [Privacy](#privacy).
 
 ![The clip browser: Mythic+ clips with their results, and a run's timeline of boss pulls, deaths and lusts](docs/screenshot.png)
 
-**New in 0.8.3:** nothing starts at login unless you choose it: the recorder runs while the app
+**New in 0.8.4:** switching Settings to a window you pick opens the screen-share dialog again.
+**0.8.3:** nothing starts at login unless you choose it: the recorder runs while the app
 is open. **0.8.2:** completed keys say **Timed** (with the keystone upgrade, "Timed +2") or
 **Over time**, and Settings can hide the parts of the clip browser you don't use. **0.8.0** brought
 cutting about twice as fast, **Hide chat** (a copy of a clip with a black box over your chat), an
@@ -157,7 +158,7 @@ an issue.
 Download the `.rpm` from [Releases](../../releases), then:
 
 ```bash
-sudo dnf install ./linux-wow-recorder-0.8.3-1.fc44.noarch.rpm
+sudo dnf install ./linux-wow-recorder-0.8.4-1.fc44.noarch.rpm
 ```
 
 dnf brings in gpu-screen-recorder, ffmpeg and Qt. Open **Linux WoW Recorder** from the app

@@ -57,6 +57,10 @@ if [ "$1" -eq 0 ]; then
 fi
 
 %changelog
+* Mon Oct 19 2026 Linux WoW Recorder - 0.8.4-1
+- Switching "What to record" to a window you pick opens the screen-share dialog again
+- New installs record at 30 fps
+
 * Thu Oct 15 2026 Linux WoW Recorder - 0.8.3-1
 - Nothing starts at login by default: the recorder runs while the app is open; Settings >
   Advanced can start it at every login

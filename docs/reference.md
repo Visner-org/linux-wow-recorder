@@ -55,7 +55,7 @@ file take their defaults, and unknown ones are ignored.
 | `command` | `"gpu-screen-recorder"` | the recorder. For the Flatpak: `"flatpak run --command=gpu-screen-recorder com.dec05eba.gpu_screen_recorder"` |
 | `capture` | `"portal"` | `"portal"`, a monitor name from `gpu-screen-recorder --list-capture-options`, or `"screen"`: the first monitor in that list, not necessarily your main one |
 | `monitor` | `""` | what **Record monitor instead** switches a session to while `capture` is `"portal"`: a monitor name, or `""` for `"screen"` |
-| `fps` | `60` | |
+| `fps` | `30` | |
 | `quality` | `""` | `"medium"`, `"high"`, `"very_high"` or `"ultra"`; empty uses gpu-screen-recorder's default |
 | `audio` | `["wow"]` | one track per entry: `"wow"` is only WoW's own sound, `"default_output"` all desktop sound (WoW, Discord, music...), `"default_input"` the microphone; `"wow\|default_input"` mixes two into one track. `[]` records no sound. Anything else goes to gpu-screen-recorder's `-a` as it is, e.g. `"app:discord"`. |
 | `extra_args` | `[]` | passed to gpu-screen-recorder as they are, e.g. `["-k", "hevc"]` |
