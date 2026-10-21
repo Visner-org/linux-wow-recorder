@@ -57,6 +57,10 @@ if [ "$1" -eq 0 ]; then
 fi
 
 %changelog
+* Tue Oct 20 2026 Linux WoW Recorder - 0.8.5-1
+- Bug fixes: a pause lasts through a Settings save, Cut now can't clash with the service or
+  get stuck, an update waits for work in progress, rate-limited webhook messages are resent
+
 * Mon Oct 19 2026 Linux WoW Recorder - 0.8.4-1
 - Switching "What to record" to a window you pick opens the screen-share dialog again
 - New installs record at 30 fps

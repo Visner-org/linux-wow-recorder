@@ -3,7 +3,7 @@
 import html
 import os
 import shlex
-import subprocess
+import shutil
 import tempfile
 import time
 from pathlib import Path
@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QButtonGroup, QFrame, QGroupBo
                                QStyledItemDelegate, QStyleOptionViewItem, QToolButton, QTreeWidget,
                                QTreeWidgetItem, QVBoxLayout, QWidget)
 
-from .. import APP_TITLE, __version__, config, hidechat, live, service, state
+from .. import APP_NAME, APP_TITLE, __version__, config, hidechat, live, service, state
 from ..clips import (media_length, read_sidecar, set_keep, sidecar_path, thumbnail_command,
                      thumbnail_path, thumbnail_time, write_sidecar)
 from ..config import CONFIG_DIR
@@ -221,6 +221,7 @@ class ClipBrowser(QWidget):
         self.shown = 0   # clips in the list, after the filters and search
         self.hook_process = None
         self.chat_job = None   # the copy with the chat hidden being made
+        self.frame_process: QProcess | None = None   # the frame the chat box is drawn on
         try:
             self.cfg = config.load()
         except ConfigError as e:
@@ -1161,23 +1162,38 @@ class ClipBrowser(QWidget):
         QMessageBox.information(self, APP_TITLE, "Description copied. Drag the clip onto the "
                                 "YouTube page, then paste the description.")
 
+    def busy(self) -> bool:
+        """True while a copy with the chat hidden, or an after_clips command, is being made."""
+        return bool(self.chat_job or self.frame_process or self.hook_process)
+
     def hide_chat(self):
         """Asks where the chat is on a frame of the clip, then makes a copy with a black box
-        there, in the background."""
+        there, in the background. The frame is read in the background too (a slow drive)."""
         clip = self.current
-        if clip is None or self.chat_job or not self.cfg:
+        if clip is None or self.chat_job or self.frame_process or not self.cfg:
             return
         self.player.pause()
         at = (self.player.position() / 1000 if self.player.position() > 0
               else thumbnail_time(clip.details))
-        with tempfile.TemporaryDirectory() as tmp:
-            frame_file = Path(tmp) / "frame.jpg"
-            try:
-                subprocess.run(hidechat.frame_command(clip.path, at, frame_file),
-                               capture_output=True, timeout=60)
-            except (OSError, subprocess.TimeoutExpired):
-                pass
-            frame = QPixmap(str(frame_file))
+        tmp = Path(tempfile.mkdtemp(prefix=f"{APP_NAME}-"))
+        frame_file = tmp / "frame.jpg"
+        cmd = hidechat.frame_command(clip.path, at, frame_file)
+        process = self.frame_process = QProcess(self)
+        process.finished.connect(lambda *_: self.hide_chat_frame(process, clip, tmp))
+        process.errorOccurred.connect(lambda e: e == QProcess.FailedToStart
+                                      and self.hide_chat_frame(process, clip, tmp))
+        self.hide_chat_button.setEnabled(False)
+        process.start(cmd[0], cmd[1:])
+        QTimer.singleShot(60_000, process, process.kill)   # a drive that stopped answering
+
+    def hide_chat_frame(self, process: QProcess, clip: model.ClipInfo, tmp: Path):
+        if self.frame_process is not process:
+            return   # errorOccurred and finished both came
+        self.frame_process = None
+        process.deleteLater()
+        frame = QPixmap(str(tmp / "frame.jpg"))
+        shutil.rmtree(tmp, ignore_errors=True)
+        self.hide_chat_button.setEnabled(True)
         if frame.isNull():
             QMessageBox.warning(self, APP_TITLE, "Couldn't read a picture from this clip.")
             return

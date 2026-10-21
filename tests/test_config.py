@@ -1,5 +1,8 @@
+import stat
 import tomllib
 from pathlib import Path
+
+import pytest
 
 from linux_wow_recorder import config
 
@@ -98,3 +101,21 @@ def test_clips_window_parts_are_on_unless_turned_off(tmp_path):
     assert "youtube = false" in path.read_text()
     assert config.load(path).clips_window["youtube"] is False
     assert config.load(path).clips_window["full_sessions"] is True
+
+
+def test_saved_config_is_private_from_the_start(tmp_path):
+    path = tmp_path / "config.toml"
+    path.with_suffix(".tmp").write_text("left over")
+    config.save(config.load_raw(tmp_path / "missing.toml"), path)
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert not path.with_suffix(".tmp").exists()
+
+
+@pytest.mark.parametrize("section, key, value", [
+    ("recorder", "fps", 0), ("storage", "session_retention_days", -1),
+    ("storage", "stop_below_gb", -5), ("clips", "pad_before", -10)])
+def test_values_below_their_minimum_are_config_errors(tmp_path, section, key, value):
+    data = config.load_raw(tmp_path / "missing.toml")
+    data[section][key] = value
+    with pytest.raises(config.ConfigError, match=key):
+        config.from_dict(data)

@@ -36,3 +36,35 @@ def test_background_send_returns_at_once_and_keeps_the_order(tmp_path, monkeypat
     n.flush(timeout=5)
     assert posted == [("https://a/1", "one"), ("https://a/2", "one"),
                       ("https://a/1", "two"), ("https://a/2", "two")]
+
+
+def test_a_rate_limited_message_is_sent_once_more(monkeypatch):
+    import email.message
+    import urllib.error
+
+    tries, waits = [], []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def urlopen(req, timeout):
+        tries.append(1)
+        if len(tries) == 1:
+            headers = email.message.Message()
+            headers["Retry-After"] = "2.5"
+            raise urllib.error.HTTPError(req.full_url, 429, "Too Many Requests", headers, None)
+        return Response()
+    monkeypatch.setattr(notify.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(notify.time, "sleep", waits.append)
+    assert notify.post("https://a/1", "hi") and len(tries) == 2 and waits == [2.5]
+
+    def always_429(req, timeout):
+        tries.append(1)
+        raise urllib.error.HTTPError(req.full_url, 429, "Too Many Requests", None, None)
+    tries.clear()
+    monkeypatch.setattr(notify.urllib.request, "urlopen", always_429)
+    assert not notify.post("https://a/1", "hi") and len(tries) == 2   # once more, no more

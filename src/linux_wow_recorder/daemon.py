@@ -15,7 +15,7 @@ from . import APP_TITLE, __version__, logs, service, state
 from .clips import (SessionResult, cleanup, free_gb, new_recording_path, process_pending,
                     stale_recordings)
 from .config import WOW_SOUND, Config
-from .detect import find_wow, find_wow_process
+from .detect import find_wow, find_wow_process, wow_alive
 from .notify import Notifier
 from .recorder import WOW_SOUND_NAME, Recorder
 
@@ -182,8 +182,9 @@ class Daemon:
             return False
         with self._lock:
             busy = self.session is not None or self._cutter is not None
-        self._hooks = [t for t in self._hooks if t.is_alive()]
-        if busy or self._hooks:
+            self._hooks = [t for t in self._hooks if t.is_alive()]
+            busy = busy or bool(self._hooks)
+        if busy:
             if self._update_waiting != found:
                 self._update_waiting = found
                 log.info(f"Version {found} was installed; restarting into it once WoW is closed "
@@ -208,13 +209,22 @@ class Daemon:
 
     def start_session(self, flavor: str, exe: str | None = None, pid: int | None = None):
         log.info(f"WoW {flavor} ({exe}) started; recording.")
-        state.clear_requests()   # a pause was for the session before
         with self._lock:
-            self.session = Session(flavor, start=time.time(), pid=pid)
+            self.session = s = Session(flavor, start=time.time(), pid=pid)
+        # Requests for this same WoW from before the service restarted (a Settings save, say)
+        # still hold; any others were for the session before.
+        state.carry_requests(s.start, pid)
         self.recorder.game_exe = exe
         self.recorder.capture = None   # "Record monitor instead" was for the session before
-        self.status.update(flavor=flavor, session_start=self.session.start, problem=None,
+        self.status.update(flavor=flavor, session_start=s.start, wow_pid=pid, problem=None,
                            monitor_switch=False)
+        s.repicked = state.repick_requested(s.start)   # already done by the run before
+        if self.check_pause():
+            return
+        if state.monitor_requested(s.start):
+            s.monitor = True
+            self.recorder.capture = self.cfg.monitor or "screen"
+            self.status.update(monitor_switch=True)
         self.start_recording()
         if self.recorder.is_running():
             self.notifier.send("session_started", f"🔴 WoW {flavor} started; recording.")
@@ -339,6 +349,9 @@ class Daemon:
         window, records its last frame. The recording so far is kept; a new one starts once
         WoW is back. True while waiting for that."""
         s = self.session
+        if pid is not None and s.pid is not None and pid != s.pid and wow_alive(s.pid):
+            # Another process naming WoW's .exe (a launcher's) was found first: the same WoW.
+            s.pid = pid
         restarted = pid is not None and s.pid is not None and pid != s.pid
         if s.lost_at:
             waited = time.time() - s.lost_at
@@ -440,7 +453,7 @@ class Daemon:
             hours, rest = divmod(int(length), 3600)
             self.notifier.send("session_ended", f"⏹️ WoW closed after {hours}h{rest // 60:02d}m; "
                                                 "the recording is saved. Cutting clips...")
-        self.status.update(state=state.WAITING, flavor=None, session_start=None,
+        self.status.update(state=state.WAITING, flavor=None, session_start=None, wow_pid=None,
                            recording_file=None, problem=None, picking=False, capture=None,
                            monitor_switch=False, free_gb=self._free())
         self.start_cutting()
@@ -498,7 +511,8 @@ class Daemon:
             # In the background: an upload can take hours, and WoW may be started again
             # meanwhile. Retention can't touch the new clips, so cleanup can go ahead.
             hook = threading.Thread(target=self.run_hook, args=(clips,), daemon=True)
-            self._hooks.append(hook)   # a restart for an update waits for it
+            with self._lock:
+                self._hooks.append(hook)   # a restart for an update waits for it
             hook.start()
         deleted = cleanup(self.cfg)
         if deleted:

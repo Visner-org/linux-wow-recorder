@@ -5,6 +5,7 @@ import logging
 import queue
 import threading
 import time
+import urllib.error
 import urllib.request
 
 from . import APP_TITLE, __version__
@@ -13,8 +14,24 @@ from .config import Config
 log = logging.getLogger(__name__)
 
 
+# How long a rate-limited message (HTTP 429) waits to be sent again, at most; once.
+MAX_RETRY_WAIT = 10
+
+
+def _retry_after(e: urllib.error.HTTPError) -> float | None:
+    """Seconds to wait before sending again, if the webhook said it's rate limited."""
+    if e.code != 429:
+        return None
+    try:
+        wait = float((e.headers or {}).get("Retry-After") or 1)
+    except ValueError:
+        wait = 1.0
+    return min(max(wait, 0.0), MAX_RETRY_WAIT)
+
+
 def post(url: str, message: str, label: str = "Webhook") -> bool:
-    """Posts one message to one webhook. True if it was accepted."""
+    """Posts one message to one webhook. True if it was accepted. Rate limited, it's sent
+    once more after the wait the webhook asks for."""
     content = f"🎥 **{APP_TITLE}**\n{message}"
     if len(content) > 2000:   # Discord's limit
         content = content[:1990] + "\n…"
@@ -24,12 +41,21 @@ def post(url: str, message: str, label: str = "Webhook") -> bool:
         headers={"Content-Type": "application/json",
                  "User-Agent": f"linux-wow-recorder/{__version__}"},
     )
-    try:
-        with urllib.request.urlopen(req, timeout=10):
-            return True
-    except Exception as e:
-        log.warning(f"{label} message failed: {e}")   # not the URL: it's a secret
-        return False
+    for attempt in (1, 2):
+        try:
+            with urllib.request.urlopen(req, timeout=10):
+                return True
+        except urllib.error.HTTPError as e:
+            wait = _retry_after(e) if attempt == 1 else None
+            if wait is None:
+                log.warning(f"{label} message failed: {e}")   # not the URL: it's a secret
+                return False
+            log.info(f"{label} is rate limited; sending again in {wait:.0f} s.")
+            time.sleep(wait)
+        except Exception as e:
+            log.warning(f"{label} message failed: {e}")
+            return False
+    return False
 
 
 class Notifier:

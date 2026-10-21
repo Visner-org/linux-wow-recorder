@@ -98,6 +98,7 @@ def make(tmp_path, monkeypatch):
         monkeypatch.setattr(daemon, "free_gb", lambda cfg: disk.free)
         monkeypatch.setattr(daemon, "cleanup", lambda cfg: 0)
         monkeypatch.setattr(daemon, "stale_recordings", lambda cfg: stale)
+        monkeypatch.setattr(daemon, "wow_alive", lambda pid: False)
         d = daemon.Daemon(cfg)
         d.recorder = FakeRecorder(cfg, works)
         d.notifier = FakeNotifier()
@@ -600,3 +601,37 @@ def test_raid_pulls_are_one_line_per_raid_in_discord():
     assert daemon.raid_summary(pulls) == [
         "• Liberation of Undermine (Heroic): 3 pulls, kills: Vexie",
         "• Liberation of Undermine (LFR): 1 pull, no kills"]
+
+
+def test_a_pause_outlives_a_service_restart_while_wow_runs(make):
+    d, _, _ = make()
+    d.start_session("Retail", "Wow.exe", pid=100)
+    assert state.request_pause(True) is None
+    d.check_session(100)
+    assert d.status.data["state"] == state.PAUSED
+    d, _, _ = make()                           # the service restarted (a Settings save)
+    d.start_session("Retail", "Wow.exe", pid=100)
+    assert d.recorder.starts == 0 and d.status.data["state"] == state.PAUSED
+    d.end_session()
+    d.start_session("Retail", "Wow.exe", pid=200)   # WoW started again: recording
+    assert d.recorder.running
+
+
+def test_a_pause_for_another_wow_is_dropped_on_restart(make):
+    d, _, _ = make()
+    d.start_session("Retail", "Wow.exe", pid=100)
+    assert state.request_pause(True) is None
+    d, _, _ = make()
+    d.start_session("Retail", "Wow.exe", pid=300)   # WoW closed and came back meanwhile
+    assert d.recorder.running and d.status.data["state"] == state.RECORDING
+
+
+def test_a_launcher_process_found_first_isnt_a_wow_restart(make, monkeypatch):
+    d, _, _ = make()
+    d.start_session("Retail", "Wow.exe", pid=100)
+    monkeypatch.setattr(daemon, "wow_alive", lambda pid: pid == 100)
+    d.check_session(300)                        # the old process still runs: same WoW
+    assert d.recorder.starts == 1 and d.session.pid == 300
+    monkeypatch.setattr(daemon, "wow_alive", lambda pid: False)
+    d.check_session(300)
+    assert d.recorder.starts == 1

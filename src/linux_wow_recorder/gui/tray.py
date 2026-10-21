@@ -7,8 +7,8 @@ import sys
 import time
 from pathlib import Path
 
-from PySide6.QtCore import (SLOT, QDeadlineTimer, QLineF, QLockFile, QObject, QRectF, QSettings,
-                            Qt, QThread, QTimer, QUrl, Slot)
+from PySide6.QtCore import (SLOT, QDeadlineTimer, QLineF, QLockFile, QObject, QProcess, QRectF,
+                            QSettings, Qt, QThread, QTimer, QUrl, Slot)
 from PySide6.QtDBus import QDBusConnection, QDBusInterface, QDBusMessage
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtGui import (QAction, QColor, QDesktopServices, QGuiApplication, QIcon, QPainter,
@@ -297,12 +297,15 @@ class Tray:
 
     def check_update(self):
         """Restarts into a newly installed version, but only while none of the app's windows
-        are open, so nobody's clip or settings vanish under them."""
+        are open and nothing runs in the background (a cut, a copy with the chat hidden, an
+        after_clips command), so nobody's clip or settings vanish under them."""
         found = self.updates.check()
         if not found or self.restart is None:
             return
         windows = (self.clips_window, self.settings_window, self.log_window)
-        if any(w is not None and w.isVisible() for w in windows):
+        if self.process is not None or any(
+                w is not None and (w.isVisible() or getattr(w, "busy", lambda: False)())
+                for w in windows):
             return   # checked again in a minute
         logging.getLogger(APP_NAME).info(f"Version {found} was installed; restarting into it.")
         self.restart()
@@ -405,22 +408,27 @@ class Tray:
             self.show_window()
 
     def cut_now(self):
-        self.process = subprocess.Popen([sys.executable, "-m", "linux_wow_recorder", "process"],
-                                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        # QProcess keeps the output in memory as it comes: a pipe read only at the end could
+        # fill up with log lines and stall the command.
+        process = self.process = QProcess()
+        process.setProcessChannelMode(QProcess.MergedChannels)
+        process.finished.connect(lambda *_: self._process_done(process))
+        process.errorOccurred.connect(lambda e: e == QProcess.FailedToStart
+                                      and self._process_done(process))
+        process.start(sys.executable, ["-m", "linux_wow_recorder", "process"])
         self.cut_action.setEnabled(False)
         self.tray.showMessage(APP_TITLE, "Cutting the waiting recordings...", self.icons[model.PROCESSING])
-        self.process_timer = QTimer()
-        self.process_timer.timeout.connect(self._check_process)
-        self.process_timer.start(1000)
 
-    def _check_process(self):
-        if self.process.poll() is None:
-            return
-        self.process_timer.stop()
-        output = self.process.stdout.read().strip()
-        ok = self.process.returncode == 0
+    def _process_done(self, process: QProcess):
+        if self.process is not process:
+            return   # errorOccurred and finished both came
         self.process = None
-        self.tray.showMessage(APP_TITLE, output.splitlines()[-1] if output else "Done.",
+        output = bytes(process.readAll()).decode(errors="replace")
+        lines = [l for l in output.splitlines() if l.strip() and not logs.is_log_line(l)]
+        ok = (process.exitStatus() == QProcess.NormalExit and process.exitCode() == 0
+              and process.error() != QProcess.FailedToStart)
+        process.deleteLater()
+        self.tray.showMessage(APP_TITLE, lines[-1] if lines else "Done." if ok else "Cutting failed.",
                               QSystemTrayIcon.Information if ok else QSystemTrayIcon.Warning)
         self.refresh(force=True)
 

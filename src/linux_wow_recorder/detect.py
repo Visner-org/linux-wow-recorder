@@ -52,19 +52,40 @@ def wow_flavor(args: list[str]) -> str | None:
     return found[0] if found else None
 
 
-def find_wow_process() -> tuple[str, str, int] | None:
-    """(flavor, .exe name, process ID) of the WoW client running now, or None."""
-    for pid_dir in Path("/proc").iterdir():
+def _args(pid_dir: Path) -> list[str] | None:
+    try:
+        raw = (pid_dir / "cmdline").read_bytes()
+    except OSError:
+        return None
+    return [a.decode(errors="replace") for a in raw.split(b"\0") if a]
+
+
+def find_wow_process(proc: Path = Path("/proc")) -> tuple[str, str, int] | None:
+    """(flavor, .exe name, process ID) of the WoW client running now, or None. The game itself
+    wins over a launcher's process that names its .exe too (umu-run, Proton's start.exe): Wine
+    makes the game's .exe its first argument."""
+    first = None
+    for pid_dir in proc.iterdir():
         if not pid_dir.name.isdigit():
             continue
-        try:
-            raw = (pid_dir / "cmdline").read_bytes()
-        except OSError:
+        args = _args(pid_dir)
+        found = wow_process(args) if args else None
+        if not found:
             continue
-        found = wow_process([a.decode(errors="replace") for a in raw.split(b"\0") if a])
-        if found:
+        if _WOW_EXE.search(args[0]):
             return (*found, int(pid_dir.name))
-    return None
+        first = first or (*found, int(pid_dir.name))
+    return first
+
+
+def wow_alive(pid: int, proc: Path = Path("/proc")) -> bool:
+    """True if pid is still a running WoW process (not gone, a zombie, or reused)."""
+    try:
+        stat = (proc / str(pid) / "stat").read_text()
+    except OSError:
+        return False
+    args = _args(proc / str(pid))
+    return stat.rpartition(")")[2].split()[:1] != ["Z"] and bool(args and wow_process(args))
 
 
 def find_wow() -> str | None:

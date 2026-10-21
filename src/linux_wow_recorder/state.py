@@ -39,6 +39,7 @@ class Status:
             "state": WAITING,
             "flavor": None,             # "Retail", "Classic", ... while WoW runs
             "session_start": None,      # Unix time WoW was found
+            "wow_pid": None,            # WoW's process, so requests outlive a service restart
             "recording_file": None,
             "free_gb": None,
             "problem": None,            # a short sentence while something is wrong
@@ -100,15 +101,39 @@ def _request(path: Path | None, status_path: Path | None, **asked) -> str | None
     if not status.get("session_start"):
         return "WoW isn't running."
     data = _requests(status["session_start"], path)
-    data.update(asked, session=status["session_start"], asked=time.time())
+    data.update(asked, session=status["session_start"], wow_pid=status.get("wow_pid"),
+                asked=time.time())
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_name(path.name + ".tmp")
-        tmp.write_text(json.dumps(data))
-        tmp.replace(path)
+        _write(path, data)
     except OSError as e:
         return f"Couldn't ask the service: {e}"
     return None
+
+
+def _write(path: Path, data: dict):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(data))
+    tmp.replace(path)
+
+
+def carry_requests(session_start: float, wow_pid: int | None, path: Path | None = None):
+    """Moves the requests made for this WoW process to the session that started at
+    session_start: the service restarted while WoW kept running (a Settings save), and a pause
+    must not end with it. Requests for any other WoW are cleared."""
+    path = path or CONTROL_FILE
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError):
+        data = None
+    if wow_pid is None or not isinstance(data, dict) or data.get("wow_pid") != wow_pid:
+        clear_requests(path)
+        return
+    data["session"] = session_start
+    try:
+        _write(path, data)
+    except OSError:
+        clear_requests(path)
 
 
 def _requests(session_start: float, path: Path | None = None) -> dict:

@@ -577,7 +577,8 @@ def test_hide_chat_makes_a_copy_with_a_black_box(qtbot, cfg, monkeypatch):
     monkeypatch.setattr(QMessageBox, "information", lambda *a: told.append(a[2]))
     assert w.hide_chat_button.isVisibleTo(w)
     w.hide_chat()
-    qtbot.waitUntil(lambda: w.chat_job is None, timeout=60_000)
+    qtbot.waitUntil(lambda: w.frame_process is None and w.chat_job is None and bool(shown),
+                    timeout=60_000)
     copy = cfg.clips_dir / "a (chat hidden).mp4"
     assert shown == [320] and copy.exists() and told
     assert not copy.with_name(copy.name + ".part").exists()

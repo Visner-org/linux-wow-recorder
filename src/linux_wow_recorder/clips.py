@@ -1,6 +1,7 @@
 """Cuts session recordings into one clip per dungeon run, and deletes old files."""
 
 import datetime
+import fcntl
 import json
 import logging
 import re
@@ -13,7 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .combatlog import Run, combat_logs_between, find_runs, read_log_events
-from .config import Config
+from .config import STATE_DIR, Config
 
 log = logging.getLogger(__name__)
 
@@ -21,6 +22,9 @@ log = logging.getLogger(__name__)
 MIN_RECORDING_BYTES = 1_000_000
 # Bumped when the sidecar's fields change in a way readers must know about.
 SIDECAR_VERSION = 1
+# Held while recordings are cut, so the service and `process` (the tray's "Cut now") never cut
+# the same recording at once.
+CUT_LOCK = STATE_DIR / "cutting.lock"
 _NAME_TIME = re.compile(r"(\d{4}-\d{2}-\d{2})[_ ](\d{2}-\d{2}-\d{2})")
 
 
@@ -340,10 +344,30 @@ def process_recording(cfg: Config, src: Path) -> SessionResult:
 
 
 def process_pending(cfg: Config, stop: threading.Event | None = None,
-                    in_use: Callable[[], Path | None] = lambda: None) -> list[SessionResult]:
+                    in_use: Callable[[], Path | None] = lambda: None,
+                    wait: bool = True) -> list[SessionResult] | None:
     """Cuts every waiting recording, oldest first. stop is checked between recordings (the
     rest wait for next time); in_use() names the recording being written now, which is
-    skipped."""
+    skipped. One program cuts at a time: if another is cutting, this waits for it (or for
+    stop), or with wait False returns None."""
+    CUT_LOCK.parent.mkdir(parents=True, exist_ok=True)
+    with open(CUT_LOCK, "a") as lock:
+        while True:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if not wait:
+                    return None
+                if stop is not None and stop.wait(1):
+                    return []
+                if stop is None:
+                    time.sleep(1)
+        return _process_all(cfg, stop, in_use)
+
+
+def _process_all(cfg: Config, stop: threading.Event | None,
+                 in_use: Callable[[], Path | None]) -> list[SessionResult]:
     results = []
     for src in pending_recordings(cfg):
         if stop is not None and stop.is_set():

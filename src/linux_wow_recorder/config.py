@@ -194,6 +194,12 @@ def _upgrade(data: dict) -> dict:
     return data
 
 
+def _at_least(value, low, name: str):
+    if value < low:
+        raise ConfigError(f"{name} = {value}; it can't be below {low}")
+    return value
+
+
 def from_dict(data: dict) -> Config:
     p, r, c, s, d = (data[k] for k in ("paths", "recorder", "clips", "storage", "discord"))
     try:
@@ -207,17 +213,18 @@ def from_dict(data: dict) -> Config:
             monitor=str(r["monitor"]).strip(),
             raids=_raids(c["raids"]),
             check_updates=bool(data["updates"]["check"]),
-            fps=int(r["fps"]),
+            fps=_at_least(int(r["fps"]), 1, "fps"),
             quality=str(r["quality"]).strip(),
             audio=_list(r["audio"]),
             extra_args=_list(r["extra_args"]),
-            pad_before=int(c["pad_before"]),
-            pad_after=int(c["pad_after"]),
-            min_run_minutes=int(c["min_run_minutes"]),
-            session_retention_days=int(s["session_retention_days"]),
-            clip_retention_days=int(s["clip_retention_days"]),
-            min_free_gb=float(s["min_free_gb"]),
-            stop_below_gb=float(s["stop_below_gb"]),
+            pad_before=_at_least(int(c["pad_before"]), 0, "pad_before"),
+            pad_after=_at_least(int(c["pad_after"]), 0, "pad_after"),
+            min_run_minutes=_at_least(int(c["min_run_minutes"]), 0, "min_run_minutes"),
+            session_retention_days=_at_least(int(s["session_retention_days"]), 0,
+                                             "session_retention_days"),
+            clip_retention_days=_at_least(int(s["clip_retention_days"]), 0, "clip_retention_days"),
+            min_free_gb=_at_least(float(s["min_free_gb"]), 0, "min_free_gb"),
+            stop_below_gb=_at_least(float(s["stop_below_gb"]), 0, "stop_below_gb"),
             webhook_urls=_webhooks(d["webhook_urls"]),
             notify={k: bool(v) for k, v in d["notify"].items()},
             after_clips=after_clips,
@@ -381,6 +388,10 @@ detailed = {_toml(data["logging"]["detailed"])}
 def save(data: dict, path: Path = CONFIG_FILE):
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
-    tmp.write_text(render(data))
-    tmp.chmod(0o600)   # webhook URLs are secrets: anyone with one can post to its channel
+    tmp.unlink(missing_ok=True)   # one left over could be readable by others
+    # Made private from the start: webhook URLs are secrets (anyone with one can post to its
+    # channel), so they're never in a file others can read, not even for a moment.
+    with open(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w",
+              encoding="utf-8") as f:
+        f.write(render(data))
     tmp.replace(path)

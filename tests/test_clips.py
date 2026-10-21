@@ -6,7 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from linux_wow_recorder import config
+import fcntl
+
+from linux_wow_recorder import clips, config
 from linux_wow_recorder.clips import (cleanup, clip_name, process_pending, read_sidecar, set_keep,
                                       stale_recordings)
 from linux_wow_recorder.combatlog import Run
@@ -278,3 +280,12 @@ def test_cleanup_takes_a_full_recordings_details_and_picture_and_skips_kept_ones
     assert cleanup(cfg) == 1
     assert kept.exists() and kept.with_suffix(".json").exists() and kept.with_suffix(".jpg").exists()
     assert not any(f.exists() for f in (expired, expired.with_suffix(".json"), expired.with_suffix(".jpg")))
+
+
+def test_only_one_program_cuts_at_a_time(tmp_path):
+    cfg = make_cfg(tmp_path)
+    clips.CUT_LOCK.parent.mkdir(parents=True, exist_ok=True)
+    with open(clips.CUT_LOCK, "a") as other:
+        fcntl.flock(other, fcntl.LOCK_EX)       # the service is cutting
+        assert process_pending(cfg, wait=False) is None
+    assert process_pending(cfg, wait=False) == []

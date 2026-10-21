@@ -168,11 +168,12 @@ log lines, error output or file paths.
 | File | |
 |---|---|
 | `recorder.log` | the background service; each start is logged with the app version, distro, kernel and desktop (also in its journal, `journalctl --user -u linux-wow-recorder`) |
-| `app.log` | the desktop app and the other commands |
+| `app.log` | the desktop app |
+| `cli.log` | the other commands (`process`, `test-recorder`, `setup`, ...) |
 | `sessions/<date time>.log` | gpu-screen-recorder's own output, one file per recording; the last 10 are kept |
 | `crash.log` | a hard crash's stack trace, if one ever happens |
 
-`recorder.log` and `app.log` start a new file at 1 MB and keep 4 old ones (`.log.1` ...), and any
+`recorder.log`, `app.log` and `cli.log` start a new file at 1 MB and keep 4 old ones (`.log.1` ...), and any
 log untouched for 30 days is deleted. Lines are cleaned before they're written: webhook links
 become `webhook 2 (...a1b2)`, the home folder `~`, and the computer's name, the user name and IP
 addresses are replaced. gpu-screen-recorder's own output is saved as it is.

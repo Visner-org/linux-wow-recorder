@@ -147,3 +147,14 @@ def test_the_update_check_asks_github_only():
     assert re.findall(r"https?://[^\s\"']+", text) == [
         "https://api.github.com/repos/Visner-org/linux-wow-recorder/releases/latest"]
     assert "urlopen(request" in text and text.count("urlopen(") == 1
+
+
+def test_ip_addresses_go_but_version_numbers_stay():
+    assert logs.clean("peer 192.168.1.20:443, ip=10.0.0.5.") == "peer <IP>:443, ip=<IP>."
+    for text in ("libfoo-1.2.3.4", "version 1.2.3.4.5", "v1.2.3.4", "999.1.1.1"):
+        assert logs.clean(text) == text
+
+
+def test_log_lines_are_told_from_printed_ones():
+    assert logs.is_log_line("2026-10-20 12:00:00 [INFO] Cutting a.mp4")
+    assert not logs.is_log_line("a.mkv: 2 clip(s)")

@@ -232,7 +232,10 @@ def cmd_process(args) -> int:
     if find_wow():
         print("WoW is running; the current session's recording is still being written.")
         return 1
-    results = process_pending(cfg)
+    results = process_pending(cfg, wait=False)
+    if results is None:
+        print("Clips are already being cut.")
+        return 1
     if not results:
         print(f"Nothing waiting in {cfg.sessions_dir}.")
     for r in results:
@@ -276,9 +279,10 @@ def cmd_keep(args) -> int:
 def cmd_test_recorder(args) -> int:
     cfg = _load()
     status = state.read()
-    if status and status.get("state") == state.RECORDING:
-        # Two recorders would fight over the encoder, and share the recorder's state file.
-        print("The service is recording WoW right now; test once WoW is closed.")
+    if status and status.get("session_start"):
+        # Two recorders would fight over the encoder (or the screen-share dialog), and share
+        # the recorder's state file. Paused or not, the service's session is WoW's.
+        print("WoW is running; test the recorder once it's closed.")
         return 1
     out = cfg.output_dir / "test-recording.mkv"
     out.unlink(missing_ok=True)
@@ -425,6 +429,7 @@ def main():
         detailed, webhooks = cfg.detailed_logging, cfg.webhook_urls
     except (ConfigError, OSError):
         detailed, webhooks = False, []
-    # The service has its own log; everything else shares the desktop app's.
-    logs.setup("recorder" if args.command == "run" else "app", detailed, webhooks)
+    # The service and the desktop app each have their own log; the other commands share one,
+    # since the desktop app runs some of them while it writes its own.
+    logs.setup("recorder" if args.command == "run" else "cli", detailed, webhooks)
     sys.exit(args.func(args))

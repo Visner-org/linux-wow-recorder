@@ -990,6 +990,10 @@ class SettingsWindow(QDialog):
             "addresses have been replaced.")
         QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
 
+    def busy(self) -> bool:
+        """True while the 5-second test recording runs."""
+        return self.test_process is not None
+
     def test_recorder(self):
         if self.test_process or not self.write():
             return

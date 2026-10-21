@@ -42,7 +42,10 @@ DATEFMT = "%Y-%m-%d %H:%M:%S"
 
 _WEBHOOK = re.compile(r"https?://[^\s\"'<>]*/api/(?:v\d+/)?webhooks/[^\s\"'<>]+", re.IGNORECASE)
 _URL = re.compile(r"https?://[^\s\"'<>]+", re.IGNORECASE)
-_IPV4 = re.compile(r"\b(?!127\.0\.0\.1\b)(?:\d{1,3}\.){3}\d{1,3}\b")
+# Not part of a longer dotted number or name (a version like 1.2.3.4.5, libfoo-1.2.3.4).
+_IPV4 = re.compile(r"(?<![\w.-])(?!127\.0\.0\.1\b)(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}"
+                   r"(?:25[0-5]|2[0-4]\d|1?\d?\d)(?![\w-]|\.\d)")
+_LOG_LINE = re.compile(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} \[[A-Z]+\] ")   # FORMAT's
 _crash_file = None   # kept open for faulthandler
 
 
@@ -163,6 +166,11 @@ def new_session_log() -> Path:
     return path
 
 
+def is_log_line(line: str) -> bool:
+    """True for a line a log handler wrote (FORMAT), not one a command printed."""
+    return bool(_LOG_LINE.match(line))
+
+
 def tail(path: Path, lines: int) -> str:
     try:
         text = path.read_text(errors="replace")
@@ -275,6 +283,7 @@ def write_report(folder: Path, config_path: Path | None = None) -> Path:
     for title, path, lines in (
         ("Service log (recorder.log)", LOG_DIR / "recorder.log", 400),
         ("Desktop app log (app.log)", LOG_DIR / "app.log", 150),
+        ("Commands log (cli.log)", LOG_DIR / "cli.log", 80),
         ("Last recorder output", _latest_session(), 80),
         ("Crashes (crash.log)", CRASH_LOG, 80),
     ):

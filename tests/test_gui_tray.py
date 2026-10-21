@@ -70,20 +70,30 @@ def test_tray_menu_follows_the_service(tmp_path, monkeypatch, qapp_or_skip):
 
 def test_the_app_restarts_for_a_new_version_only_with_no_window_open(qapp_or_skip, monkeypatch):
     t = tray.Tray.__new__(tray.Tray)   # just what check_update uses
+    t.process = None
     restarted = []
     t.restart = lambda: restarted.append(1)
 
     class Window:
-        def __init__(self, visible):
-            self.visible = visible
+        def __init__(self, visible, busy=False):
+            self.visible, self.working = visible, busy
 
         def isVisible(self):
             return self.visible
+
+        def busy(self):
+            return self.working
     t.clips_window, t.settings_window, t.log_window = Window(True), None, Window(False)
     t.updates = type("W", (), {"check": lambda self: "0.6.0"})()
     t.check_update()
     assert restarted == []             # the clips window is open
-    t.clips_window.visible = False
+    t.clips_window.visible, t.clips_window.working = False, True
+    t.check_update()
+    assert restarted == []             # closed, but a copy with the chat hidden is being made
+    t.clips_window.working, t.process = False, object()
+    t.check_update()
+    assert restarted == []             # "Cut now" is running
+    t.process = None
     t.check_update()
     assert restarted == [1]
     t.updates = type("W", (), {"check": lambda self: None})()
