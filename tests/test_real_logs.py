@@ -32,7 +32,11 @@ def test_an_evening_of_keys():
 
 def test_harriers_cry_drums_and_an_extended_fury():
     runs = runs_in("WoWCombatLog-092326_123202.txt")
-    assert len(runs) == 14 and all(r.result == "completed" for r in runs)
+    # 16 keys: two Den of Nalorakk +10s have no START (logging began after the key), so
+    # they're timed from their END.
+    assert len(runs) == 16 and all(r.result == "completed" for r in runs)
+    assert [(r.name, r.label, r.length) for r in runs if r.name == "Den of Nalorakk" and r.level == 10] \
+        == [("Den of Nalorakk", "+10 Timed", "24m26s"), ("Den of Nalorakk", "+10 Timed", "20m18s")]
     lusts = [l for r in runs for l in r.lusts]
     assert all(l.caster for l in lusts)
     names = {l.name for l in lusts}

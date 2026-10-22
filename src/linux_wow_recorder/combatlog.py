@@ -185,6 +185,7 @@ class _OpenRun:
     difficulty: str = ""         # a visit's: "Heroic", ...
     left_at: float | None = None   # when the player left the instance; None while inside
     keyed: bool = False          # a visit a key was started in: the key's run is used instead
+    inferred: bool = False       # a key whose START may not be in the log (zone_change)
     raid: str = ""               # a raid pull's raid; name is then the boss
     encounter_id: int | None = None   # a raid pull's
     pull: int | None = None
@@ -240,6 +241,8 @@ class _RunFinder:
     def finish(self) -> list[Run]:
         if self.pull:
             self.close_pull(self.last_t, killed=False)
+        if self.key and self.key.inferred:
+            self.key = None   # no END: nothing to time it by
         if self.key:
             self.close_key(self.last_t)
         if self.visit:
@@ -291,6 +294,12 @@ class _RunFinder:
                 self.key.left_at = None
             else:
                 self.key.left(t)
+        if inst and diff == 8 and (self.key is None
+                                   or self.key.inferred and self.key.instance != inst):
+            # Inside a key with none open: logging may have started after the key did (an addon
+            # turning it on late), so its START isn't in the log. Read it anyway; a START drops
+            # this, and its END times it (key_end).
+            self.key = _OpenRun(name, inst, t, inferred=True)
         if self.visit:
             if inst == self.visit.instance:
                 self.visit.left_at = None   # back in after a release or a disconnect
@@ -311,6 +320,8 @@ class _RunFinder:
     def key_start(self, t: float, f: list[str]):
         # CHALLENGE_MODE_START,"Name",instanceID,challengeModeID,keystoneLevel,[affixes]
         instance, challenge, level = int(f[1]), int(f[2]), int(f[3])
+        if self.key and self.key.inferred:
+            self.key = None
         key = self.key
         if (key and (key.instance, key.challenge, key.level) == (instance, challenge, level)
                 and t - key.start < KEY_RESUME_SECONDS):
@@ -330,6 +341,17 @@ class _RunFinder:
     def key_end(self, t: float, f: list[str]):
         # CHALLENGE_MODE_END,instanceID,success,keystoneLevel,totalTime. success 0 (an END
         # with all zeros, too) means the key was reset or abandoned.
+        key = self.key
+        if key and key.inferred:
+            timer_ms = int(f[3])
+            if int(f[0]) != key.instance or int(f[1]) <= 0 or timer_ms <= 0:
+                self.key = None   # a reset, or not this dungeon's key: nothing to time it by
+                return
+            # No START: the key began its in-game time before this END (close enough for a clip,
+            # which has pad_before too).
+            key.start, key.level = t - timer_ms / 1000, int(f[2])
+            log.info(f"{key.name} +{key.level}: its start isn't in the combat log (logging began "
+                     f"late); timed from its end.")
         if self.key:
             self.close_key(t, completed=int(f[1]) > 0, timer_ms=int(f[3]))
 

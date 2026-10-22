@@ -2,6 +2,7 @@
 logout). It runs while the desktop app is open, or from every login if the user wants that."""
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -60,6 +61,22 @@ def install(at_login: bool = True, restart: bool = True):
             raise RuntimeError(result.stderr.strip())
 
 
+def refresh_unit() -> bool:
+    """Points the unit at this copy of the program if the one it starts is gone (the app was
+    installed another way since: uv, then a package), so the service doesn't fail to start.
+    True if it was rewritten."""
+    try:
+        text = UNIT_FILE.read_text()
+    except OSError:
+        return False
+    found = re.search(r'^ExecStart=(?:"([^"]+)"|(\S+))', text, re.MULTILINE)
+    if not found or Path(found.group(1) or found.group(2)).exists():
+        return False
+    UNIT_FILE.write_text(unit_text())
+    _systemctl("daemon-reload")
+    return True
+
+
 def at_login() -> bool:
     """Whether it starts at every login (enabled), without running systemctl: `systemctl
     enable` links the unit into default.target.wants."""
@@ -102,8 +119,8 @@ def installed_version() -> str | None:
 
 
 class UpdateWatch:
-    """Notices a different version installed under the running program (an RPM, Arch package or
-    `uv tool upgrade`), so it can restart into it when it's safe. Compared with what was
+    """Notices a different version installed under the running program (an RPM, Arch package, .deb
+    or `uv tool upgrade`), so it can restart into it when it's safe. Compared with what was
     installed when it started, not with __version__: a source checkout's metadata can lag
     behind its code. A version counts once two checks in a row see it, so a package that's
     still being installed isn't caught halfway."""

@@ -374,7 +374,7 @@ def cmd_uninstall(args) -> int:
         ok, output = uninstall.remove_program(prog)
         print(output)
         return 0 if ok else 1
-    if prog.kind in ("rpm", "pacman", "other"):
+    if prog.kind in ("rpm", "pacman", "deb", "other"):
         print(f"To remove the program itself: {prog.text}")
     return 0
 

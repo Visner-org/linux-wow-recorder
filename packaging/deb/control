@@ -1,0 +1,17 @@
+Package: linux-wow-recorder
+Version: @VERSION@
+Architecture: all
+Maintainer: Visner-org <341269573+Visner-org@users.noreply.github.com>
+Installed-Size: @SIZE@
+Depends: python3 (>= 3.11), python3-pyside6.qtcore, python3-pyside6.qtgui, python3-pyside6.qtwidgets, python3-pyside6.qtnetwork, python3-pyside6.qtdbus, python3-pyside6.qtmultimedia, python3-pyside6.qtmultimediawidgets, ffmpeg, grep, systemd
+Recommends: flatpak
+Section: video
+Priority: optional
+Homepage: https://github.com/Visner-org/linux-wow-recorder
+Description: Records World of Warcraft sessions and cuts one clip per dungeon run
+ Watches for World of Warcraft, records the whole session with gpu-screen-recorder, and
+ afterwards cuts one clip per Mythic+ run from the combat log. A tray icon shows when it's
+ recording; the window lists the clips with their bosses, deaths and lusts.
+ .
+ gpu-screen-recorder isn't in Ubuntu's or Debian's repositories. Install its Flatpak:
+ flatpak install flathub com.dec05eba.gpu_screen_recorder

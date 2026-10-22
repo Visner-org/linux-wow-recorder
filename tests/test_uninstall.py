@@ -81,3 +81,9 @@ def test_a_system_package_is_left_to_the_user(monkeypatch):
     prog = uninstall.program(Path("/usr/lib/python3.14/site-packages/linux_wow_recorder/uninstall.py"))
     assert prog.kind == "rpm" and prog.needs_root and prog.text == "sudo dnf remove linux-wow-recorder"
     assert uninstall.remove_program(prog) == (False, f"Remove the program with: {prog.text}")
+
+
+def test_a_deb_is_left_to_the_user(monkeypatch):
+    monkeypatch.setattr(uninstall, "_owned_by", lambda tool, path: tool[0] == "dpkg")
+    prog = uninstall.program(Path("/usr/lib/python3/dist-packages/linux_wow_recorder/uninstall.py"))
+    assert prog.kind == "deb" and prog.needs_root and prog.text == "sudo apt remove linux-wow-recorder"

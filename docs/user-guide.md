@@ -47,11 +47,17 @@ You need:
 
 - **Linux with systemd**: almost every desktop distro.
 - **Python 3.11 or newer**: check with `python3 --version`.
-- **[uv](https://docs.astral.sh/uv/)** or **pipx**, to install the app.
+- **[uv](https://docs.astral.sh/uv/)** or **pipx**, to install the app (not needed for the RPM,
+  the Arch package or the `.deb`).
 - **gpu-screen-recorder**, which does the recording:
   - CachyOS / Arch: `sudo pacman -S gpu-screen-recorder`
-  - Fedora / Nobara: the RPM below brings it in (on Nobara it's in the distro's repos)
+  - Nobara: the RPM below brings it in from Nobara's repos
+  - Fedora: not in its repos; use the Flatpak (next line)
   - anywhere, including Bazzite and SteamOS: `flatpak install flathub com.dec05eba.gpu_screen_recorder`
+  - Ubuntu and Debian: the Flatpak too (they don't have it in their repos). Ubuntu doesn't come
+    with Flatpak or Flathub; add both first:
+    `sudo apt install flatpak` and
+    `flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo`
 - **ffmpeg** (with `ffprobe`), from your distro.
 
 And in WoW:
@@ -59,7 +65,9 @@ And in WoW:
 - **Combat logging on in dungeons.** WoW doesn't log by itself. Type `/combatlog` after you
   zone in, or let an addon do it: Raider.IO's client, an "auto combat log" addon, or for WoW
   Forever, forever-logs-companion. Without a log, the session is still recorded but can't be
-  cut into clips.
+  cut into clips. If logging starts after the key does (an addon can be late), a completed key
+  is still found: its start is worked out from its in-game time. An abandoned key needs logging
+  on from the start.
 - **Advanced Combat Logging** on (Options > Network). It isn't needed to find runs, but it
   makes the log more complete.
 
@@ -68,11 +76,25 @@ And in WoW:
 ### Nobara or Fedora (RPM)
 
 ```bash
-sudo dnf install ./linux-wow-recorder-0.8.5-1.fc44.noarch.rpm
+sudo dnf install ./linux-wow-recorder-0.8.6-1.fc44.noarch.rpm
 ```
 
-dnf installs gpu-screen-recorder, ffmpeg and Qt from your distro's repos along with it. The app
-appears in the menu as **Linux WoW Recorder**. To update, install the newer RPM the same way.
+dnf installs ffmpeg and Qt from your distro's repos along with it, and on Nobara
+gpu-screen-recorder too. The app appears in the menu as **Linux WoW Recorder**.
+
+On **plain Fedora**, gpu-screen-recorder isn't in the repos (dnf skips it without an error), so
+install its Flatpak; the settings window finds it by itself:
+
+```bash
+flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+flatpak install flathub com.dec05eba.gpu_screen_recorder
+```
+
+Fedora's own ffmpeg (`ffmpeg-free`) is enough: it has the H.264 support the app needs. On
+**Fedora Atomic** (Silverblue, Kinoite), which is read-only, use the uv steps under
+[Other distros (uv)](#other-distros-uv) instead.
+
+To update, install the newer RPM the same way.
 The service and the tray app restart into the new version by themselves within a few minutes, but only when it's safe: the service waits until WoW is closed, the clips are cut and any After clips command has finished, and the tray app waits until its windows are closed. (Updating from 0.5.0 or earlier needs one restart by hand: `systemctl --user restart linux-wow-recorder`, and quit and start the tray app.) The RPM is built for one Fedora release
 (`fc44` is Fedora/Nobara 44); on another release, build it there with
 `./packaging/build-rpm.sh` (needs `uv` and `rpm-build`).
@@ -84,6 +106,7 @@ own repos (gpu-screen-recorder, ffmpeg, PySide6). It'll be on the AUR (`paru -S
 linux-wow-recorder`) once AUR sign-ups reopen; until then, build it from the repo:
 
 ```bash
+sudo pacman -S --needed git base-devel
 git clone https://github.com/Visner-org/linux-wow-recorder
 cd linux-wow-recorder/packaging/aur
 makepkg -si
@@ -92,12 +115,51 @@ makepkg -si
 To update, `git pull` and run `makepkg -si` again; the app restarts into it as with the RPM
 above. The uv route below works on Arch too.
 
-### Other distros (CachyOS, Arch, Bazzite, SteamOS, Ubuntu, ...)
+### Ubuntu or Debian (.deb)
+
+For Ubuntu 25.10 and newer (26.04 is tested) and Debian 13. Download the `.deb` from the
+[Releases](https://github.com/Visner-org/linux-wow-recorder/releases) page, then:
+
+```bash
+sudo apt install ./linux-wow-recorder_0.8.6-1_all.deb
+flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+flatpak install --user flathub com.dec05eba.gpu_screen_recorder
+```
+
+apt installs ffmpeg, Qt (PySide6) and Flatpak from your distro's repos along with it.
+gpu-screen-recorder isn't in Ubuntu's or Debian's repos, so it comes from Flathub; the settings
+window finds the Flatpak by itself. The app appears in the menu as **Linux WoW Recorder**.
+
+- **To update**, download the newer `.deb` and install it the same way; the app restarts into it
+  as with the RPM above. There's no apt repository yet, so `apt upgrade` doesn't update it.
+  Turn on **Check for new versions once a day** (Settings > About) to hear about new releases.
+- **Ubuntu 24.04** and the distros built on it (Mint 22, Pop!_OS 24.04) don't have the Qt
+  packages it needs, and apt says so. Use uv instead (next section).
+- **Without the desktop app**: the `.deb` always includes it. For the command line only, use uv.
+
+### Other distros (uv)
+
+For Bazzite, Fedora Atomic, SteamOS, Ubuntu 24.04, Mint 22, Pop!_OS, openSUSE and any other
+distro; CachyOS and Arch can use it too.
 
 These install the app into your home folder (`~/.local`) with [uv](https://docs.astral.sh/uv/),
 so they also work on read-only systems like Bazzite and SteamOS: no root, no reboot. Get uv from
 your package manager (`sudo pacman -S uv` on CachyOS and Arch) or with its install script
-(`curl -LsSf https://astral.sh/uv/install.sh | sh`).
+(`curl -LsSf https://astral.sh/uv/install.sh | sh`). After the install script, open a new
+terminal so `~/.local/bin` is on your PATH; otherwise `linux-wow-recorder-gui` isn't found.
+
+First, gpu-screen-recorder and ffmpeg, depending on your distro:
+
+| Distro | Before installing the app |
+|---|---|
+| Bazzite, Fedora Atomic (Silverblue, Kinoite), Aurora | ffmpeg is built in. `flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo`, then `flatpak install flathub com.dec05eba.gpu_screen_recorder` |
+| SteamOS (Steam Deck, Desktop Mode) | ffmpeg and Flathub are built in. `flatpak install flathub com.dec05eba.gpu_screen_recorder` |
+| openSUSE Tumbleweed | `sudo zypper install python313 ffmpeg gpu-screen-recorder git` (no Flatpak needed) |
+| Ubuntu 24.04, Mint 22, Pop!_OS 24.04 | `sudo apt install python3 ffmpeg flatpak git`, the Flathub `remote-add` line above, then the Flatpak |
+
+**Steam Deck:** "a window or screen you pick" works as is. Recording the whole screen needs
+gpu-screen-recorder's helper, which asks for your password, and the `deck` user has none until
+you set one with `passwd`. Only Desktop Mode is covered here; Game Mode isn't tried.
 
 With the desktop app:
 
@@ -246,9 +308,11 @@ You also get a desktop notification when clips are ready or something goes wrong
 so far is saved). When the recorder is set to start at login, the menu also has **Hide tray
 icon (keeps recording)**, and the recorder comes back at the next login.
 
-On GNOME, tray icons need the
+On stock GNOME (Fedora Workstation, Debian), tray icons need the
 [AppIndicator and KStatusNotifierItem Support](https://extensions.gnome.org/extension/615/appindicator-support/)
-extension. KDE and most other desktops show them as they are.
+extension. KDE, COSMIC (Pop!_OS 24.04), Ubuntu's GNOME and most other desktops show them as they
+are. Without a tray, closing the window quits the app (and stops the recorder, unless it starts
+at login).
 
 ### The clip browser (desktop app)
 
@@ -558,4 +622,5 @@ needs your password:
 ```bash
 sudo dnf remove linux-wow-recorder          # RPM
 sudo pacman -R linux-wow-recorder           # Arch package
+sudo apt remove linux-wow-recorder          # .deb
 ```

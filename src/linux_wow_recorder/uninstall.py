@@ -21,7 +21,7 @@ from .config import CONFIG_DIR, STATE_DIR, Config
 @dataclass
 class Program:
     """How the program itself was installed, and how it's removed."""
-    kind: str                     # "uv", "pipx", "rpm", "pacman" or "other"
+    kind: str                     # "uv", "pipx", "rpm", "pacman", "deb" or "other"
     command: list[str]            # the removal command
     needs_root: bool              # system packages: the user runs it (sudo), the app can't
 
@@ -54,6 +54,8 @@ def program(package_file: Path | None = None) -> Program:
             return Program("rpm", ["sudo", "dnf", "remove", APP_NAME], True)
         if _owned_by(["pacman", "-Qo"], path):
             return Program("pacman", ["sudo", "pacman", "-R", APP_NAME], True)
+        if _owned_by(["dpkg", "-S"], path):
+            return Program("deb", ["sudo", "apt", "remove", APP_NAME], True)
     return Program("other", [sys.executable, "-m", "pip", "uninstall", APP_NAME], False)
 
 

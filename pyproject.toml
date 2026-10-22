@@ -39,3 +39,6 @@ ignore = ["E501", "E741"]   # E741: l for a lust, as in the sidecar's loops
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# pytest-qt's Qt message catcher is Python code; Qt Multimedia's threads can call it while
+# the run shuts down, which crashes the interpreter. No test reads Qt's messages.
+addopts = "--no-qt-log"

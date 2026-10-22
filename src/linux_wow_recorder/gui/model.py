@@ -704,8 +704,8 @@ def setup_checklist(cfg, service_state: str) -> list[Step]:
 # ── The settings window's About page ──
 
 def license_text() -> str | None:
-    """The GPL's full text as installed with the app (the wheel's dist-info, which the RPM and
-    the Arch package install too), or a source checkout's LICENSE; None if neither is there."""
+    """The GPL's full text as installed with the app (the wheel's dist-info, which every package
+    installs too), or a source checkout's LICENSE; None if neither is there."""
     from importlib import metadata
 
     from .. import APP_NAME

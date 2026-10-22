@@ -89,6 +89,45 @@ def test_a_key_resumed_after_a_crash_is_one_run():
     assert [(l.name, l.time - T0) for l in run.lusts] == [("Time Warp", 600)]
 
 
+def test_a_key_whose_start_isnt_logged_is_timed_from_its_end():
+    # Seen in a real log: an addon turned logging on 1m42s into the key, so the log opens inside
+    # the dungeon (difficulty 8) with no START. The END's in-game time says when it began.
+    [run] = find_runs([
+        zone(0, 2825, "Den of Nalorakk", 8),
+        (T0 + 300, "ENCOUNTER_START", ["3203", "Nalorakk", "8", "5", "2825"]),
+        (T0 + 400, "ENCOUNTER_END", ["3203", "Nalorakk", "8", "5", "1", "99850"]),
+        key_end(1442, 2825, 12, 1_543_915),
+        zone(1532, 0, "Silvermoon City", 0),
+    ])
+    assert (run.name, run.label, run.length) == ("Den of Nalorakk", "+12 Timed", "25m43s")
+    assert run.start == T0 + 1442 - 1543.915 and run.end == T0 + 1442
+    assert run.time_limit == 1920 and run.level == 12
+    assert [e.name for e in run.encounters] == ["Nalorakk"]
+
+
+def test_a_keystone_dungeon_without_an_end_or_with_a_reset_gives_nothing():
+    # Back inside a finished key (to loot or talk), or a key reset: no run to time.
+    assert find_runs([
+        zone(0, 2825, "Den of Nalorakk", 8),
+        boss(60),
+        zone(900, 0, "Silvermoon City", 0),
+    ]) == []
+    assert find_runs([
+        zone(0, 2825, "Den of Nalorakk", 8),
+        key_end(600, 2825, 0, 0),
+    ]) == []
+
+
+def test_a_started_key_replaces_the_unconfirmed_one():
+    [run] = find_runs([
+        zone(0, 2825, "Den of Nalorakk", 8),
+        key_end(30, 2825, 0, 0),                     # the keystone going in
+        key_start(31, 2825, "Den of Nalorakk", 10),
+        key_end(1500, 2825, 10, 1_460_000),
+    ])
+    assert (run.label, run.start) == ("+10 Timed", T0 + 31)
+
+
 def test_heroic_dungeon_with_a_boss():
     runs = find_runs([
         zone(0, 2290, "Mists of Tirna Scithe", 2),

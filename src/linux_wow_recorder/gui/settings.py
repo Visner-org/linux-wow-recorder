@@ -766,7 +766,7 @@ class SettingsWindow(QDialog):
         process = self.capture_lister = QProcess(self)
         process.finished.connect(lambda *_: self.capture_options_listed(process))
         process.start(cmd[0], [*cmd[1:], "--list-capture-options"])
-        QTimer.singleShot(10_000, process.kill)   # a no-op once it has finished
+        QTimer.singleShot(10_000, process, process.kill)   # a no-op once it has finished
 
     def capture_options_listed(self, process: QProcess):
         try:

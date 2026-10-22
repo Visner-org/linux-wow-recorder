@@ -1,7 +1,7 @@
 """The .desktop files that list the app in the menu and start it in the tray at login.
 
-An RPM install puts the menu entry and icon in /usr/share; otherwise (uv, pipx) they're written
-to ~/.local/share the first time autostart is turned on.
+A package (RPM, Arch, .deb) puts the menu entry and icon in /usr/share; otherwise (uv, pipx)
+they're written to ~/.local/share the first time autostart is turned on.
 """
 
 import os
@@ -51,7 +51,7 @@ def install_autostart() -> Path:
 
 
 def install_menu_entry():
-    """Lists the app in the app menu, unless a package already does (the RPM, Arch)."""
+    """Lists the app in the app menu, unless a package already does (RPM, Arch, .deb)."""
     if not SYSTEM_MENU_FILE.exists():
         MENU_FILE.parent.mkdir(parents=True, exist_ok=True)
         MENU_FILE.write_text(desktop_entry(autostart=False))

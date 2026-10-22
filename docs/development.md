@@ -239,14 +239,27 @@ launcher, which names the game in its arguments, are skipped. Add a new client's
   icon (`gui/icon.svg`); the tray icon is drawn in code to show the state.
 - **RPM**: `packaging/build-rpm.sh` builds the wheel with uv and wraps it with
   `packaging/linux-wow-recorder.spec`. It installs into the system Python and requires
-  `python3-pyside6`, `gpu-screen-recorder` and `/usr/bin/ffmpeg` from the distro, so it's tied to
-  one Fedora release. Flatpak was ruled out: the sandbox can't see the WoW process, run
+  `python3-pyside6` and `/usr/bin/ffmpeg` from the distro, so it's tied to one Fedora release.
+  `gpu-screen-recorder` (and `flatpak`) are only Recommends: Nobara has it, plain Fedora doesn't,
+  and there the user installs the Flatpak; dnf installs weak dependencies where it can. Fedora's
+  `ffmpeg-free` has OpenH264, which `hidechat` falls back to. Tested with `dnf install` in a
+  clean `fedora:44` container. Flatpak was ruled out: the sandbox can't see the WoW process, run
   gpu-screen-recorder with its root helper, or install the systemd user service.
 - **Arch package**: `packaging/aur/PKGBUILD` builds from the GitHub release tarball of the tag
   `pkgver` (tags have no `v`), runs the tests in `check()`, and installs the wheel, menu entry and
   icon. Arch's `pyside6` doesn't include QtMultimedia, so `qt6-multimedia` is a separate
   dependency; gpu-screen-recorder is in Arch's `extra` repo. Tested in an `archlinux` container
   with `makepkg -si`.
+- **.deb**: `packaging/build-deb.sh` builds the wheel with uv, then puts the package together in
+  an `ubuntu:26.04` container (podman or docker), so it builds on any distro. Inside,
+  `packaging/deb/build.sh` installs the wheel with `installer` into Debian's own layout
+  (`deb_system`: `/usr/lib/python3/dist-packages`, shared by every Python 3, so the package isn't
+  tied to one Python version), adds the menu entry, icon and copyright file, and wraps it with
+  `dpkg-deb`. `postinst` byte-compiles with `py3compile`, `prerm` cleans up with `py3clean`, as
+  Debian's own Python packages do. It depends on the `python3-pyside6.*` modules the app imports
+  (Ubuntu 25.10+, Debian 13; Ubuntu 24.04 has none) and recommends `flatpak`, because
+  gpu-screen-recorder isn't in Ubuntu's or Debian's repos. Tested by installing it in clean
+  `ubuntu:26.04` and `debian:13` containers and on an Ubuntu 26.04 desktop.
 - **Running commands**: settings and the tray run `python -m linux_wow_recorder <command>`
   (test-recorder, process) instead of calling the functions, so a slow command never blocks
   the window.
@@ -309,12 +322,37 @@ traceback; `faulthandler` writes hard crashes to `crash.log`.
   problems. After 1.0, a change that breaks an existing config file or command means 2.0.
 
 Each release gets an entry in the `%changelog` of `packaging/linux-wow-recorder.spec`, and the RPM's
-`Release` stays 1 unless only the packaging changed. After the GitHub release (tag `0.5.0`, no
+`Release` stays 1 unless only the packaging changed (likewise the `.deb`'s revision:
+`DEB_REVISION=2 ./packaging/build-deb.sh`). Build both (`build-rpm.sh`, then `build-deb.sh`,
+which rebuilds the same wheel) and attach the RPM, the `.deb` and the wheel to the release. After the GitHub release (tag `0.5.0`, no
 `v`), set `pkgver` in `packaging/aur/PKGBUILD` (and `pkgrel=1`), then in that folder
 `updpkgsums && makepkg --printsrcinfo > .SRCINFO`; on an Arch-less machine, run both in an
 `archlinux` container.
 
+## Distro checks
+
+Installs and setup were checked in October 2026 in libvirt VMs and podman containers. None of
+them has a graphics card, so nothing was recorded; recording is only proven on Nobara 44.
+
+| Distro | Route | How it was checked |
+|---|---|---|
+| Nobara 44 | RPM | daily use, recording |
+| Fedora 44 | RPM | `dnf install` in a `fedora:44` container: gpu-screen-recorder is skipped (only Recommends), `ffmpeg-free` and PySide6 come in, the GUI modules load |
+| Fedora Silverblue / Kinoite 44 | uv | their images (`quay.io/fedora/fedora-silverblue:44`, `-kinoite:44`) ship `ffmpeg-free`, git and Flatpak, no Flathub remote |
+| CachyOS | PKGBUILD | VM (KDE, Wayland): `makepkg -si` from the GitHub tag, setup finished |
+| Bazzite | uv + gsr Flatpak | VM (KDE, Wayland): setup finished; it made the menu entry and found the Flatpak |
+| Ubuntu 26.04 | uv, then .deb | VM (GNOME, Wayland): both; switching from uv to the .deb found the stale-unit bug |
+| Debian 13 | .deb | `debian:13` container: installs, the GUI modules load |
+| Ubuntu 24.04 / Pop!_OS 24.04 | uv | `ubuntu:24.04` container (Python 3.12); Pop!_OS live ISO in a VM: COSMIC registers the tray icon (StatusNotifierWatcher) and its menu |
+| openSUSE Tumbleweed | uv | container: gpu-screen-recorder, PySide6 (`python313-PySide6`), ffmpeg and Flatpak are in its OSS repo; ffmpeg has OpenH264 only |
+| SteamOS 3.8 | uv | the recovery image's rootfs, read with `btrfs restore`: ffmpeg 7.1 (x264, VAAPI), ffprobe, Flatpak with Flathub, git, Python 3.13; not booted |
+
 ## Not done yet
+
+- Recording on anything but Nobara: every distro above was checked without a graphics card.
+- SteamOS Game Mode: whether the screen-share dialog or the root helper work there.
+- A native openSUSE package (its package names differ from Fedora's, so it'd be its own spec).
+- On COSMIC the app draws with Qt's own light style, not COSMIC's colours.
 
 - Timed vs depleted for keys: the log only says completed. It needs each dungeon's time limit,
   which changes every season.

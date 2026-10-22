@@ -10,7 +10,8 @@ check for a new version on GitHub if you turn that on. See [Privacy](#privacy).
 
 ![The clip browser: Mythic+ clips with their results, and a run's timeline of boss pulls, deaths and lusts](docs/screenshot.png)
 
-**New in 0.8.5:** bug fixes; a pause now lasts through a Settings save.
+**New in 0.8.6:** a `.deb` for Ubuntu and Debian, and a completed key is found even when
+combat logging started late.
 **0.8.4:** switching Settings to a window you pick opens the screen-share dialog again.
 **0.8.3:** nothing starts at login unless you choose it: the recorder runs while the app
 is open. **0.8.2:** completed keys say **Timed** (with the keystone upgrade, "Timed +2") or
@@ -144,27 +145,43 @@ this app come from your package manager, when you choose.
 
 ## Install
 
-| Distro | How | Tested |
-|---|---|---|
-| Fedora, Nobara | the RPM | yes (Nobara 44) |
-| CachyOS, Arch, EndeavourOS, Manjaro | with `uv`, or as a package built from this repo (on the AUR soon) | not yet |
-| Bazzite, SteamOS, Aurora, other read-only systems | with `uv`, into your home folder; no root, no reboot | not yet |
-| Ubuntu, Mint, Pop!_OS, Debian, openSUSE | with `uv` | not yet |
+| Distro | How | Installs and sets up | Records |
+|---|---|---|---|
+| Nobara, Fedora | the RPM | yes (Nobara 44, Fedora 44) | yes (Nobara 44) |
+| CachyOS, Arch, EndeavourOS, Manjaro | a package built from this repo (on the AUR soon), or `uv` | yes (CachyOS) | not yet |
+| Ubuntu 25.10 and newer, Debian 13 | the `.deb` | yes (Ubuntu 26.04, Debian 13) | not yet |
+| Bazzite, Fedora Atomic (Silverblue, Kinoite), Aurora | `uv`, into your home folder; no root, no reboot | yes (Bazzite) | not yet |
+| SteamOS (Steam Deck) | `uv`, in Desktop Mode | its image has everything needed; not run | not yet |
+| Ubuntu 24.04, Mint 22, Pop!_OS 24.04 | `uv` | yes (Pop!_OS 24.04 with COSMIC, Ubuntu 24.04) | not yet |
+| openSUSE Tumbleweed | `uv`, with gpu-screen-recorder from openSUSE | yes (in a container) | not yet |
+| others | `uv` | | not yet |
 
-"Not yet" means it should work and hasn't been tried. If you try it, please say how it went in
-an issue.
+"Installs and sets up" was tried in virtual machines and containers, which have no graphics card
+to record with. "Not yet" means it should work and hasn't been tried on a real PC. If you try
+it, please say how it went in an issue.
 
 ### Fedora and Nobara
 
 Download the `.rpm` from [Releases](../../releases), then:
 
 ```bash
-sudo dnf install ./linux-wow-recorder-0.8.5-1.fc44.noarch.rpm
+sudo dnf install ./linux-wow-recorder-0.8.6-1.fc44.noarch.rpm
 ```
 
-dnf brings in gpu-screen-recorder, ffmpeg and Qt. Open **Linux WoW Recorder** from the app
-menu; the settings window opens the first time. The RPM is built for one release (`fc44` is
-Fedora/Nobara 44).
+dnf brings in ffmpeg and Qt, and on Nobara gpu-screen-recorder too. Open **Linux WoW Recorder**
+from the app menu; the settings window opens the first time. The RPM is built for one release
+(`fc44` is Fedora/Nobara 44).
+
+**Plain Fedora** doesn't have gpu-screen-recorder in its repos, so get its Flatpak (the settings
+window finds it by itself):
+
+```bash
+flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+flatpak install flathub com.dec05eba.gpu_screen_recorder
+```
+
+Fedora's own ffmpeg (`ffmpeg-free`) is enough. **Fedora Atomic** (Silverblue, Kinoite) is
+read-only: use the Bazzite steps below instead of the RPM.
 
 ### CachyOS and Arch
 
@@ -178,32 +195,81 @@ Or as a system package, so it updates with the rest of your system once it's on 
 then, build it from this repo:
 
 ```bash
+sudo pacman -S --needed git base-devel
 git clone https://github.com/Visner-org/linux-wow-recorder
 cd linux-wow-recorder/packaging/aur
 makepkg -si
 ```
 
-### Bazzite, SteamOS and other read-only systems
+### Bazzite, Fedora Atomic, SteamOS and other read-only systems
 
 Nothing is installed into the system: the app goes into `~/.local`, and gpu-screen-recorder
 comes from Flathub.
 
 ```bash
+flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
 flatpak install flathub com.dec05eba.gpu_screen_recorder
 curl -LsSf https://astral.sh/uv/install.sh | sh   # installs uv into ~/.local/bin
 uv tool install 'linux-wow-recorder[gui] @ git+https://github.com/Visner-org/linux-wow-recorder'
 linux-wow-recorder-gui
 ```
 
-The settings window finds the Flatpak by itself. Bazzite ships ffmpeg; elsewhere install it
-from your package manager.
+The settings window finds the Flatpak by itself. Bazzite, Fedora Atomic and SteamOS ship
+ffmpeg, git and Flatpak, so there's nothing else to add.
 
-### Ubuntu, Debian, Mint and others
+**Steam Deck:** install and play in Desktop Mode. Recording "the window or screen you pick" works
+as is; recording the whole screen needs gpu-screen-recorder's helper, which asks for your
+password, and the `deck` user has none until you set one with `passwd`. Game Mode isn't tried.
+
+### Ubuntu and Debian (.deb)
+
+For Ubuntu 25.10 and newer and Debian 13. Download the `.deb` from [Releases](../../releases),
+then:
 
 ```bash
-sudo apt install python3 ffmpeg      # or your distro's equivalent
-flatpak install flathub com.dec05eba.gpu_screen_recorder
+sudo apt install ./linux-wow-recorder_0.8.6-1_all.deb
+flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+flatpak install --user flathub com.dec05eba.gpu_screen_recorder
+```
+
+apt brings in ffmpeg, Qt and Flatpak. gpu-screen-recorder isn't in Ubuntu's or Debian's own
+repositories, so it comes from Flathub; the settings window finds it by itself. Open **Linux WoW
+Recorder** from the app menu.
+
+### openSUSE Tumbleweed
+
+openSUSE has gpu-screen-recorder, ffmpeg and Python in its own repos, so no Flatpak is needed:
+
+```bash
+sudo zypper install python313 ffmpeg gpu-screen-recorder git
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+Open a new terminal, then:
+
+```bash
+uv tool install 'linux-wow-recorder[gui] @ git+https://github.com/Visner-org/linux-wow-recorder'
+linux-wow-recorder-gui
+```
+
+openSUSE's ffmpeg (like Fedora's) has only OpenH264 for H.264, which is enough. A native
+openSUSE package doesn't exist yet.
+
+### Ubuntu 24.04, Mint, Pop!_OS and others
+
+Ubuntu 24.04 and the distros built on it (Mint 22, Pop!_OS 24.04) don't have the Qt packages
+the `.deb` needs, so the app goes into your home folder with `uv`:
+
+```bash
+sudo apt install python3 ffmpeg flatpak      # or your distro's equivalent
+flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+flatpak install --user flathub com.dec05eba.gpu_screen_recorder
 curl -LsSf https://astral.sh/uv/install.sh | sh   # or: pipx, see the user guide
+```
+
+Open a new terminal (so `~/.local/bin` is on your PATH), then:
+
+```bash
 uv tool install 'linux-wow-recorder[gui] @ git+https://github.com/Visner-org/linux-wow-recorder'
 linux-wow-recorder-gui
 ```
@@ -240,7 +306,8 @@ The settings window (or `linux-wow-recorder setup`) asks for:
 Then record a 5-second test, and save. It records whenever the app is open; Settings > Advanced
 can start it at every login instead.
 
-KDE and most desktops show tray icons as they are. Stock GNOME needs the
+KDE, COSMIC (Pop!_OS 24.04), Ubuntu's GNOME and most other desktops show tray icons as they
+are. Stock GNOME (Fedora Workstation, Debian) needs the
 [AppIndicator and KStatusNotifierItem Support](https://extensions.gnome.org/extension/615/appindicator-support/)
 extension.
 

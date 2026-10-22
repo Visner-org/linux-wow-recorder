@@ -630,7 +630,8 @@ class ClipBrowser(QWidget):
             QMessageBox.warning(self, APP_TITLE, why)
         else:
             self.live_switch.setEnabled(False)   # until the service has switched
-            QTimer.singleShot(PREVIEW_MS, lambda: self.live_switch.setEnabled(True))
+            # Tied to the button, so a window closed meanwhile cancels it.
+            QTimer.singleShot(PREVIEW_MS, self.live_switch, lambda: self.live_switch.setEnabled(True))
 
     def repick(self):
         """Opens the screen-share dialog again, to record another window."""
@@ -638,7 +639,7 @@ class ClipBrowser(QWidget):
             QMessageBox.warning(self, APP_TITLE, why)
         else:
             self.live_repick.setEnabled(False)   # until the service has restarted it
-            QTimer.singleShot(PREVIEW_MS, lambda: self.live_repick.setEnabled(True))
+            QTimer.singleShot(PREVIEW_MS, self.live_repick, lambda: self.live_repick.setEnabled(True))
 
     def preview_paused(self) -> bool:
         """The live preview waits while the window is minimized or another window has focus."""

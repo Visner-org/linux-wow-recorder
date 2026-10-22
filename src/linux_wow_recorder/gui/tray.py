@@ -255,7 +255,7 @@ class Tray:
         self.repick_action.setVisible(view.can_repick)
         self.switch_action.setText(model.switch_text(view.monitor_switch))
         self.service_action.setEnabled(self.service_state != "not installed")
-        if self.service_state == "not installed" and self.settings_window is None:
+        if not self.set_up() and self.settings_window is None:
             self.show_settings()   # first run: nothing works until it's set up
         busy = view.recording or (self.status or {}).get("state") == state.PROCESSING
         self.cut_action.setEnabled(not busy and self.process is None and self._has_pending(force))
@@ -453,6 +453,11 @@ class Tray:
     def start_with_app(self):
         """Opening the app starts the recorder (unless it's not set up yet, or already
         running): it records while the app is open."""
+        if service.refresh_unit():
+            logging.getLogger(APP_NAME).info("The service ran a copy of the app that's gone; "
+                                             "it runs this one now.")
+        if not config.CONFIG_FILE.exists():
+            return
         if self.service.current(force=True) in ("inactive", "failed"):
             try:
                 service.start()
@@ -480,9 +485,13 @@ class Tray:
             return
         self.app.quit()
 
+    def set_up(self) -> bool:
+        """Settings saved and the service installed; either can be missing after a reinstall."""
+        return self.service_state != "not installed" and config.CONFIG_FILE.exists()
+
     def show_window(self):
         """What opening the app from the menu shows: the clips, or the settings until it's set up."""
-        if self.service_state == "not installed":
+        if not self.set_up():
             self.show_settings()
         else:
             self.show_clips()

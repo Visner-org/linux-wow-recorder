@@ -144,7 +144,7 @@ With both views off, the Keystones button is hidden too.
 |---|---|
 | `~/.config/linux-wow-recorder/config.toml` | the config |
 | `~/.config/linux-wow-recorder/gui.ini` | the desktop app's own choices: the clips window's view, and when GitHub was last asked about a new version and what it said |
-| `~/.config/systemd/user/linux-wow-recorder.service` | the service, written by `install-service` or the desktop app's setup; it starts at login only when linked into `default.target.wants/` (enabled) |
+| `~/.config/systemd/user/linux-wow-recorder.service` | the service, written by `install-service` or the desktop app's setup; it starts at login only when linked into `default.target.wants/` (enabled). If the program it starts is gone (the app was reinstalled another way, say uv and then a package), the desktop app points it at itself when it opens |
 | `~/.config/autostart/linux-wow-recorder-gui.desktop` | starts the tray icon at login |
 | `~/.local/share/applications/linux-wow-recorder-gui.desktop` | the app menu entry |
 | `~/.local/state/linux-wow-recorder/recorder.json` | the recorder's process, so a restarted service can stop one left running |

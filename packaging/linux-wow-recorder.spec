@@ -1,5 +1,6 @@
 # Built by packaging/build-rpm.sh from the wheel it makes; not for building from a source RPM.
-# For Fedora-based distros (Nobara, Fedora); every dependency comes from the distro's repos.
+# For Fedora-based distros (Nobara, Fedora). Every dependency comes from the distro's repos, except
+# gpu-screen-recorder on plain Fedora: it's only recommended, so the Flatpak can stand in.
 %global debug_package %{nil}
 
 Name:           linux-wow-recorder
@@ -14,7 +15,9 @@ Source2:        LICENSE
 
 Requires:       python(abi) = %{python_abi}
 Requires:       python3-pyside6
-Requires:       gpu-screen-recorder
+# In Nobara's repos, not Fedora's; dnf installs it where it can and skips it where it can't.
+Recommends:     gpu-screen-recorder
+Recommends:     flatpak
 # Either ffmpeg (RPM Fusion) or ffmpeg-free provides these.
 Requires:       /usr/bin/ffmpeg
 Requires:       /usr/bin/ffprobe
@@ -57,6 +60,15 @@ if [ "$1" -eq 0 ]; then
 fi
 
 %changelog
+* Tue Oct 20 2026 Linux WoW Recorder - 0.8.6-1
+- A .deb for Ubuntu 25.10 and newer and Debian 13
+- Installs on plain Fedora: gpu-screen-recorder is recommended, not required (Fedora has only
+  the Flatpak)
+- Closing the clips window right after switching what's recorded no longer logs an error
+- Switching how the app is installed (uv to a package) no longer leaves a recorder service
+  that can't start
+- A completed key is found even when combat logging started after the key did
+
 * Tue Oct 20 2026 Linux WoW Recorder - 0.8.5-1
 - Bug fixes: a pause lasts through a Settings save, Cut now can't clash with the service or
   get stuck, an update waits for work in progress, rate-limited webhook messages are resent

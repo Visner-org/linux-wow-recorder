@@ -147,6 +147,9 @@ def test_the_recorder_runs_while_the_app_is_open(tmp_path, monkeypatch, qapp_or_
     monkeypatch.setattr(service, "start", lambda: started.append(1) or states.__setitem__(0, "active"))
     monkeypatch.setattr(tray.subprocess, "run", lambda cmd, **kw: stopped.append(cmd))
     monkeypatch.setattr(tray.ServiceWatcher, "_subscribe", lambda self: False)
+    cfg = tmp_path / "config.toml"
+    cfg.write_text("")
+    monkeypatch.setattr(tray.config, "CONFIG_FILE", cfg)
     t = tray.Tray(qapp_or_skip)
     assert started == [1]                      # opening the app starts it
     t.refresh()
@@ -158,9 +161,11 @@ def test_the_recorder_runs_while_the_app_is_open(tmp_path, monkeypatch, qapp_or_
         assert stopped[0][:4] == ["systemctl", "--user", "stop", "--no-block"]
 
 
-def test_nothing_starts_before_setup(monkeypatch, qapp_or_skip):
+@pytest.mark.parametrize("unit", ["not installed", "inactive"])   # inactive: config gone
+def test_nothing_starts_before_setup(tmp_path, monkeypatch, qapp_or_skip, unit):
     started = []
-    monkeypatch.setattr(service, "state", lambda: "not installed")
+    monkeypatch.setattr(service, "state", lambda: unit)
+    monkeypatch.setattr(tray.config, "CONFIG_FILE", tmp_path / "config.toml")
     monkeypatch.setattr(service, "start", lambda: started.append(1))
     monkeypatch.setattr(tray.ServiceWatcher, "_subscribe", lambda self: False)
     monkeypatch.setattr(tray.Tray, "show_settings", lambda self: None)
