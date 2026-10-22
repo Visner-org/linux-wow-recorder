@@ -1,6 +1,6 @@
 pkgbase = linux-wow-recorder
 	pkgdesc = Records World of Warcraft sessions and cuts one clip per dungeon run
-	pkgver = 0.8.5
+	pkgver = 0.8.6
 	pkgrel = 1
 	url = https://github.com/Visner-org/linux-wow-recorder
 	arch = any
@@ -17,7 +17,7 @@ pkgbase = linux-wow-recorder
 	depends = grep
 	depends = systemd
 	depends = hicolor-icon-theme
-	source = linux-wow-recorder-0.8.5.tar.gz::https://github.com/Visner-org/linux-wow-recorder/archive/refs/tags/0.8.5.tar.gz
-	sha256sums = 28c82d7fad0ebab76d1519db878393f0952ee56a95cb464206206b1ee18a35f7
+	source = linux-wow-recorder-0.8.6.tar.gz::https://github.com/Visner-org/linux-wow-recorder/archive/refs/tags/0.8.6.tar.gz
+	sha256sums = be9b46264e709ff5ae71bf2cbf7482755c62091aaa99c7319d6b82e357bd8522
 
 pkgname = linux-wow-recorder
