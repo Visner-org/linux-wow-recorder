@@ -410,3 +410,15 @@ def test_describe_offers_another_pick_while_recording_a_window():
     assert not model.describe(picking, "active", now=NOW).can_repick   # the dialog's open already
     monitor = {"state": "recording", "session_start": NOW - 5, "capture": "DP-1"}
     assert not model.describe(monitor, "active", now=NOW).can_repick
+
+
+def test_highlights_list_their_own_length_and_frame_events():
+    info = model.clip_info(Path("a.mp4"), {"dungeon": "Ara-Kara", "result": "completed", "run_start": 1.0,
+                                           "run_length": "24m00s",
+                                           "highlight": {"start": 1.0, "end": 46.0, "length": "0m45s"}})
+    assert info.highlight and info.length == "0m45s" and info.timer is None
+    assert model.highlight_around("pull", 100.0, 200.0, 1500.0) == (95.0, 205.0)
+    assert model.highlight_around("pull", 100.0, None, 150.0) == (95.0, 150.0)
+    assert model.highlight_around("death", 10.0, None, 1500.0) == (0.0, 20.0)
+    assert model.highlight_around("kill", 200.0, None, 1500.0) == (180.0, 210.0)
+    assert model.highlight_around("lust", 1490.0, None, 1500.0) == (1485.0, 1500.0)

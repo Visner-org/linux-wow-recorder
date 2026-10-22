@@ -13,7 +13,7 @@ pytest.importorskip("pytestqt")
 pytest.importorskip("PySide6.QtMultimedia")
 
 from PySide6.QtCore import QFile, Qt  # noqa: E402
-from PySide6.QtWidgets import QMessageBox  # noqa: E402
+from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402
 
 from linux_wow_recorder import config, service  # noqa: E402
 from linux_wow_recorder.clips import read_sidecar, write_sidecar  # noqa: E402
@@ -64,8 +64,11 @@ def test_clip_browser_lists_filters_and_shows_details(qtbot, cfg):
     assert w.current.dungeon == "The Stonevault"   # the newest is picked
     assert (w.title.text(), w.result_chip.text()) == ("The Stonevault +12", "Completed")
 
-    abandoned = next(b for b in w.filter_group.buttons() if b.property("key") == "abandoned")
-    abandoned.click()
+    assert w.filter_button.text() == "Showing: All"
+    w.filter_button.click()
+    assert w.filter_button.text() == "Showing: Completed" and w.cards.count() == 1
+    w.filter_button.click()
+    assert w.filter_button.text() == "Showing: Abandoned"
     assert w.tree.topLevelItemCount() == 1 and w.cards.count() == 1
     assert (w.title.text(), w.result_chip.text()) == ("Ara-Kara, City of Echoes +10", "Abandoned")
     assert w.tree.topLevelItem(0).text(3) == "Abandoned"
@@ -83,11 +86,20 @@ def test_clip_browser_lists_filters_and_shows_details(qtbot, cfg):
     w.seek_to_event(top[1].child(1))
     assert w.timeline.position == 87.0
 
-    # Cards or table, remembered.
-    w.view_group.button(1).click()
-    assert w.list_stack.currentWidget() is w.tree
+    # A bigger window grows the video, not the list.
+    w.show()
+    left = w.left.width()
+    w.resize(w.width() + 600, w.height())
+    QApplication.processEvents()
+    assert w.left.width() == left
+
+    # Cards or table: one button that switches, remembered.
+    assert w.view_button.text() == "Table"
+    w.view_button.click()
+    assert w.list_stack.currentWidget() is w.tree and w.view_button.text() == "Cards"
     assert browser.ClipBrowser().list_stack.currentWidget().__class__.__name__ == "QTreeWidget"
-    w.view_group.button(0).click()
+    w.view_button.click()
+    assert w.list_stack.currentWidget() is w.cards
 
     w.search.setText("stone")
     assert w.tree.topLevelItemCount() == 0
@@ -372,12 +384,12 @@ def test_full_sessions_list_the_recordings(qtbot, cfg):
     w = browser.ClipBrowser()
     qtbot.addWidget(w)
     assert w.mode == "keys" and w.current.path.name == "a.mp4"
-    assert [b.text() for b in w.filter_group.buttons()] == ["All", "Completed", "Abandoned"]
+    assert w.filter_button.text() == "Showing: All"
 
     w.mode_buttons["sessions"].click()
     assert w.current.path == rec and w.cards.count() == 1
     assert (w.title.text(), w.result_chip.text()) == ("The Stonevault", "1 run")
-    assert all(b.isHidden() for b in w.filter_group.buttons())
+    assert w.filter_button.isHidden()
     run = w.events.topLevelItem(0)
     assert run.text(1) == "The Stonevault +12 Completed" and run.isExpanded()
     assert run.child(0).text(1) == "E.D.N.A."
@@ -511,11 +523,11 @@ def test_raid_pulls_have_their_own_view(qtbot, cfg):
     w.set_mode(model.RAIDS)
     assert w.tree.topLevelItemCount() == 2
     assert w.tree.headerItem().text(1) == "Boss" and w.count.text() == "2 of 2 clips"
-    assert [b.text() for b in w.filter_group.buttons()] == ["All", "Kills", "Wipes"]
+    assert w.filter_button.text() == "Showing: All"
     rows = {w.tree.topLevelItem(i).text(2): w.tree.topLevelItem(i).text(3) for i in range(2)}
     assert rows == {"#3": "LFR Wipe", "#4": "LFR Kill"}
-    kills = next(b for b in w.filter_group.buttons() if b.text() == "Kills")
-    kills.click()
+    w.filter_button.click()
+    assert w.filter_button.text() == "Showing: Kills"
     assert w.tree.topLevelItemCount() == 1
     w.search.setText("undermine")             # the raid's name finds its bosses
     assert w.tree.topLevelItemCount() == 1
@@ -523,8 +535,7 @@ def test_raid_pulls_have_their_own_view(qtbot, cfg):
     assert w.title.text() == "Vexie and the Geargrinders, pull 4"
     assert "Liberation of Undermine" in w.facts.text()
     w.set_mode(model.KEYS)                   # the dungeon filters come back
-    assert [b.text() for b in w.filter_group.buttons()] == ["All", "Completed", "Abandoned"]
-    assert w.filter_group.checkedButton().text() == "All"
+    assert w.filter_button.text() == "Showing: All"   # Kills isn't a dungeon filter
 
 
 def test_setup_asks_about_update_checks(qtbot, no_config, fake_recorder):
@@ -590,6 +601,74 @@ def test_hide_chat_makes_a_copy_with_a_black_box(qtbot, cfg, monkeypatch):
     assert w.settings.value("hide_chat_box") == "0,0.5,0.5,0.5"
 
 
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="needs ffmpeg")
+def test_a_highlight_is_saved_as_a_clip_of_its_own(qtbot, cfg, monkeypatch):
+    clip = make_clip(cfg, "a.mp4", dungeon="Ara-Kara", level=2, result="completed",
+                     label="+2 Completed", clip_length=10.0, run_offset=0.0, keep=True,
+                     encounters=[{"name": "Avanoxx", "start": 3.0, "end": 6.0, "killed": True}],
+                     deaths=[{"name": "Tank-Realm-US", "at": 5.0}])
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=160x90:rate=10",
+                    "-t", "10", "-g", "10", "-pix_fmt", "yuv420p", "-f", "mp4", str(clip)], check=True)
+    w = browser.ClipBrowser()
+    qtbot.addWidget(w)
+    assert w.highlight_button.isVisibleTo(w) and not w.highlight_bar.isVisibleTo(w)
+
+    # Esc stops, I opens it again at the playhead
+    w.start_highlight()
+    assert w.highlight_bar.isVisibleTo(w) and w.timeline.marks == (0.0, 10.0)
+    w.show()
+    QApplication.setActiveWindow(w)   # shortcuts need the window active
+    qtbot.keyClick(w, Qt.Key_Escape)
+    assert not w.highlight_bar.isVisibleTo(w) and w.timeline.marks is None
+    w.cards.setFocus()   # a list with focus doesn't take I for its type-ahead search
+    qtbot.keyClick(w.cards, Qt.Key_I)
+    assert w.highlight_bar.isVisibleTo(w) and w.timeline.marks == (0.0, 10.0)
+    w.timeline.set_length(10.0, w.current.details)   # the player finding the length keeps them
+    assert w.timeline.marks == (0.0, 10.0)
+    w.clear_marks()
+    w.search.setFocus()
+    qtbot.keyClick(w.search, Qt.Key_I)   # typed in the search box: a letter, not a mark
+    qtbot.keyClick(w.search, Qt.Key_Space)   # and a space, not play
+    assert w.search.text() == "i " and w.timeline.marks is None
+    w.search.clear()
+    w.start_highlight()
+
+    # The boss row's menu entry: from just before the pull to just after the kill
+    boss = w.events.topLevelItem(1)
+    assert boss.text(1) == "Avanoxx"
+    kind, end = boss.data(0, Qt.UserRole + 1)
+    w.highlight_event(kind, boss.data(0, Qt.UserRole), end)
+    assert w.timeline.marks == (0.0, 10.0) and "0m10s" in w.marks_label.text()
+    w.timeline.set_marks((2.0, 7.0))
+    w.show_marks()
+    w.save_highlight()
+    qtbot.waitUntil(lambda: w.highlight_job is None, timeout=60_000)
+    out = cfg.clips_dir / "a highlight 0m02s-0m07s.mp4"
+    assert out.exists() and not out.with_name(out.name + ".part").exists()
+    details = read_sidecar(out)
+    assert details["highlight"]["of"] == "a.mp4" and not details["keep"]
+    assert details["deaths"] == [{"name": "Tank-Realm-US", "at": 3.0}]
+    assert w.current.path == out and w.current.highlight and "highlight 0m05s" in w.facts.text()
+    # It flashes until it's clicked, to show where it went
+    assert str(out) in w.fresh and w.flash_timer.isActive()
+    w.cards.itemPressed.emit(w.cards.currentItem())
+    assert not w.fresh
+    assert not w.highlight_bar.isVisibleTo(w)
+    assert sorted(w.tree.topLevelItem(i).text(1) for i in range(2)) == ["Ara-Kara", "Ara-Kara (highlight)"]
+
+
+def test_the_highlight_button_follows_settings(qtbot, cfg):
+    data = config.load_raw()
+    data["clips_window"]["highlights"] = False
+    config.save(data)
+    make_clip(cfg, "a.mp4", dungeon="Ara-Kara", result="completed", label="+2 Completed")
+    w = browser.ClipBrowser()
+    qtbot.addWidget(w)
+    assert not w.highlight_button.isVisibleTo(w)
+    w.start_highlight()
+    assert not w.highlight_bar.isVisibleTo(w)
+
+
 def test_the_chat_box_is_drawn_moved_and_resized(qtbot):
     from PySide6.QtCore import QPoint
     from PySide6.QtGui import QPixmap
@@ -613,20 +692,20 @@ def test_the_chat_box_is_drawn_moved_and_resized(qtbot):
 
 
 def test_full_screen_keeps_the_player_and_timeline(qtbot, cfg):
-    from PySide6.QtCore import QEvent
-    from PySide6.QtGui import QKeyEvent
     make_clip(cfg, "a.mp4", dungeon="Ara-Kara", result="completed", label="+2 Completed")
     w = browser.ClipBrowser()
     qtbot.addWidget(w)
     w.show()
+    QApplication.setActiveWindow(w)   # shortcuts need the window active
     w.full_button.click()
     assert w.full_screen and w.isFullScreen()
     assert not w.left.isVisible() and not w.details_panel.isVisible()
     assert w.timeline.isVisible() and w.play_button.isVisible() and w.video_stack.isVisible()
-    w.keyPressEvent(QKeyEvent(QEvent.KeyPress, Qt.Key_Escape, Qt.NoModifier))
+    qtbot.keyClick(w, Qt.Key_Escape)
     assert not w.full_screen and not w.isFullScreen()
     assert w.left.isVisible() and w.details_panel.isVisible()
-    w.keyPressEvent(QKeyEvent(QEvent.KeyPress, Qt.Key_F, Qt.NoModifier))
+    w.tree.setFocus()   # the clip table with focus doesn't take F for its type-ahead search
+    qtbot.keyClick(w.tree, Qt.Key_F)
     assert w.full_screen
     w.close()
     assert not w.full_screen

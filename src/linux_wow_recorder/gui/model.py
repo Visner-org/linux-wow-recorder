@@ -244,6 +244,11 @@ class ClipInfo:
         return bool(self.details.get("chat_hidden"))
 
     @property
+    def highlight(self) -> bool:
+        """A stretch of a clip saved on its own (Make a highlight)."""
+        return bool(self.details.get("highlight"))
+
+    @property
     def is_raid(self) -> bool:
         """A raid boss pull's clip; its dungeon is the boss."""
         return self.details.get("kind") == "raid"
@@ -264,6 +269,8 @@ class ClipInfo:
             return None
         if self.details.get("timer"):
             return self.details["timer"]
+        if self.highlight:
+            return None   # its length is the highlight's
         m = re.fullmatch(r"(\d+)m(\d{2})s", self.length or "")
         return int(m[1]) * 60 + int(m[2]) if m else None
 
@@ -313,9 +320,11 @@ class ClipInfo:
 def clip_info(path: Path, details: dict) -> ClipInfo | None:
     """A clip's details from its sidecar, or from its name when it has none."""
     if details.get("dungeon"):
+        # A highlight lists its own length, not its run's.
+        length = (details.get("highlight") or {}).get("length") or details.get("run_length", "")
         return ClipInfo(path, details.get("run_start") or path.stat().st_mtime,
                         details["dungeon"], details.get("level"), details.get("label", ""),
-                        details.get("result", ""), details.get("run_length", ""),
+                        details.get("result", ""), length,
                         details.get("deaths_total"), details.get("bosses_killed"),
                         bool(details.get("keep")), details)
     m = _CLIP_NAME.match(path.name)
@@ -488,6 +497,22 @@ def lust_text(lust: dict) -> str:
 def seek_target(at: float) -> float:
     """Where jumping to an event starts playing: a few seconds before it."""
     return max(0.0, at - LEAD_IN)
+
+
+def highlight_around(kind: str, at: float, end: float | None, length: float) -> tuple[float, float]:
+    """A highlight's first marks for an event row: a boss pull from just before the pull to just
+    after its kill or wipe, a death with the lead-up to it, a lust and what it was used for."""
+    if kind in ("kill", "wipe", "pull") and end is not None:
+        start, stop = at - 5, end + 5
+    elif kind == "pull":
+        start, stop = at - 5, length   # still going when the clip ends
+    elif kind in ("kill", "wipe"):   # the moment itself
+        start, stop = at - 20, at + 10
+    elif kind == "death":
+        start, stop = at - 15, at + 10
+    else:   # a lust, the run's start
+        start, stop = at - 5, at + 30
+    return max(0.0, start), min(length, stop)
 
 
 @dataclass

@@ -39,6 +39,7 @@ CLIPS_WINDOW = {
     "raids": "Raids view",
     "full_sessions": "Full sessions view",
     "hide_chat": "Hide chat button",
+    "highlights": "Highlight button (save part of a clip)",
     "youtube": "Upload to YouTube button",
 }
 

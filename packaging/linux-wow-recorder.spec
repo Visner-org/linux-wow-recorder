@@ -60,6 +60,14 @@ if [ "$1" -eq 0 ]; then
 fi
 
 %changelog
+* Wed Oct 21 2026 Linux WoW Recorder - 1.0.0-1
+- Highlights: save part of a clip (a boss kill, a wipe) as a clip of its own, from the clips
+  window; a new one flashes in the list until you click it
+- Space, F, the arrow keys, I and O work after clicking a clip in the list
+- One button switches between cards and table, one steps through the result filters
+- A bigger or maximized clips window grows the video, not the list
+- Closing the clips window while a card's picture is made no longer logs an error
+
 * Tue Oct 20 2026 Linux WoW Recorder - 0.8.6-1
 - A .deb for Ubuntu 25.10 and newer and Debian 13
 - Installs on plain Fedora: gpu-screen-recorder is recommended, not required (Fedora has only

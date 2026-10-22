@@ -116,6 +116,7 @@ Clips window); `false` hides it.
 | `raids` | `true` | the Raids view (raid boss pull clips) |
 | `full_sessions` | `true` | the Full sessions view (the whole recordings) |
 | `hide_chat` | `true` | the Hide chat button |
+| `highlights` | `true` | the Highlight button (save part of a clip) |
 | `youtube` | `true` | the Upload to YouTube button |
 
 With both views off, the Keystones button is hidden too.

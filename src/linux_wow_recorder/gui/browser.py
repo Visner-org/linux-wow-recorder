@@ -15,14 +15,15 @@ from PySide6.QtGui import (QColor, QDesktopServices, QFont, QGuiApplication, QIc
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import (QAbstractItemView, QButtonGroup, QFrame, QGroupBox, QHBoxLayout,
-                               QHeaderView, QLabel, QLineEdit, QListWidget, QListWidgetItem,
+                               QHeaderView, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu,
                                QMessageBox, QProgressDialog, QPushButton, QSlider, QSplitter, QStackedWidget, QStyle,
                                QStyledItemDelegate, QStyleOptionViewItem, QToolButton, QTreeWidget,
                                QTreeWidgetItem, QVBoxLayout, QWidget)
 
-from .. import APP_NAME, APP_TITLE, __version__, config, hidechat, live, service, state
-from ..clips import (media_length, read_sidecar, set_keep, sidecar_path, thumbnail_command,
-                     thumbnail_path, thumbnail_time, write_sidecar)
+import shiboken6
+from .. import APP_NAME, APP_TITLE, __version__, config, hidechat, highlight, live, service, state
+from ..clips import (SHORT_CUT_SECONDS, media_length, read_sidecar, set_keep, sidecar_path,
+                     thumbnail_command, thumbnail_path, thumbnail_time, write_sidecar)
 from ..config import CONFIG_DIR
 from ..config import ConfigError
 from . import model, theme
@@ -43,8 +44,10 @@ PREVIEW_PAUSED = "Recording active, preview paused to save resources"
 class Timeline(QWidget):
     """The clip as a scrub bar with lanes: boss pulls as spans above it (kill or wipe), deaths
     and lusts below it, and a small legend. Clicking an event jumps a few seconds before it;
-    clicking anywhere else seeks there. Hovering names what's under the pointer."""
+    clicking anywhere else seeks there. Hovering names what's under the pointer. While a
+    highlight is being made, its start and end are shown on the track and can be dragged."""
     seek = Signal(float)
+    marks_changed = Signal(float, float)   # a highlight's start or end was dragged
 
     PAD = 8           # left and right margin, px
     SNAP = 6          # px: a click this close to an event jumps to it
@@ -63,12 +66,15 @@ class Timeline(QWidget):
         self.bosses: list[model.Span] = []
         self.lusts: list[model.Span] = []
         self.markers: list[model.Marker] = []   # every event, for snapping and tooltips
+        self.marks: tuple[float, float] | None = None   # the highlight being made
+        self.dragging: int | None = None   # 0: its start, 1: its end
 
     def sizeHint(self) -> QSize:
         return QSize(400, 70)
 
     def set_clip(self, length: float, details: dict):
         self.length, self.position = length, 0.0
+        self.marks = None
         self.bosses = model.boss_spans(details, length)
         self.lusts = model.lust_spans(details, length)
         self.markers = model.markers(details)
@@ -76,13 +82,25 @@ class Timeline(QWidget):
 
     def set_length(self, length: float, details: dict):
         """The player found the length (a clip without one in its details)."""
-        position = self.position
+        position, marks = self.position, self.marks
         self.set_clip(length, details)
-        self.position = position
+        self.position, self.marks = position, marks
 
     def set_position(self, seconds: float):
         self.position = seconds
         self.update()
+
+    def set_marks(self, marks: tuple[float, float] | None):
+        self.marks = marks
+        self.update()
+
+    def _mark_at(self, x: float, y: float) -> int | None:
+        """The highlight edge under the pointer, if any: 0 its start, 1 its end."""
+        if not self.marks or not self.TRACK[0] - 8 <= y <= self.TRACK[1] + 8:
+            return None
+        near = [(abs(self._x(t) - x), i) for i, t in enumerate(self.marks)
+                if abs(self._x(t) - x) <= self.SNAP]
+        return min(near)[1] if near else None
 
     def _x(self, seconds: float) -> float:
         return self.PAD + (self.width() - 2 * self.PAD) * (seconds / self.length if self.length else 0)
@@ -122,6 +140,15 @@ class Timeline(QWidget):
             played = QRectF(track.left(), track.top(), self._x(self.position) - self.PAD, track.height())
             p.setBrush(pal.highlight())
             p.drawRoundedRect(played, 3, 3)
+            if self.marks:   # the highlight: a band over the track, with a handle at each end
+                x0, x1 = self._x(self.marks[0]), self._x(self.marks[1])
+                band = QColor(theme.color("lust", pal))
+                band.setAlpha(90)
+                p.setBrush(band)
+                p.drawRect(QRectF(x0, self.TRACK[0] - 4, x1 - x0, self.TRACK[1] - self.TRACK[0] + 8))
+                p.setBrush(theme.color("lust", pal))
+                for x in (x0, x1):
+                    p.drawRoundedRect(QRectF(x - 2, self.TRACK[0] - 6, 4, self.TRACK[1] - self.TRACK[0] + 12), 1.5, 1.5)
 
             mid = sum(self.EVENTS) / 2
             lust = theme.color("lust", pal)
@@ -183,6 +210,9 @@ class Timeline(QWidget):
         if not self.length or event.button() != Qt.LeftButton:
             return
         x, y = event.position().x(), event.position().y()
+        self.dragging = self._mark_at(x, y)
+        if self.dragging is not None:
+            return
         near = self._near(x)
         boss = self._boss_at(x, y)
         if near:
@@ -196,6 +226,16 @@ class Timeline(QWidget):
         if not self.length:
             return
         x, y = event.position().x(), event.position().y()
+        if self.dragging is not None:
+            marks = list(self.marks)
+            marks[self.dragging] = self._seconds(x)
+            if marks[0] > marks[1]:   # dragged past the other end: they swap
+                marks.reverse()
+                self.dragging = 1 - self.dragging
+            self.set_marks(tuple(marks))
+            self.marks_changed.emit(*self.marks)
+            return
+        self.setCursor(Qt.SizeHorCursor if self._mark_at(x, y) is not None else Qt.PointingHandCursor)
         names = [f"{model.mmss(m.at)}  {m.text}" for m in self._near(x)]
         boss = self._boss_at(x, y)
         if boss and not names:
@@ -204,6 +244,9 @@ class Timeline(QWidget):
                   if self._x(s.start) <= x <= self._x(s.end) and self.EVENTS[0] <= y <= self.EVENTS[1]
                   and not any(s.text in n for n in names)]
         self.setToolTip("\n".join(names) if names else model.mmss(self._seconds(x)))
+
+    def mouseReleaseEvent(self, event):
+        self.dragging = None
 
 
 class ClipBrowser(QWidget):
@@ -221,6 +264,7 @@ class ClipBrowser(QWidget):
         self.shown = 0   # clips in the list, after the filters and search
         self.hook_process = None
         self.chat_job = None   # the copy with the chat hidden being made
+        self.highlight_job = None   # the highlight being saved
         self.frame_process: QProcess | None = None   # the frame the chat box is drawn on
         try:
             self.cfg = config.load()
@@ -247,26 +291,18 @@ class ClipBrowser(QWidget):
             self.mode_group.addButton(b)
             self.mode_buttons[mode] = b
         self.mode_group.buttonClicked.connect(lambda b: self.set_mode(b.property("mode")))
-        self.filter_group = QButtonGroup(self)
+        # The result filter: one button that steps through All, Completed, Abandoned (or the
+        # raid's All, Kills, Wipes) and says which is on.
+        self.filter_key = "all"
+        self.filter_button = QPushButton()
+        self.filter_button.clicked.connect(self.next_filter)
         filters = QHBoxLayout()
-        for key, label in model.FILTERS.items():
-            b = QPushButton(label)
-            b.setCheckable(True)
-            b.setProperty("key", key)
-            b.setChecked(key == "all")
-            self.filter_group.addButton(b)
-            filters.addWidget(b)
-        self.filter_group.buttonClicked.connect(lambda _: self.fill_list())
+        filters.addWidget(self.filter_button)
         filters.addStretch(1)
-        self.view_group = QButtonGroup(self)
-        for i, (text, tip) in enumerate((("Cards", "Clips as cards with a picture"),
-                                         ("Table", "Clips as a compact table"))):
-            b = QPushButton(text)
-            b.setToolTip(tip)
-            b.setCheckable(True)
-            self.view_group.addButton(b, i)
-            filters.addWidget(b)
-        self.view_group.idClicked.connect(self.set_view)
+        # Cards or table: one button, named for the view it switches to.
+        self.view_button = QPushButton()
+        self.view_button.clicked.connect(lambda: self.set_view(1 - self.list_stack.currentIndex()))
+        filters.addWidget(self.view_button)
         settings = QPushButton("Settings...")
         settings.clicked.connect(self.settings_requested)
         top = QHBoxLayout()
@@ -288,20 +324,28 @@ class ClipBrowser(QWidget):
         self.tree.header().setStretchLastSection(False)
         self.tree.currentItemChanged.connect(lambda item, _: self.select(item.data(0, Qt.UserRole) if item else None))
         self.tree.itemActivated.connect(lambda *_: self.player.play())
+        self.tree.itemPressed.connect(lambda item: self.seen(item.data(0, Qt.UserRole)))
         self.tree.setSelectionMode(QAbstractItemView.ExtendedSelection)   # Shift and Ctrl
 
         self.thumbs: dict[str, QPixmap] = {}
         self.thumb_queue: list[model.ClipInfo] = []
         self.thumb_tried: set[str] = set()
         self.thumb_process: QProcess | None = None
+        # A clip just made (a highlight, a copy with the chat hidden) flashes until it's clicked,
+        # to show where it went.
+        self.fresh: set[str] = set()
+        self.flash_on = False
+        self.flash_timer = QTimer(self, interval=500)
+        self.flash_timer.timeout.connect(self.flash)
         self.cards = QListWidget()
-        self.cards.setItemDelegate(ClipCard(self.thumbnail, self.cards))
+        self.cards.setItemDelegate(ClipCard(self.thumbnail, self.cards, self.flashing))
         self.cards.setUniformItemSizes(True)
         self.cards.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
         self.cards.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.cards.setResizeMode(QListWidget.Adjust)
         self.cards.currentItemChanged.connect(lambda item, _: self.select(item.data(Qt.UserRole) if item else None))
         self.cards.itemActivated.connect(lambda *_: self.player.play())
+        self.cards.itemPressed.connect(lambda item: self.seen(item.data(Qt.UserRole)))
         self.cards.setSelectionMode(QAbstractItemView.ExtendedSelection)
         for view in (self.cards, self.tree):
             view.itemSelectionChanged.connect(self.show_count)
@@ -394,6 +438,7 @@ class ClipBrowser(QWidget):
         self.play_button.clicked.connect(self.toggle_play)
         self.timeline = Timeline()
         self.timeline.seek.connect(self.seek)
+        self.timeline.marks_changed.connect(lambda *_: self.show_marks())
         self.time_label = QLabel("0:00 / 0:00")
         self.volume = QSlider(Qt.Horizontal)
         self.volume.setRange(0, 100)
@@ -427,6 +472,37 @@ class ClipBrowser(QWidget):
         controls.addWidget(self.volume)
         controls.addWidget(self.full_button)
 
+        # Making a highlight: its start and end (also dragged on the timeline), and Save.
+        self.marks_label = QLabel()
+        start_here = QPushButton("Start here")
+        start_here.setToolTip("Start the highlight where the video is (I)")
+        start_here.clicked.connect(lambda: self.set_mark(0))
+        end_here = QPushButton("End here")
+        end_here.setToolTip("End the highlight where the video is (O)")
+        end_here.clicked.connect(lambda: self.set_mark(1))
+        self.save_highlight_button = QPushButton("Save highlight")
+        self.save_highlight_button.setObjectName("primary")
+        self.save_highlight_button.clicked.connect(self.save_highlight)
+        cancel = QPushButton("Cancel")
+        cancel.setToolTip("Stop making a highlight (Esc)")
+        cancel.clicked.connect(self.clear_marks)
+        self.highlight_bar = QWidget()
+        hb = QHBoxLayout(self.highlight_bar)
+        hb.setContentsMargins(0, 0, 0, 0)
+        hb.addWidget(self.marks_label, 1)
+        for b in (start_here, end_here, self.save_highlight_button, cancel):
+            b.setFocusPolicy(Qt.NoFocus)   # Space plays, I and O mark
+            hb.addWidget(b)
+        self.highlight_bar.hide()
+        # The player's keys are shortcuts, not keyPressEvent: a clip list or the events with
+        # focus would take them (letters for type-ahead search, Space for selecting). The search
+        # box still gets letters, Space and arrows (a text box claims them before shortcuts).
+        for key, slot in ((Qt.Key_Space, self.toggle_play), (Qt.Key_F, self.toggle_full_screen),
+                          (Qt.Key_Left, lambda: self.skip(-5)), (Qt.Key_Right, lambda: self.skip(5)),
+                          (Qt.Key_I, lambda: self.set_mark(0)), (Qt.Key_O, lambda: self.set_mark(1)),
+                          (Qt.Key_Escape, self.escape)):
+            QShortcut(QKeySequence(key), self, slot)
+
         self.title = QLabel()
         self.title.setStyleSheet("font-size: 20px; font-weight: 600;")
         self.title.setWordWrap(True)
@@ -445,6 +521,8 @@ class ClipBrowser(QWidget):
         self.events.setMinimumHeight(150)
         self.events.itemActivated.connect(self.seek_to_event)
         self.events.itemClicked.connect(self.seek_to_event)
+        self.events.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.events.customContextMenuRequested.connect(self.event_menu)
 
         # Actions: Play is the main one (with the player); the rest are an icon row and a menu.
         self.keep_button = self._tool_button("Keep this clip forever, whatever \"Keep clips\" says",
@@ -462,6 +540,9 @@ class ClipBrowser(QWidget):
         self.hide_chat_button = self._tool_button(
             "Hide chat: makes a copy of the clip with a black box over the chat",
             self.hide_chat, "view-hidden", QStyle.SP_DialogNoButton)
+        self.highlight_button = self._tool_button(
+            "Make a highlight: save part of this clip as a clip of its own (I and O mark it)",
+            self.start_highlight, "edit-cut", QStyle.SP_DialogSaveButton)
         # Only there when an after_clips command is set (Settings > Advanced).
         self.hook_button = self._tool_button("Run your after_clips command on this clip again",
                                              self.run_hook, "system-run", QStyle.SP_BrowserReload)
@@ -471,13 +552,14 @@ class ClipBrowser(QWidget):
         header.addWidget(self.title, 1)
         header.addWidget(self.result_chip, 0, Qt.AlignVCenter)
         header.addSpacing(12)
-        for b in (self.keep_button, open_button, folder_button, self.hide_chat_button,
-                  self.youtube_button, self.hook_button):
+        for b in (self.keep_button, open_button, folder_button, self.highlight_button,
+                  self.hide_chat_button, self.youtube_button, self.hook_button):
             header.addWidget(b, 0, Qt.AlignVCenter)
         header.addSpacing(10)
         header.addWidget(self.trash_button, 0, Qt.AlignVCenter)
-        self.action_widgets = [self.keep_button, open_button, folder_button, self.hide_chat_button,
-                               self.youtube_button, self.hook_button, self.trash_button]
+        self.action_widgets = [self.keep_button, open_button, folder_button, self.highlight_button,
+                               self.hide_chat_button, self.youtube_button, self.hook_button,
+                               self.trash_button]
 
         # What full screen hides: the list, and the clip's details and actions.
         self.left = left
@@ -493,6 +575,7 @@ class ClipBrowser(QWidget):
         rv.setContentsMargins(0, 0, 0, 0)
         rv.addWidget(self.video_stack, 3)
         rv.addLayout(controls)
+        rv.addWidget(self.highlight_bar)
         rv.addWidget(self.details_panel, 2)
         # Double-clicking the video goes full screen and back.
         for w in (self.video, self.poster, *self.video.findChildren(QWidget)):
@@ -502,8 +585,9 @@ class ClipBrowser(QWidget):
         split = QSplitter()
         split.addWidget(left)
         split.addWidget(right)
-        split.setStretchFactor(0, 2)
-        split.setStretchFactor(1, 3)
+        # A bigger or maximized window grows the video, not the list (wider only adds blank card).
+        split.setStretchFactor(0, 0)
+        split.setStretchFactor(1, 1)
         split.setSizes([560, 840])
         layout = QVBoxLayout(self)
         layout.addWidget(split)
@@ -517,8 +601,8 @@ class ClipBrowser(QWidget):
         self.apply_theme()
         self.settings = QSettings(str(SETTINGS_FILE), QSettings.IniFormat)
         view = 1 if self.settings.value("view") == "table" else 0
-        self.view_group.button(view).setChecked(True)
         self.list_stack.setCurrentIndex(view)
+        self.show_view_button()
         mode = self.settings.value("mode")
         self.mode = mode if mode in (model.RAIDS, model.SESSIONS) else model.KEYS
         self.mode_buttons[self.mode].setChecked(True)
@@ -765,7 +849,7 @@ class ClipBrowser(QWidget):
 
     def fill_list(self, *_args, select=None):
         select = str(select or (self.current.path if self.current else "")) or None
-        key = "all" if self.mode == model.SESSIONS else self.filter_group.checkedButton().property("key")
+        key = "all" if self.mode == model.SESSIONS else self.filter_key
         shown = [c for c in self.clips if model.in_mode(c, self.mode)
                  and model.matches(c, key, self.search.text().strip())]
 
@@ -786,7 +870,8 @@ class ClipBrowser(QWidget):
         for c in shown:
             item = SortItem([
                 time.strftime("%Y-%m-%d %H:%M", time.localtime(c.started)),
-                f"{c.dungeon} (chat hidden)" if c.chat_hidden else c.dungeon,
+                c.dungeon + (" (highlight)" if c.highlight else "")
+                + (" (chat hidden)" if c.chat_hidden else ""),
                 f"#{c.pull}" if c.pull else f"+{c.level}" if c.level else "",
                 c.result_text,
                 c.length,
@@ -815,6 +900,40 @@ class ClipBrowser(QWidget):
             text += f", {n} selected"
         self.count.setText(text)
 
+    def scroll_to_current_card(self):
+        if item := self.cards.currentItem():
+            self.cards.scrollToItem(item)
+
+    def show_new(self, path: Path):
+        """Shows a clip just made, scrolled to in the list and flashing until it's clicked."""
+        self.fresh.add(str(path))
+        self.flash_timer.start()
+        self.fill_list(select=path)
+
+    def flashing(self, path: str) -> bool:
+        """Whether path's card or row is lit up right now (ClipCard asks)."""
+        return self.flash_on and path in self.fresh
+
+    def flash(self):
+        self.flash_on = not self.flash_on
+        if not self.fresh:
+            self.flash_on = False
+            self.flash_timer.stop()
+        lit = QColor(theme.color("lust", self.palette()))
+        lit.setAlpha(90)
+        for i in range(self.tree.topLevelItemCount()):
+            item = self.tree.topLevelItem(i)
+            on = self.flashing(item.data(0, Qt.UserRole))
+            for col in range(self.tree.columnCount()):
+                item.setBackground(col, lit if on else Qt.NoBrush)
+        self.cards.viewport().update()
+
+    def seen(self, path: str):
+        """A clicked clip stops flashing."""
+        if path in self.fresh:
+            self.fresh.discard(path)
+            self.flash()
+
     def selected_clips(self) -> list[model.ClipInfo]:
         """The clips picked with Shift or Ctrl in the list on show, in its order."""
         view = self.list_stack.currentWidget()
@@ -835,24 +954,42 @@ class ClipBrowser(QWidget):
 
     def show_mode(self):
         sessions, raids = self.mode == model.SESSIONS, self.mode == model.RAIDS
-        filters = model.RAID_FILTERS if raids else model.FILTERS
-        buttons = self.filter_group.buttons()
-        relabel = [b.property("key") for b in buttons] != list(filters)
-        for b, (key, label) in zip(buttons, filters.items(), strict=True):
-            b.setVisible(not sessions)   # results are per run
-            b.setProperty("key", key)
-            b.setText(label)
-        if relabel:   # Kills isn't Completed: back to All
-            buttons[0].setChecked(True)
+        if self.filter_key not in self.filters():   # Kills isn't Completed: back to All
+            self.filter_key = "all"
+        self.filter_button.setVisible(not sessions)   # results are per run
+        self.show_filter_button()
         self.search.setPlaceholderText("Search bosses and raids" if raids else "Search dungeons")
         self.tree.setHeaderLabels(SESSION_COLUMNS if sessions else RAID_COLUMNS if raids
                                   else COLUMNS)
 
+    def filters(self) -> dict[str, str]:
+        return model.RAID_FILTERS if self.mode == model.RAIDS else model.FILTERS
+
+    def next_filter(self):
+        keys = list(self.filters())
+        self.filter_key = keys[(keys.index(self.filter_key) + 1) % len(keys)]
+        self.show_filter_button()
+        self.fill_list()
+
+    def show_filter_button(self):
+        filters = self.filters()
+        keys = list(filters)
+        following = filters[keys[(keys.index(self.filter_key) + 1) % len(keys)]]
+        self.filter_button.setText(f"Showing: {filters[self.filter_key]}")
+        self.filter_button.setToolTip(f"Click for: {following}")
+
     def set_view(self, view: int):
         self.list_stack.setCurrentIndex(view)
         self.settings.setValue("view", "table" if view else "cards")
+        self.show_view_button()
         self.select(self.current.path if self.current else None)   # just the one, as in the other
         self.show_count()
+
+    def show_view_button(self):
+        table = self.list_stack.currentIndex() == 1
+        self.view_button.setText("Cards" if table else "Table")
+        self.view_button.setToolTip("Show the clips as cards with a picture" if table
+                                    else "Show the clips as a compact table")
 
     def select(self, path: str | None):
         """Shows the clip at path (None: no clip) and marks it in both the cards and the table."""
@@ -862,6 +999,9 @@ class ClipBrowser(QWidget):
                     self.cards.blockSignals(True)
                     self.cards.setCurrentRow(i)
                     self.cards.blockSignals(False)
+                # once the list has laid the cards out (it does that later); the item itself may
+                # be gone by then (the list refilled), so whichever is current
+                QTimer.singleShot(0, self.cards, self.scroll_to_current_card)
                 break
         for i in range(self.tree.topLevelItemCount()):
             if self.tree.topLevelItem(i).data(0, Qt.UserRole) == path:
@@ -869,6 +1009,7 @@ class ClipBrowser(QWidget):
                     self.tree.blockSignals(True)
                     self.tree.setCurrentItem(self.tree.topLevelItem(i))
                     self.tree.blockSignals(False)
+                self.tree.scrollToItem(self.tree.topLevelItem(i))
                 break
         clip = next((c for c in self.clips if str(c.path) == path), None)
         same_file = clip and self.current and clip.path == self.current.path
@@ -899,10 +1040,12 @@ class ClipBrowser(QWidget):
             self.facts.setText("")
             self.events.clear()
             self.timeline.set_clip(0, {})
+            self.highlight_bar.hide()
             return
         if not same_file:
             self.video_stack.setCurrentWidget(self.poster)
             self.player.setSource(QUrl.fromLocalFile(str(clip.path)))
+            self.clear_marks()   # the marks were the other clip's
         self.show_details(clip)
 
     # ── Thumbnails ──
@@ -939,8 +1082,8 @@ class ClipBrowser(QWidget):
         process.start(cmd[0], cmd[1:])
 
     def thumbnail_made(self, process: QProcess, clip: model.ClipInfo):
-        if self.thumb_process is not process:
-            return   # errorOccurred and finished both came
+        if self.thumb_process is not process or not shiboken6.isValid(process):
+            return   # errorOccurred and finished both came, or the window closed mid-picture
         self.thumb_process = None
         process.deleteLater()
         out = thumbnail_path(clip.path)
@@ -967,13 +1110,16 @@ class ClipBrowser(QWidget):
         if clip.is_raid:
             facts.append(clip.raid)
             facts.append(f"pull {clip.length}")
+        elif clip.highlight:
+            h = d["highlight"]
+            facts.append(f"highlight {clip.length}, from {model.mmss(h['start'])} in the clip")
         elif not clip.is_session:
             facts.append(f"run {clip.length}")
             if clip.time_left:
                 facts.append(clip.time_left)
         elif clip.length:
             facts.append(f"recorded {clip.length}")
-        if clip.bosses_killed is not None and not clip.is_raid:
+        if clip.bosses_killed is not None and not clip.is_raid and not clip.highlight:
             bosses = {e["name"] for e in d.get("encounters", [])}
             facts.append(f"{clip.bosses_killed}/{len(bosses)} bosses killed" if bosses
                          else "no bosses")
@@ -1009,7 +1155,9 @@ class ClipBrowser(QWidget):
             self.events.resizeColumnToContents(col)
         self.events.header().setStretchLastSection(False)
         self.events.header().setSectionResizeMode(1, QHeaderView.Stretch)
+        marks = self.timeline.marks
         self.timeline.set_clip(d.get("clip_length") or self.player.duration() / 1000, d)
+        self.timeline.set_marks(marks)   # a reload while making a highlight keeps it
         self.keep_button.setChecked(clip.keep)
         self.keep_button.setText("★ Kept" if clip.keep else "☆ Keep")
         # A recording in sessions/ is never deleted anyway, and its details file would stay
@@ -1021,6 +1169,7 @@ class ClipBrowser(QWidget):
             if clip.is_session else "Keep this clip forever, whatever \"Keep clips\" says")
         self.youtube_button.setVisible(not clip.is_session and self.part_on("youtube"))
         self.hide_chat_button.setVisible(not clip.is_session and self.part_on("hide_chat"))
+        self.highlight_button.setVisible(self.can_highlight())
         self.hook_button.setVisible(bool(self.cfg and self.cfg.after_clips) and not clip.is_session
                                     and not clip.elsewhere)
 
@@ -1041,6 +1190,8 @@ class ClipBrowser(QWidget):
     def _event_item(self, row: model.EventRow) -> QTreeWidgetItem:
         item = QTreeWidgetItem([model.mmss(row.at), row.text, row.detail])
         item.setData(0, Qt.UserRole, row.at)
+        end = row.children[-1].at if row.children and row.children[-1].kind in ("kill", "wipe") else None
+        item.setData(0, Qt.UserRole + 1, (row.kind if not row.children else "pull", end))
         item.setIcon(1, event_icon(row.kind, self.palette()))
         item.setForeground(0, theme.muted(self.palette()))
         item.setForeground(2, theme.muted(self.palette()))
@@ -1126,17 +1277,16 @@ class ClipBrowser(QWidget):
                 "view-fullscreen", self.style().standardIcon(QStyle.SP_TitleBarMaxButton)))
             self.full_button.setToolTip("Full screen (F, or double-click the video)")
 
-    def keyPressEvent(self, event):
-        k = event.key()
-        if k == Qt.Key_Space:
-            self.toggle_play()
-        elif k == Qt.Key_F or (k == Qt.Key_Escape and self.full_screen):
+    def skip(self, seconds: int):
+        if self.player.duration():
+            self.player.setPosition(max(0, self.player.position() + seconds * 1000))
+
+    def escape(self):
+        """Esc stops making a highlight, or else leaves full screen."""
+        if self.timeline.marks:
+            self.clear_marks()
+        elif self.full_screen:
             self.toggle_full_screen()
-        elif k in (Qt.Key_Left, Qt.Key_Right) and self.player.duration():
-            step = -5000 if k == Qt.Key_Left else 5000
-            self.player.setPosition(max(0, self.player.position() + step))
-        else:
-            super().keyPressEvent(event)
 
     # ── Actions ──
 
@@ -1164,8 +1314,9 @@ class ClipBrowser(QWidget):
                                 "YouTube page, then paste the description.")
 
     def busy(self) -> bool:
-        """True while a copy with the chat hidden, or an after_clips command, is being made."""
-        return bool(self.chat_job or self.frame_process or self.hook_process)
+        """True while a copy with the chat hidden, a highlight, or an after_clips command is being
+        made."""
+        return bool(self.chat_job or self.frame_process or self.hook_process or self.highlight_job)
 
     def hide_chat(self):
         """Asks where the chat is on a frame of the clip, then makes a copy with a black box
@@ -1276,8 +1427,126 @@ class ClipBrowser(QWidget):
             QMessageBox.warning(self, APP_TITLE, f"Couldn't make the copy: {e}")
             return
         self.reload()
-        self.fill_list(select=job["out"])   # the copy
+        self.show_new(job["out"])   # the copy
         QMessageBox.information(self, APP_TITLE, "Copy made with the chat hidden.")
+
+    # ── Highlights ──
+
+    def can_highlight(self) -> bool:
+        clip = self.current
+        return bool(clip and self.cfg and not clip.is_session and self.part_on("highlights"))
+
+    def clip_seconds(self) -> float:
+        return self.timeline.length or self.player.duration() / 1000
+
+    def start_highlight(self):
+        """Opens the highlight bar with 30 s from where the video is; the marks are then moved."""
+        if not self.can_highlight():
+            return
+        if not self.timeline.marks:
+            at = self.player.position() / 1000
+            self.timeline.set_marks((at, min(self.clip_seconds(), at + 30)))
+        self.show_marks()
+
+    def set_mark(self, which: int):
+        """The highlight starts (0) or ends (1) where the video is."""
+        if not self.can_highlight():
+            return
+        at = self.player.position() / 1000
+        marks = list(self.timeline.marks or (at, min(self.clip_seconds(), at + 30)))
+        marks[which] = at
+        if marks[0] > marks[1]:   # an end before the start, or the other way: 30 s from it
+            marks[1 - which] = max(0.0, at - 30) if which else min(self.clip_seconds(), at + 30)
+        self.timeline.set_marks(tuple(marks))
+        self.show_marks()
+
+    def event_menu(self, pos):
+        item = self.events.itemAt(pos)
+        at = item.data(0, Qt.UserRole) if item else None
+        if at is None or not self.can_highlight():
+            return
+        kind, end = item.data(0, Qt.UserRole + 1)
+        menu = QMenu(self)
+        menu.addAction("Make a highlight of this", lambda: self.highlight_event(kind, at, end))
+        menu.exec(self.events.viewport().mapToGlobal(pos))
+
+    def highlight_event(self, kind: str, at: float, end: float | None):
+        self.timeline.set_marks(model.highlight_around(kind, at, end, self.clip_seconds()))
+        self.show_marks()
+        self.seek(self.timeline.marks[0])
+
+    def show_marks(self):
+        start, end = self.timeline.marks
+        self.marks_label.setText(f"Highlight {model.mmss(start)} – {model.mmss(end)}  ·  "
+                                 f"{highlight.length_text(end - start)}")
+        self.save_highlight_button.setEnabled(end - start >= highlight.MIN_SECONDS
+                                              and self.highlight_job is None)
+        self.highlight_bar.show()
+
+    def clear_marks(self):
+        self.timeline.set_marks(None)
+        self.highlight_bar.hide()
+
+    def save_highlight(self):
+        """Saves the marked part as a clip of its own, beside the clip, in the background."""
+        clip = self.current
+        if not clip or not self.timeline.marks or self.highlight_job or not self.cfg:
+            return
+        start, end = self.timeline.marks
+        out = highlight.output_path(clip.path, self.cfg.clips_dir, start, end)
+        if out.exists() and QMessageBox.question(
+                self, APP_TITLE, "This highlight is already saved. Save it again?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+            return
+        part = out.with_name(out.name + ".part")
+        try:
+            out.parent.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            QMessageBox.warning(self, APP_TITLE, f"Couldn't save the highlight: {e}")
+            return
+        cmd = highlight.command(clip.path, start, end, part)
+        process = QProcess(self)
+        self.highlight_job = {"clip": clip, "out": out, "part": part, "marks": (start, end),
+                              "process": process}
+        process.finished.connect(lambda *_: self.highlight_saved(process))
+        process.errorOccurred.connect(lambda e: e == QProcess.FailedToStart
+                                      and self.highlight_saved(process))
+        self.save_highlight_button.setEnabled(False)
+        self.save_highlight_button.setText("Saving...")
+        process.start(cmd[0], cmd[1:])
+
+    def highlight_saved(self, process: QProcess):
+        job = self.highlight_job
+        if job is None or job["process"] is not process:
+            return   # errorOccurred and finished both came
+        self.highlight_job = None
+        process.deleteLater()
+        self.save_highlight_button.setText("Save highlight")
+        ok = (process.exitStatus() == QProcess.NormalExit and process.exitCode() == 0
+              and process.error() != QProcess.FailedToStart and job["part"].exists())
+        start, end = job["marks"]
+        if ok and (media_length(job["part"]) or 0) < end - start - SHORT_CUT_SECONDS:
+            ok = False   # ffmpeg took a read error for the end of the clip
+        if ok:
+            try:
+                job["part"].replace(job["out"])
+                write_sidecar(job["out"], highlight.details(job["clip"].details, job["clip"].path,
+                                                            *job["marks"]))
+            except OSError as e:
+                job["part"].unlink(missing_ok=True)
+                QMessageBox.warning(self, APP_TITLE, f"Couldn't save the highlight: {e}")
+                self.show_marks()
+                return
+            self.clear_marks()
+            self.reload()
+            self.show_new(job["out"])   # the highlight
+            return
+        error = bytes(process.readAllStandardError()).decode(errors="replace").strip()
+        job["part"].unlink(missing_ok=True)
+        QMessageBox.warning(self, APP_TITLE, "Couldn't save the highlight."
+                            + (f"\n\n{error[-1500:]}" if error else ""))
+        if self.timeline.marks:
+            self.show_marks()
 
     def toggle_keep(self):
         clip = self.current
@@ -1372,9 +1641,10 @@ class ClipBrowser(QWidget):
 class ClipCard(QStyledItemDelegate):
     """A clip as a card: its picture, the dungeon and level, the result, and what happened."""
 
-    def __init__(self, thumbnail, parent):
+    def __init__(self, thumbnail, parent, flashing=lambda _path: False):
         super().__init__(parent)
         self.thumbnail = thumbnail   # ClipBrowser.thumbnail
+        self.flashing = flashing     # ClipBrowser.flashing
 
     def sizeHint(self, option, index) -> QSize:
         return QSize(0, CARD_HEIGHT)   # as wide as the list
@@ -1455,15 +1725,20 @@ class ClipCard(QStyledItemDelegate):
         p.drawText(chip, Qt.AlignCenter, clip.result_text)
         p.drawText(QRectF(chip.right() + 10, y, width, chip.height()), Qt.AlignLeft | Qt.AlignVCenter,
                    clip.length)
-        if clip.chat_hidden:   # the copy made with Hide chat, beside its clip
-            cx = chip.right() + 10 + fm.horizontalAdvance(clip.length) + 14
-            icon = QIcon.fromTheme("view-hidden")
+        cx = chip.right() + 10 + fm.horizontalAdvance(clip.length) + 14
+        # A highlight, or the copy made with Hide chat, beside its clip
+        for shown, icon_name, label in ((clip.highlight, "edit-cut", "Highlight"),
+                                        (clip.chat_hidden, "view-hidden", "Chat hidden")):
+            if not shown:
+                continue
+            icon = QIcon.fromTheme(icon_name)
             if not icon.isNull():
                 icon.paint(p, int(cx), int(y + (chip.height() - 16) / 2), 16, 16)
                 cx += 20
             p.setPen(muted)
             p.drawText(QRectF(cx, y, max(0.0, r.right() - cx), chip.height()),
-                       Qt.AlignLeft | Qt.AlignVCenter, "Chat hidden")
+                       Qt.AlignLeft | Qt.AlignVCenter, label)
+            cx += fm.horizontalAdvance(label) + 14
 
         # Line 3: when, deaths and lusts, with the timeline's marks.
         y = chip.bottom() + 6
@@ -1481,6 +1756,10 @@ class ClipCard(QStyledItemDelegate):
             p.setPen(muted)
             p.drawText(QRectF(cx + 17, y, 40, fm.height()), Qt.AlignLeft | Qt.AlignVCenter, str(n))
             cx += 17 + fm.horizontalAdvance(str(n)) + 12
+        if self.flashing(str(clip.path)):   # just made: an outline that blinks until clicked
+            p.setPen(QPen(theme.color("lust", pal), 3))
+            p.setBrush(Qt.NoBrush)
+            p.drawRoundedRect(QRectF(option.rect).adjusted(2, 2, -2, -2), 6, 6)
         p.restore()
 
 

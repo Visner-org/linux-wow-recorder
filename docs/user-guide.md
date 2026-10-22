@@ -76,7 +76,7 @@ And in WoW:
 ### Nobara or Fedora (RPM)
 
 ```bash
-sudo dnf install ./linux-wow-recorder-0.8.6-1.fc44.noarch.rpm
+sudo dnf install ./linux-wow-recorder-1.0.0-1.fc44.noarch.rpm
 ```
 
 dnf installs ffmpeg and Qt from your distro's repos along with it, and on Nobara
@@ -121,7 +121,7 @@ For Ubuntu 25.10 and newer (26.04 is tested) and Debian 13. Download the `.deb` 
 [Releases](https://github.com/Visner-org/linux-wow-recorder/releases) page, then:
 
 ```bash
-sudo apt install ./linux-wow-recorder_0.8.6-1_all.deb
+sudo apt install ./linux-wow-recorder_1.0.0-1_all.deb
 flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
 flatpak install --user flathub com.dec05eba.gpu_screen_recorder
 ```
@@ -325,8 +325,8 @@ at login).
   (gpu-screen-recorder, ffmpeg, the combat log folder, combat logging, the output folder, the
   service), with what to do about each unticked item.
 - **The clips** on the left, as cards (a picture, the dungeon and level, the result, length,
-  deaths and lusts, ★ when kept) or as a table you can sort by any column (Cards / Table).
-  Filter with All / Completed / Abandoned, or search by dungeon.
+  deaths and lusts, ★ when kept) or as a table you can sort by any column (the Table button switches, and then Cards switches back).
+  The Showing button steps through All, Completed and Abandoned; or search by dungeon.
 - **Clips you move elsewhere**: add the folder in Settings > Clips and storage > "Also show
   clips from", and the list shows the clips there too, saying which folder each is in. If you
   leave a clip's `.json` (and `.jpg`) in `clips/` when you move the video, it keeps its picture,
@@ -334,7 +334,7 @@ at login).
   changes anything in those folders, and Keep and "Keep clips" don't apply there.
 - **Keystones / Raids / Full sessions**, above the list: Keystones lists the clips, one per
   dungeon run; Raids lists one per raid boss pull ("#3" is the third pull of that boss), filtered
-  with All / Kills / Wipes and searched by boss or raid; Full sessions lists the whole recordings they were cut from, one each time you played, with
+  with Showing (All, Kills, Wipes) and searched by boss or raid; Full sessions lists the whole recordings they were cut from, one each time you played, with
   every run in them on the timeline and in the events (each run holding its boss pulls). Full
   recordings are kept for as long as Settings > Clips and storage > "Keep full recordings" says
   (3 days unless you change it; Forever keeps them all); ☆ Keep keeps one forever. A recording
@@ -350,8 +350,18 @@ at login).
 - **The events** below, one row per boss pull ("killed in 1:44 · 2 deaths") holding the deaths
   and lusts during it; wipes and pulls with deaths are opened. Clicking a row plays from a few
   seconds before it.
-- **Keys**: space plays and pauses; the left and right arrows skip 5 seconds; F goes full
-  screen and back (Esc leaves it too).
+- **Highlights**: save part of a clip as a clip of its own, to share one boss kill or a wipe.
+  The scissors button beside the title marks 30 seconds from where the video is; drag either
+  end on the timeline, or play to a moment and press I (start here) or O (end here). Right-click
+  a boss pull, death or lust in the events for "Make a highlight of this", which marks the pull
+  from just before it to just after the kill or wipe, or the moments around a death or lust.
+  **Save highlight** puts it in your clips folder in seconds, named after the clip with the times
+  ("... highlight 12m03s-12m49s"), with only the bosses, deaths and lusts inside it. The video
+  isn't re-encoded, so it starts on the nearest keyframe before the start you picked, at most a
+  second or two early. Esc stops. A highlight is a clip like the others: Keep, the trash,
+  YouTube and `after_clips` work on it.
+- **Keys**: space plays and pauses; the left and right arrows skip 5 seconds; I and O mark a
+  highlight's start and end; F goes full screen and back (Esc leaves it too).
 - **Full screen**: the button at the end of the timeline, F, or a double-click on the video.
   The video fills the screen with Play and the timeline under it.
 - **Volume**: the slider after the time; the speaker before it mutes and unmutes.
@@ -364,7 +374,8 @@ at login).
 - **Several at once**: Ctrl+click picks clips one by one, Shift+click a range. The trash can
   (or the Delete key) then moves them all to the trash, after one question.
 - **Less on screen**: Settings > Clips and storage > Clips window turns off the Raids view, the
-  Full sessions view, the Hide chat button and the YouTube button. All are on by default.
+  Full sessions view, the Highlight button, the Hide chat button and the YouTube button. All are
+  on by default.
 
 New clips show up by themselves.
 
