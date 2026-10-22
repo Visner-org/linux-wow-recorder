@@ -2,7 +2,7 @@
 # For the AUR. Builds from the GitHub release's source tarball. After changing pkgver:
 # updpkgsums && makepkg --printsrcinfo > .SRCINFO
 pkgname=linux-wow-recorder
-pkgver=0.8.6
+pkgver=1.0.0
 pkgrel=1
 pkgdesc="Records World of Warcraft sessions and cuts one clip per dungeon run"
 arch=('any')
@@ -12,7 +12,7 @@ depends=('python' 'pyside6' 'qt6-multimedia' 'gpu-screen-recorder' 'ffmpeg' 'gre
 makedepends=('python-build' 'python-installer' 'python-hatchling')
 checkdepends=('python-pytest')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/$pkgver.tar.gz")
-sha256sums=('be9b46264e709ff5ae71bf2cbf7482755c62091aaa99c7319d6b82e357bd8522')
+sha256sums=('1c89435067e0290ed38c9b339ff1e56754f61e878f8bc81608ee539d7b1e5b59')
 
 build() {
   cd "$pkgname-$pkgver"
