@@ -1,4 +1,4 @@
-from linux_wow_recorder.combatlog import find_runs, parse_log_time, read_log_events
+from linux_wow_recorder.combatlog import drop_despawns, find_runs, parse_log_time, read_log_events
 
 T0 = 1_800_000_000.0
 
@@ -420,3 +420,52 @@ def test_a_completed_key_is_timed_or_over_time_by_its_dungeons_limit():
     unknown = find_runs([zone(0, 2290, "New Dungeon", 8), key_start(10, 2290, "New Dungeon", 12),
                          boss(100), key_end(1700, 2290, 12, 1_600_000)])[0]
     assert (unknown.label, unknown.time_limit) == ("+12 Completed", None)
+
+
+def test_enemy_forces_at_each_boss_kill():
+    def mob(t, npc, spawn):
+        return died(t, f"Creature-0-1-2290-1-{npc}-{spawn}", "Mob")
+    runs = find_runs([
+        zone(0, 2290, "Altar of Fangs", 8),
+        mob(5, 261573, "A"),                           # before the key: not counted
+        (T0 + 10, "CHALLENGE_MODE_START", ["Altar of Fangs", "2290", "588", "12", "[10", "9]"]),
+        mob(50, 261573, "B"), mob(51, 261573, "B"),     # 30, and the same mob again: once
+        mob(52, 261554, "C"),                           # 25
+        mob(53, 1, "D"),                                # worth nothing
+        died(54, "Player-1-AAA", "Tank-Realm-US"),
+        (T0 + 100, "ENCOUNTER_START", ["2397", "Rav'i", "8", "5", "2290"]),
+        boss_end(130, "Rav'i", killed=False),          # a wipe: no forces
+        (T0 + 200, "ENCOUNTER_START", ["2397", "Rav'i", "8", "5", "2290"]),
+        boss_end(230, "Rav'i", killed=True),
+        key_end(1700, 2290, 12, 1_600_000),
+    ])
+    [run] = runs
+    assert [e.forces for e in run.encounters] == [None, 6.73]   # 55 of 817
+    # A dungeon not in the table, or a key whose start isn't logged: none.
+    other = find_runs([zone(0, 2290, "New Dungeon", 8), key_start(10, 2290, "New Dungeon", 12),
+                       mob(50, 261573, "B"), boss(100), boss_end(130, "Boss", killed=True),
+                       key_end(1700, 2290, 12, 1_600_000)])[0]
+    assert [e.forces for e in other.encounters] == [None]
+
+
+def test_despawned_mobs_dont_count(tmp_path):
+    # Two Ascendant Serpents (30 each) die; one was fought, the other only has its UNIT_DIED.
+    log = tmp_path / "WoWCombatLog-100826_190000.txt"
+    fought, gone = "Creature-0-1-2290-1-261573-0000A", "Creature-0-1-2290-1-261573-0000B"
+    log.write_text("".join(f"10/8/2026 19:{m}-7  {line}\n" for m, line in [
+        ("00:00.000", 'ZONE_CHANGE,2290,"Altar of Fangs",8'),
+        ("00:10.000", 'CHALLENGE_MODE_START,"Altar of Fangs",2290,588,12,[10,9]'),
+        ("01:00.000", f'SPELL_DAMAGE,Player-1-AAA,"Tank",0x511,0x0,{fought},"Ascendant Serpent"'),
+        ("01:01.000", f'UNIT_DIED,0000000000000000,nil,0x80000000,0x80000000,{fought},'
+                      '"Ascendant Serpent",0xa48,0x80000000,0'),
+        ("01:02.000", f'UNIT_DIED,0000000000000000,nil,0x80000000,0x80000000,{gone},'
+                      '"Ascendant Serpent",0xa48,0x80000000,0'),
+        ("02:00.000", 'ENCOUNTER_START,2397,"Rav\'i",8,5,2290'),
+        ("02:30.000", 'ENCOUNTER_END,2397,"Rav\'i",8,5,1,30000'),
+        ("30:00.000", "CHALLENGE_MODE_END,2290,1,12,1600000"),
+    ]))
+    [run] = find_runs(read_log_events([log]))
+    assert [e.forces for e in run.encounters] == [7.34]   # both: 60 of 817
+    drop_despawns([run], [log])
+    assert [e.forces for e in run.encounters] == [3.67]   # the fought one: 30
+    assert [g for _, g, _ in run.kills] == [fought]

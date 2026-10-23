@@ -541,6 +541,8 @@ def event_rows(details: dict) -> list[EventRow]:
         deaths = sum(r.kind == "death" for r in inside)
         detail = ("killed in " if kind == "kill" else "wipe after " if kind == "wipe" else "") \
             + (mmss(end - e["start"]) if end is not None else "pulled")
+        if kind == "kill" and e.get("forces") is not None:
+            detail += f" · {e['forces']:.2f}% forces"
         if deaths:
             detail += f" · {deaths} death{'s' if deaths != 1 else ''}"
         children = sorted(inside, key=lambda r: r.at)

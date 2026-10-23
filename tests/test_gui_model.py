@@ -160,7 +160,8 @@ def test_completed_keys_say_timed_or_over_time(tmp_path):
 
 DETAILS = {
     "run_offset": 30.0,
-    "encounters": [{"name": "Avanoxx", "start": 60.0, "end": 120.0, "killed": True},
+    "encounters": [{"name": "Avanoxx", "start": 60.0, "end": 120.0, "killed": True,
+                    "forces": 41.8},
                    {"name": "Anub'zekt", "start": 300.0, "end": 330.0, "killed": False},
                    {"name": "Anub'zekt", "start": 400.0, "end": None, "killed": False}],
     "deaths": [{"name": "Tank-Realm-US", "at": 90.0}, {"name": "Healer-Realm-US", "at": 200.0},
@@ -173,7 +174,7 @@ def test_event_rows_group_deaths_and_lusts_under_their_pull():
     rows = model.event_rows(DETAILS)
     assert [(r.at, r.kind, r.text, r.detail) for r in rows] == [
         (30.0, "start", "Run starts", ""),
-        (60.0, "kill", "Avanoxx", "killed in 1:00 · 1 death"),
+        (60.0, "kill", "Avanoxx", "killed in 1:00 · 41.80% forces · 1 death"),
         (200.0, "death", "Healer died", ""),                    # between bosses
         (300.0, "wipe", "Anub'zekt", "wipe after 0:30 · 1 death"),
         (400.0, "pull", "Anub'zekt", "pulled"),                 # the clip ends mid-pull

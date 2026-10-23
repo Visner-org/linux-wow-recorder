@@ -76,7 +76,7 @@ And in WoW:
 ### Nobara or Fedora (RPM)
 
 ```bash
-sudo dnf install ./linux-wow-recorder-1.0.0-1.fc44.noarch.rpm
+sudo dnf install ./linux-wow-recorder-1.1.0-1.fc44.noarch.rpm
 ```
 
 dnf installs ffmpeg and Qt from your distro's repos along with it, and on Nobara
@@ -121,7 +121,7 @@ For Ubuntu 25.10 and newer (26.04 is tested) and Debian 13. Download the `.deb` 
 [Releases](https://github.com/Visner-org/linux-wow-recorder/releases) page, then:
 
 ```bash
-sudo apt install ./linux-wow-recorder_1.0.0-1_all.deb
+sudo apt install ./linux-wow-recorder_1.1.0-1_all.deb
 flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
 flatpak install --user flathub com.dec05eba.gpu_screen_recorder
 ```
@@ -347,9 +347,11 @@ at login).
 
   Hover to see what's there. Click a pull, death or lust to play from a few seconds before it;
   click anywhere else to go there.
-- **The events** below, one row per boss pull ("killed in 1:44 · 2 deaths") holding the deaths
-  and lusts during it; wipes and pulls with deaths are opened. Clicking a row plays from a few
-  seconds before it.
+- **The events** below, one row per boss pull ("killed in 1:44 · 41.80% forces · 2 deaths")
+  holding the deaths and lusts during it; wipes and pulls with deaths are opened. Clicking a row plays from a few
+  seconds before it. A key's boss kills show the enemy forces at that moment, counted from the
+  mobs that died in the combat log, so it can be a little off from the game's bar (a mob killed
+  far from you isn't logged). Dungeons outside the current season don't have it.
 - **Highlights**: save part of a clip as a clip of its own, to share one boss kill or a wipe.
   The scissors button beside the title marks 30 seconds from where the video is; drag either
   end on the timeline, or play to a moment and press I (start here) or O (end here). Right-click

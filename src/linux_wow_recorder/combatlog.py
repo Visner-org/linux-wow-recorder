@@ -5,12 +5,13 @@ import datetime
 import logging
 import re
 import subprocess
+import tempfile
 import time
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import keytimers
+from . import forces, keytimers
 
 log = logging.getLogger(__name__)
 
@@ -75,6 +76,7 @@ class Encounter:
     end: float | None = None     # None if the log ends mid-pull
     killed: bool = False
     encounter_id: int | None = None   # ENCOUNTER_START's; END is matched to its START by it
+    forces: float | None = None  # a key's enemy forces (percent) when this boss was killed
 
 
 @dataclass
@@ -107,6 +109,9 @@ class Run:
     difficulty: str = ""         # a raid pull's: "Heroic", "LFR", ...
     pull: int | None = None      # a raid pull's number on this boss and difficulty, from 1
     time_limit: int | None = None   # a completed key's dungeon's limit (keytimers), s
+    challenge: int | None = None    # a key's challengeModeID
+    kills: list[tuple[float, str, int]] = field(default_factory=list)   # a key's counted mobs:
+                                    # (time, GUID, forces)
 
     @property
     def is_raid(self) -> bool:
@@ -190,6 +195,9 @@ class _OpenRun:
     encounter_id: int | None = None   # a raid pull's
     pull: int | None = None
     lust_debuff: int | None = None   # the debuff of lusts[-1]
+    forces: int = 0              # a key's enemy forces so far (forces.py)
+    dead: set[str] = field(default_factory=set)   # the GUIDs of the mobs counted in it
+    kills: list[tuple[float, str, int]] = field(default_factory=list)   # (time, GUID, forces)
     encounters: list[Encounter] = field(default_factory=list)
     deaths: list[Death] = field(default_factory=list)
     lusts: list[Lust] = field(default_factory=list)
@@ -200,7 +208,8 @@ class _OpenRun:
     def to_run(self, end: float, label: str, result: str, timer: float | None = None) -> Run:
         return Run(self.name, self.start, end, label, timer, self.level, self.encounters,
                    self.deaths, self.lusts, result, self.raid,
-                   self.difficulty if self.raid else "", self.pull)
+                   self.difficulty if self.raid else "", self.pull,
+                   challenge=self.challenge, kills=self.kills)
 
 
 class _RunFinder:
@@ -383,6 +392,8 @@ class _RunFinder:
                          if e.encounter_id == encounter_id and e.end is None), None)
             if pull:
                 pull.end, pull.killed = t, f[4] == "1"
+                if pull.killed and r.challenge:
+                    pull.forces = forces.percent(r.challenge, r.forces)
 
     def aura_applied(self, t: float, f: list[str]):
         # SPELL_AURA_APPLIED,source GUID,"Caster",flags,raid flags,dest GUID,"Name",flags,
@@ -426,6 +437,62 @@ class _RunFinder:
         if f[4].startswith("Player-") and f[8:9] != ["1"]:
             for r in self.open_runs():
                 r.deaths.append(Death(f[5], t))
+            return
+        key = self.key
+        if key and key.challenge and key.instance == self.instance and f[4] not in key.dead:
+            worth = forces.forces(key.challenge, forces.npc_id(f[4]))
+            if worth:
+                key.dead.add(f[4])
+                key.forces += worth
+                key.kills.append((t, f[4], worth))
+
+
+def drop_despawns(runs: list[Run], logs: list[Path]):
+    """Takes the mobs that despawned out of the keys' enemy forces. A despawn (some packs go as
+    a boss is pulled) gets a UNIT_DIED like a kill, but the bar doesn't count it; it's the only
+    line with that mob's GUID, where a mob that was fought is in its damage and auras too."""
+    guids = {g for r in runs for _, g, _ in r.kills}
+    if not guids or not logs:
+        return
+    fought = _guids_fought(logs, guids)
+    if fought is None:
+        return
+    for r in runs:
+        if all(g in fought for _, g, _ in r.kills):
+            continue
+        log.info(f"{r.name}: {sum(g not in fought for _, g, _ in r.kills)} mob(s) despawned, "
+                 "not counted in its enemy forces.")
+        r.kills = [k for k in r.kills if k[1] in fought]
+        for e in r.encounters:
+            if e.forces is not None and e.end is not None:
+                e.forces = forces.percent(r.challenge, sum(w for t, _, w in r.kills if t <= e.end))
+
+
+def _guids_fought(logs: list[Path], guids: set[str]) -> set[str] | None:
+    """The GUIDs that are in a line other than their UNIT_DIED; None if grep failed."""
+    with tempfile.NamedTemporaryFile("w", suffix=".txt") as pats:
+        pats.write("\n".join(guids) + "\n")
+        pats.flush()
+        # grep the lines with any of them, drop the UNIT_DIEDs, then print which GUIDs are left.
+        steps = [["grep", "-ahF", "-f", pats.name, *map(str, logs)],
+                 ["grep", "-av", "  UNIT_DIED,"], ["grep", "-aohF", "-f", pats.name]]
+        procs = []
+        for cmd in steps:
+            procs.append(subprocess.Popen(cmd, stdin=procs[-1].stdout if procs else None,
+                                          stdout=subprocess.PIPE, stderr=subprocess.DEVNULL))
+            if len(procs) > 1:
+                procs[-2].stdout.close()
+        try:
+            out, _ = procs[-1].communicate(timeout=300)
+        except subprocess.TimeoutExpired:
+            out = None
+        for p in procs:
+            p.kill()
+            p.wait()
+    if out is None or procs[0].returncode not in (0, 1):
+        log.warning("Couldn't check the combat log for despawned mobs.")
+        return None
+    return set(out.decode(errors="replace").split())
 
 
 def find_runs(events: Iterable[tuple[float, str, list[str]]], min_run_minutes: int = 5,

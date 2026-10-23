@@ -177,6 +177,20 @@ Check a few against real runs (a timed key raises the rating at the end of `CHAL
 one over time doesn't). Until then, the new dungeons' keys say "Completed". Only this
 development step uses Raider.IO; the app doesn't.
 
+`forces.py` has each season dungeon's enemy forces: what each NPC ID adds to the bar and the
+bar's total. They're from Mythic Dungeon Tools' dungeon files (`Midnight/<Dungeon>.lua` in
+github.com/Nnoggie/MythicDungeonTools): each enemy's `["id"]` and `["count"]` (leave out the 0s
+and the per-spawn counts under `["clones"]`) and `dungeonTotalCount`'s `normal`; `mapInfo`'s
+`mapID` is the challengeModeID. Note the MDT commit in the season's comment. Then check against
+real runs: a timed key's forces should reach 100% by its last boss. A mob killed that the table
+doesn't know (often an NPC ID that changed) shows up as a creature `UNIT_DIED` that adds nothing;
+add it with a comment saying it was logged, not from MDT.
+
+To check the table against the game itself: link `tools/ForcesLog` into WoW's
+`Interface/AddOns`, run keys with combat logging on, `/reload` or log out (that's when WoW saves
+the addon's data), then `uv run python tools/forces_check.py`. It matches each rise of the bar to
+the mobs that died just before it and lists the NPCs whose count differs from the table.
+
 ### Adding a lust
 
 Add the buff's spell ID to `LUST_BUFFS` with its name and the debuff it leaves. If that debuff is

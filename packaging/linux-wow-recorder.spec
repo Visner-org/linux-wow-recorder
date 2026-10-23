@@ -60,6 +60,10 @@ if [ "$1" -eq 0 ]; then
 fi
 
 %changelog
+* Fri Oct 23 2026 Linux WoW Recorder - 1.1.0-1
+- A key's boss kills show the enemy forces % at that moment, in the clips window and the
+  clip's details
+
 * Wed Oct 21 2026 Linux WoW Recorder - 1.0.0-1
 - Highlights: save part of a clip (a boss kill, a wipe) as a clip of its own, from the clips
   window; a new one flashes in the list until you click it

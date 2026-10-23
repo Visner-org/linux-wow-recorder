@@ -1,0 +1,8 @@
+## Interface: 120105
+## Title: ForcesLog
+## Notes: Development helper for Linux WoW Recorder: logs the Mythic+ enemy forces bar each time it moves.
+## Author: Visner
+## Version: 1
+## SavedVariables: ForcesLogDB
+
+ForcesLog.lua

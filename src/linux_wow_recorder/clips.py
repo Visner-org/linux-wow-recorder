@@ -13,7 +13,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .combatlog import Run, combat_logs_between, find_runs, read_log_events
+from .combatlog import Run, combat_logs_between, drop_despawns, find_runs, read_log_events
 from .config import STATE_DIR, Config
 
 log = logging.getLogger(__name__)
@@ -185,7 +185,8 @@ def sidecar_for(run: Run, clip_start: float, length: float, recording: Path) -> 
         return round(offset, 1) if 0 <= offset <= length else None
 
     encounters = [{"name": e.name, "start": at(e.start),
-                   "end": at(e.end) if e.end is not None else None, "killed": e.killed}
+                   "end": at(e.end) if e.end is not None else None, "killed": e.killed,
+                   "forces": e.forces}
                   for e in run.encounters if at(e.start) is not None]
     deaths = [{"name": d.name, "at": at(d.time)} for d in run.deaths if at(d.time) is not None]
     lusts = [{"name": l.name, "caster": l.caster, "at": at(l.time)}
@@ -318,6 +319,7 @@ def process_recording(cfg: Config, src: Path) -> SessionResult:
 
     runs = [r for r in find_runs(read_log_events(logs), cfg.min_run_minutes, cfg.raids)
             if r.end > rec_start and r.start < rec_end]
+    drop_despawns(runs, logs)
     pulls = sum(r.is_raid for r in runs)
     log.info(f"{src.name}: {len(runs) - pulls} dungeon run(s) and {pulls} raid pull(s) in the "
              "combat log.")

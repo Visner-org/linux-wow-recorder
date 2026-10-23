@@ -210,7 +210,7 @@ over two recordings gets one clip from each, each with its own part).
   "bosses_killed": 3,
   "deaths_total": 2,
   "encounters": [
-    {"name": "Avanoxx", "start": 205.3, "end": 291.0, "killed": true}
+    {"name": "Avanoxx", "start": 205.3, "end": 291.0, "killed": true, "forces": 41.8}
   ],
   "deaths": [
     {"name": "Tank-Realm-US", "at": 742.1}
@@ -239,7 +239,7 @@ over two recordings gets one clip from each, each with its own part).
 | `clip_start`, `clip_length` | where the clip starts, and how long it is |
 | `run_offset` | how far into the clip the run starts (`pad_before`, unless the recording started later) |
 | `bosses_killed`, `deaths_total` | over the whole run |
-| `encounters` | each boss pull: its name, start, end (`null` if the log ended mid-pull) and whether it was a kill. A wipe and the kill after it are separate pulls of the same boss. |
+| `encounters` | each boss pull: its name, start, end (`null` if the log ended mid-pull) and whether it was a kill. A wipe and the kill after it are separate pulls of the same boss. A key's kills have `forces`, the enemy forces percent then (`forces.py`); `null` for wipes, dungeons without a key or not in the table, and older clips. |
 | `deaths` | each player death: the name as logged (`Name-Realm-Region`) and when |
 | `lusts` | each Bloodlust-type effect: `"Bloodlust"`, `"Heroism"`, `"Time Warp"`, `"Primal Rage"`, `"Fury of the Aspects"`, `"Harrier's Cry"` or `"Drums"`; the caster (the drummer for drums), or `null` when the log doesn't say; and when |
 | `recording` | the full recording it was cut from |
