@@ -1,6 +1,7 @@
 """The clip browser: the clips list, a player, and a timeline of bosses, deaths and lusts."""
 
 import html
+import json
 import os
 import shlex
 import shutil
@@ -8,7 +9,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from PySide6.QtCore import (QEvent, QFile, QFileSystemWatcher, QLineF, QPointF, QProcess, QRectF,
+from PySide6.QtCore import (QElapsedTimer, QEvent, QFile, QFileSystemWatcher, QLineF, QPointF, QProcess, QRectF,
                             QSettings, QSize, Qt, QTimer, QUrl, Signal)
 from PySide6.QtGui import (QColor, QDesktopServices, QFont, QGuiApplication, QIcon, QKeySequence,
                            QPainter, QPainterPath, QPen, QPixmap, QShortcut)
@@ -16,12 +17,12 @@ from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import (QAbstractItemView, QButtonGroup, QFrame, QGroupBox, QHBoxLayout,
                                QHeaderView, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu,
-                               QMessageBox, QProgressDialog, QPushButton, QSlider, QSplitter, QStackedWidget, QStyle,
-                               QStyledItemDelegate, QStyleOptionViewItem, QToolButton, QTreeWidget,
+                               QMessageBox, QProgressDialog, QPushButton, QSlider, QSplitter, QSplitterHandle,
+                               QStackedWidget, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QToolButton, QTreeWidget,
                                QTreeWidgetItem, QVBoxLayout, QWidget)
 
 import shiboken6
-from .. import APP_NAME, APP_TITLE, __version__, config, hidechat, highlight, live, service, state
+from .. import APP_NAME, APP_TITLE, __version__, config, cooldowns, hidechat, highlight, live, service, state
 from ..clips import (SHORT_CUT_SECONDS, media_length, read_sidecar, set_keep, sidecar_path,
                      thumbnail_command, thumbnail_path, thumbnail_time, write_sidecar)
 from ..config import CONFIG_DIR
@@ -249,6 +250,211 @@ class Timeline(QWidget):
         self.dragging = None
 
 
+class CastStrip(QWidget):
+    """The spells cast around where the video is, a lane per player shown: a box per cast with
+    the spell's name, scrolling as the video plays, the newest at the playhead line. A hard cast
+    has a thin bar back to where it started. Clicking a cast plays from just before it; hovering
+    names it."""
+    seek = Signal(float)
+
+    BEFORE, AFTER = 12.0, 4.0   # seconds shown before and after the playhead
+    WIDER = 5         # major cooldowns only: that many times more, as they're few
+    PAD = 8
+    ROW = 18          # px per row of boxes; a box that would overlap goes in the lane's next row
+    TOP = 3
+    LABEL = 84        # px for the players' names, when there's more than one lane
+    MAX_BOX = 130     # px: a long name is cut short
+    LEAD_IN = 1.0     # seconds played before a clicked cast
+
+    def __init__(self):
+        super().__init__()
+        self.setMouseTracking(True)
+        self.setCursor(Qt.PointingHandCursor)
+        self.casts: list[model.CastMark] = []
+        self.hues: dict[tuple[str, int], int] = {}
+        self.shown: list[str] = []   # the players with a lane, top to bottom
+        self.you: str | None = None
+        self.major_only = False   # only cooldowns.MAJOR, coloured by kind
+        self.position = 0.0
+        # While playing, the strip moves on between the player's position updates.
+        self.playing = False
+        self.since = QElapsedTimer()
+        self.since.start()
+        self.ticker = QTimer(self, interval=33)
+        self.ticker.timeout.connect(self.update)
+        self.boxes: list[tuple[QRectF, model.CastMark]] = []   # as last painted
+        self.set_shown([])
+
+    def set_casts(self, casts: list[model.CastMark], you: str | None = None):
+        self.casts = casts
+        self.you = you
+        self.hues = model.spell_hues(casts)
+        self.position = 0.0
+        self.update()
+
+    def set_shown(self, players: list[str]):
+        """Whose casts get a lane: two rows for one player, one each for more."""
+        self.shown = players
+        self.setFixedHeight(self.TOP * 2 + max(1, len(players)) * self._rows() * self.ROW + 2)
+        self.update()
+
+    def set_major_only(self, on: bool):
+        self.major_only = on
+        self.update()
+
+    def _span(self) -> tuple[float, float]:
+        """Seconds shown before and after the playhead."""
+        k = self.WIDER if self.major_only else 1
+        return self.BEFORE * k, self.AFTER * k
+
+    def _rows(self) -> int:
+        return 2 if len(self.shown) <= 1 else 1
+
+    def _left(self) -> float:
+        return self.PAD + (self.LABEL if len(self.shown) > 1 else 0)
+
+    def set_position(self, seconds: float):
+        self.position = seconds
+        self.since.restart()
+        self.update()
+
+    def set_playing(self, playing: bool):
+        self.position = self.now()
+        self.since.restart()
+        self.playing = playing
+        if playing and self.isVisible():
+            self.ticker.start()
+        else:
+            self.ticker.stop()
+        self.update()
+
+    def showEvent(self, event):
+        if self.playing:
+            self.ticker.start()
+        super().showEvent(event)
+
+    def hideEvent(self, event):
+        self.ticker.stop()
+        super().hideEvent(event)
+
+    def now(self) -> float:
+        """Where the video is: its last reported position, plus the time since while playing
+        (at most a second, in case it stalled)."""
+        if not self.playing:
+            return self.position
+        return self.position + min(1.0, self.since.elapsed() / 1000)
+
+    def _scale(self) -> float:
+        return max(1, self.width() - self._left() - self.PAD) / sum(self._span())
+
+    def _x(self, seconds: float, now: float) -> float:
+        return self._left() + (seconds - now + self._span()[0]) * self._scale()
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        pal = self.palette()
+        dark = theme.is_dark(pal)
+        font = p.font()
+        font.setPointSizeF(font.pointSizeF() * 0.85)
+        p.setFont(font)
+        metrics = p.fontMetrics()
+        now = self.now()
+        head = self._x(now, now)
+        before, after = self._span()
+        first, last = now - before - self.MAX_BOX / self._scale(), now + after
+        n = self._rows()
+        lanes = {who: i for i, who in enumerate(self.shown)}
+
+        # Boxes left to right; each in the first row of its lane free at its start, or else over
+        # the end of the row that frees up first (that box is cut short).
+        rows: list[list[list]] = [[] for _ in range(len(self.shown) * n)]
+        for c in self.casts:
+            if c.who not in lanes or not first <= c.at <= last:
+                continue
+            if self.major_only and not cooldowns.kind(c.spell):
+                continue
+            x = self._x(c.at, now)
+            width = min(self.MAX_BOX, metrics.horizontalAdvance(c.name) + 10)
+            mine = rows[lanes[c.who] * n:(lanes[c.who] + 1) * n]
+            free = [r for r in mine if not r or r[-1][0] + r[-1][1] + 2 <= x]
+            row = free[0] if free else min(mine, key=lambda r: r[-1][0] + r[-1][1])
+            if row and row[-1][0] + row[-1][1] + 2 > x:
+                row[-1][1] = max(4.0, x - row[-1][0] - 2)
+            row.append([x, width, c])
+
+        self.boxes = []
+        p.setClipRect(QRectF(self._left(), 0, self.width(), self.height()))
+        for i, row in enumerate(rows):
+            y = self.TOP + i * self.ROW
+            for x, width, c in row:
+                rect = QRectF(x, y, width, self.ROW - 2)
+                hue = (model.KIND_HUES[cooldowns.kind(c.spell)] if self.major_only
+                       else self.hues.get((c.who, c.spell)))
+                fill = (QColor.fromHsl(hue, 150, 75 if dark else 205) if hue is not None
+                        else pal.mid().color())
+                if c.at > now:
+                    fill.setAlpha(110)   # still to come
+                if c.cast:   # its cast time, as a thin bar leading into it
+                    p.setPen(QPen(fill, 3, Qt.SolidLine, Qt.FlatCap))
+                    mid = rect.center().y()
+                    p.drawLine(QLineF(self._x(c.at - c.cast, now), mid, x, mid))
+                p.setPen(Qt.NoPen)
+                p.setBrush(fill)
+                p.drawRoundedRect(rect, 3, 3)
+                if width > 14:
+                    p.setPen(pal.windowText().color())
+                    p.drawText(rect.adjusted(5, 0, -3, 0), Qt.AlignVCenter | Qt.AlignLeft,
+                               metrics.elidedText(c.name, Qt.ElideRight, int(width - 8)))
+                self.boxes.append((rect, c))
+        p.setClipping(False)
+
+        if len(self.shown) > 1:   # whose lane is whose, with a line between lanes
+            for i, who in enumerate(self.shown):
+                y = self.TOP + i * n * self.ROW
+                p.setPen(pal.windowText().color() if who == self.you else theme.muted(pal))
+                p.drawText(QRectF(self.PAD, y, self.LABEL - 6, self.ROW - 2),
+                           Qt.AlignVCenter | Qt.AlignLeft,
+                           metrics.elidedText(model.short_name(who), Qt.ElideRight, self.LABEL - 6))
+                if i:
+                    line = QColor(theme.muted(pal))
+                    line.setAlpha(60)
+                    p.setPen(QPen(line, 1))
+                    p.drawLine(QLineF(self.PAD, y - 1, self.width() - self.PAD, y - 1))
+
+        # The playhead: where the video is now.
+        p.setPen(QPen(pal.highlight().color(), 2))
+        p.drawLine(QLineF(head, 0, head, self.height()))
+        p.end()
+
+    def _cast_at(self, x: float, y: float) -> model.CastMark | None:
+        return next((c for rect, c in reversed(self.boxes) if rect.contains(QPointF(x, y))), None)
+
+    def mousePressEvent(self, event):
+        if event.button() != Qt.LeftButton:
+            return
+        x, y = event.position().x(), event.position().y()
+        cast = self._cast_at(x, y)
+        now = self.now()
+        self.seek.emit(max(0.0, cast.at - self.LEAD_IN) if cast
+                       else max(0.0, now + (x - self._x(now, now)) / self._scale()))
+
+    def mouseMoveEvent(self, event):
+        cast = self._cast_at(event.position().x(), event.position().y())
+        self.setToolTip(model.cast_text(cast) if cast else "")
+
+
+class StayOpenMenu(QMenu):
+    """A menu of tick boxes that stays open while they're ticked, so several can be."""
+
+    def mouseReleaseEvent(self, event):
+        action = self.activeAction()
+        if action and action.isCheckable() and action.isEnabled():
+            action.trigger()
+            return
+        super().mouseReleaseEvent(event)
+
+
 class ClipBrowser(QWidget):
     closed = Signal()   # the window was closed; the app stays in the tray
     settings_requested = Signal()
@@ -463,11 +669,27 @@ class ClipBrowser(QWidget):
         self.full_button.clicked.connect(self.toggle_full_screen)
         self.full_screen = False
         self.was_maximized = False
+        # The group's casts under the video, for clips that have them: Casts shows or hides
+        # them, its menu ticks whose (you, unless other players are ticked).
+        self.cast_strip = CastStrip()
+        self.cast_strip.seek.connect(self.seek)
+        self.casts_menu = StayOpenMenu(self)
+        self.casts_button = QToolButton()
+        self.casts_button.setText("Casts")
+        self.casts_button.setCheckable(True)
+        self.casts_button.setAutoRaise(True)
+        self.casts_button.setFocusPolicy(Qt.NoFocus)   # Space plays, not this
+        self.casts_button.setToolTip("Show the spells cast, under the video (C); the arrow picks "
+                                     "whose")
+        self.casts_button.setMenu(self.casts_menu)
+        self.casts_button.setPopupMode(QToolButton.MenuButtonPopup)
+        self.casts_button.toggled.connect(self.show_casts)
         controls = QHBoxLayout()
         controls.addWidget(self.play_button)
         controls.addWidget(self.timeline, 1)
         controls.addWidget(self.time_label)
         controls.addSpacing(6)
+        controls.addWidget(self.casts_button)
         controls.addWidget(self.mute_button)
         controls.addWidget(self.volume)
         controls.addWidget(self.full_button)
@@ -500,6 +722,7 @@ class ClipBrowser(QWidget):
         for key, slot in ((Qt.Key_Space, self.toggle_play), (Qt.Key_F, self.toggle_full_screen),
                           (Qt.Key_Left, lambda: self.skip(-5)), (Qt.Key_Right, lambda: self.skip(5)),
                           (Qt.Key_I, lambda: self.set_mark(0)), (Qt.Key_O, lambda: self.set_mark(1)),
+                          (Qt.Key_C, self.casts_button.toggle),
                           (Qt.Key_Escape, self.escape)):
             QShortcut(QKeySequence(key), self, slot)
 
@@ -570,19 +793,32 @@ class ClipBrowser(QWidget):
         dv.addWidget(self.facts)
         dv.addWidget(self.events, 1)
 
-        right = QWidget()
-        rv = QVBoxLayout(right)
-        rv.setContentsMargins(0, 0, 0, 0)
-        rv.addWidget(self.video_stack, 3)
-        rv.addLayout(controls)
-        rv.addWidget(self.highlight_bar)
-        rv.addWidget(self.details_panel, 2)
+        player = QWidget()
+        pv = QVBoxLayout(player)
+        pv.setContentsMargins(0, 0, 0, 0)
+        pv.addWidget(self.video_stack, 1)
+        pv.addWidget(self.cast_strip)
+        pv.addLayout(controls)
+        pv.addWidget(self.highlight_bar)
+        # Drag the bar under the timeline to give the video more room, or the details.
+        right = BarSplitter(Qt.Vertical)
+        right.setChildrenCollapsible(False)
+        right.setHandleWidth(10)   # easy to grab, not a 1 px line
+        right.addWidget(player)
+        right.addWidget(self.details_panel)
+        right.setStretchFactor(0, 3)
+        right.setStretchFactor(1, 2)
+        right.setSizes([540, 360])
+        right.splitterMoved.connect(
+            lambda *_: self.settings.setValue("player_sizes", right.sizes()))
+        self.player_split = right
         # Double-clicking the video goes full screen and back.
         for w in (self.video, self.poster, *self.video.findChildren(QWidget)):
             w.installEventFilter(self)
         self.show_full_screen_button()
 
-        split = QSplitter()
+        split = BarSplitter()
+        split.setHandleWidth(10)
         split.addWidget(left)
         split.addWidget(right)
         # A bigger or maximized window grows the video, not the list (wider only adds blank card).
@@ -600,6 +836,11 @@ class ClipBrowser(QWidget):
         self._theming = False
         self.apply_theme()
         self.settings = QSettings(str(SETTINGS_FILE), QSettings.IniFormat)
+        # Only the sizes: saveState() would also bring back an old handle width.
+        sizes = self.settings.value("player_sizes")
+        if isinstance(sizes, list) and len(sizes) == 2:
+            self.player_split.setSizes([int(n) for n in sizes])
+        self.casts_button.setChecked(self.settings.value("show_casts", "true") != "false")
         view = 1 if self.settings.value("view") == "table" else 0
         self.list_stack.setCurrentIndex(view)
         self.show_view_button()
@@ -1040,6 +1281,9 @@ class ClipBrowser(QWidget):
             self.facts.setText("")
             self.events.clear()
             self.timeline.set_clip(0, {})
+            self.cast_strip.set_casts([])
+            self.fill_casts_menu([], None)
+            self.show_casts()
             self.highlight_bar.hide()
             return
         if not same_file:
@@ -1158,6 +1402,12 @@ class ClipBrowser(QWidget):
         marks = self.timeline.marks
         self.timeline.set_clip(d.get("clip_length") or self.player.duration() / 1000, d)
         self.timeline.set_marks(marks)   # a reload while making a highlight keeps it
+        casts = model.casts(d)
+        if casts != self.cast_strip.casts:
+            self.cast_strip.set_casts(casts, d.get("player"))
+            self.cast_strip.set_position(self.player.position() / 1000)
+            self.fill_casts_menu(model.casters(d), d.get("player"))
+        self.show_casts()
         self.keep_button.setChecked(clip.keep)
         self.keep_button.setText("★ Kept" if clip.keep else "☆ Keep")
         # A recording in sessions/ is never deleted anyway, and its details file would stay
@@ -1211,6 +1461,7 @@ class ClipBrowser(QWidget):
 
     def on_state(self, s):
         playing = s == QMediaPlayer.PlayingState
+        self.cast_strip.set_playing(playing)
         if playing and self.current:
             self.video_stack.setCurrentWidget(self.video)
         self.play_button.setIcon(self.style().standardIcon(QStyle.SP_MediaPause if playing
@@ -1219,6 +1470,7 @@ class ClipBrowser(QWidget):
 
     def on_position(self, ms: int):
         self.timeline.set_position(ms / 1000)
+        self.cast_strip.set_position(ms / 1000)
         self.time_label.setText(f"{model.mmss(ms / 1000)} / {model.mmss(self.player.duration() / 1000)}")
 
     def on_duration(self, ms: int):
@@ -1237,6 +1489,73 @@ class ClipBrowser(QWidget):
         if self.current:
             self.video_stack.setCurrentWidget(self.video)   # the frame sought to
         self.timeline.set_position(seconds)
+        self.cast_strip.set_position(seconds)
+
+    def show_casts(self, *_args):
+        """The cast strip, when it's ticked, the clip has casts and someone is ticked in the
+        menu; the button only when the clip has casts."""
+        has = bool(self.cast_strip.casts)
+        self.casts_button.setVisible(has)
+        self.cast_strip.setVisible(has and self.casts_button.isChecked()
+                                   and bool(self.cast_strip.shown))
+        if _args:   # ticked or unticked by the user
+            self.settings.setValue("show_casts", "true" if _args[0] else "false")
+
+    def cast_choice(self) -> tuple[bool, set[str]]:
+        """Whose casts the user wants: (you, the other players by name), from gui.ini."""
+        try:
+            others = set(json.loads(self.settings.value("cast_players", "[]")))
+        except (TypeError, ValueError):
+            others = set()
+        return self.settings.value("cast_hide_you", "false") != "true", others
+
+    def fill_casts_menu(self, casters: list[str], you: str | None):
+        """A tick per player in the clip: you first, then the others by how much they cast."""
+        self.casts_menu.clear()
+        show_you, others = self.cast_choice()
+        major = self.casts_menu.addAction("Major cooldowns only")
+        major.setToolTip("Big damage, healing and defensive spells, coloured red, green and blue")
+        major.setCheckable(True)
+        major.setChecked(self.settings.value("cast_major_only", "false") == "true")
+        major.toggled.connect(self.set_major_only)
+        self.casts_menu.addSeparator()
+        for name in casters:
+            mine = name == you
+            action = self.casts_menu.addAction(f"{model.short_name(name)} (you)" if mine
+                                               else model.short_name(name))
+            action.setCheckable(True)
+            action.setChecked(show_you if mine else name in others)
+            action.setData(name)
+            action.toggled.connect(lambda on, name=name, mine=mine: self.tick_caster(name, mine, on))
+        if len(casters) > 1:
+            self.casts_menu.addSeparator()
+            self.casts_menu.addAction("Only you", lambda: self.tick_casters(only_you=True))
+            self.casts_menu.addAction("Everyone", lambda: self.tick_casters(only_you=False))
+        self.show_cast_lanes()
+
+    def tick_caster(self, name: str, mine: bool, on: bool):
+        show_you, others = self.cast_choice()
+        if mine:
+            self.settings.setValue("cast_hide_you", "false" if on else "true")
+        else:
+            others = others | {name} if on else others - {name}
+            self.settings.setValue("cast_players", json.dumps(sorted(others)))
+        self.show_cast_lanes()
+
+    def tick_casters(self, only_you: bool):
+        for action in self.casts_menu.actions():
+            if action.isCheckable() and action.data():   # a player's
+                action.setChecked(not only_you or action.data() == self.cast_strip.you)
+
+    def show_cast_lanes(self):
+        self.cast_strip.set_shown([a.data() for a in self.casts_menu.actions()
+                                   if a.data() and a.isChecked()])
+        self.cast_strip.set_major_only(self.settings.value("cast_major_only", "false") == "true")
+        self.show_casts()
+
+    def set_major_only(self, on: bool):
+        self.settings.setValue("cast_major_only", "true" if on else "false")
+        self.cast_strip.set_major_only(on)
 
     def set_muted(self, muted: bool):
         self.audio.setMuted(muted)
@@ -1788,6 +2107,33 @@ def trash_icon(palette) -> QIcon:
         p.end()
         icon.addPixmap(pix)
     return icon
+
+
+class BarSplitter(QSplitter):
+    """A splitter whose handle shows: a dark line across it, the highlight colour on hover."""
+
+    def createHandle(self):
+        return BarHandle(self.orientation(), self)
+
+
+class BarHandle(QSplitterHandle):
+    def __init__(self, orientation, parent):
+        super().__init__(orientation, parent)
+        self.setAttribute(Qt.WA_Hover)   # repaints on enter and leave
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        bar = self.rect().adjusted(0, 3, 0, -3) if self.orientation() == Qt.Vertical \
+            else self.rect().adjusted(3, 0, -3, 0)
+        p.fillRect(bar, self.palette().highlight() if self.underMouse() else QColor("black"))
+        # Five grip dots in the middle (the style's own would paint over the line).
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor("#bbbbbb"))
+        c = QRectF(self.rect()).center()
+        for i in range(-2, 3):
+            d = QPointF(i * 6, 0) if self.orientation() == Qt.Vertical else QPointF(0, i * 6)
+            p.drawEllipse(c + d, 1.5, 1.5)
 
 
 class Poster(QWidget):

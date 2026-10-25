@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 
 from . import APP_NAME, APP_TITLE, __version__, config, logs, service, state
-from .clips import free_gb, process_pending, set_keep
+from .clips import add_casts, free_gb, process_pending, set_keep
 from .config import CONFIG_FILE, NOTIFY_EVENTS, ConfigError
 from .detect import find_wow
 from .notify import Notifier
@@ -247,6 +247,20 @@ def cmd_process(args) -> int:
     return 0
 
 
+def cmd_add_casts(args) -> int:
+    """Adds your spell casts to the clips cut before the app read them."""
+    cfg = _load()
+    done = add_casts(cfg)
+    if done is None:
+        print("Clips are being cut; try again once that's done.")
+        return 1
+    added, missing = done
+    print(f"Added your casts to {added} clip(s).")
+    if missing:
+        print(f"{missing} clip(s) have no combat log left to read them from.")
+    return 0
+
+
 def cmd_pause(args) -> int:
     """Stops recording for the rest of this WoW session; `resume` records again."""
     pause = args.command == "pause"
@@ -395,6 +409,7 @@ def main():
         ("run", cmd_run, "watch for WoW and record (what the service runs)"),
         ("status", cmd_status, "show the config and check it"),
         ("process", cmd_process, "cut the recordings waiting in sessions/ now"),
+        ("add-casts", cmd_add_casts, "add your spell casts to clips cut by older versions"),
         ("test-recorder", cmd_test_recorder, "record 5 seconds to check the recorder"),
         ("pause", cmd_pause, "stop recording for the rest of this WoW session"),
         ("resume", cmd_pause, "record again after pause"),

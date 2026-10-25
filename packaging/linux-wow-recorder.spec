@@ -60,6 +60,13 @@ if [ "$1" -eq 0 ]; then
 fi
 
 %changelog
+* Sun Oct 25 2026 Linux WoW Recorder - 1.2.0-1
+- Casts: a strip under the video shows the spells cast, with a tick for each player in the
+  group and one for major cooldowns only; `linux-wow-recorder add-casts` adds them to older
+  clips
+- Enemy forces at boss kills match the game's bar more often
+- Drag the bars in the clips window to resize the player and the list
+
 * Fri Oct 23 2026 Linux WoW Recorder - 1.1.0-1
 - A key's boss kills show the enemy forces % at that moment, in the clips window and the
   clip's details

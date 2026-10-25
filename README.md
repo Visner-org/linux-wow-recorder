@@ -10,7 +10,9 @@ check for a new version on GitHub if you turn that on. See [Privacy](#privacy).
 
 ![The clip browser: Mythic+ clips with their results, and a run's timeline of boss pulls, deaths and lusts](docs/screenshot.png)
 
-**New in 1.1.0:** a key's boss kills show the enemy forces % at that moment.
+**New in 1.2.0:** a timeline of the spells cast under the video, for you and anyone in your
+group you tick.
+**1.1.0:** a key's boss kills show the enemy forces % at that moment.
 **1.0.0:** highlights: save part of a clip, such as one boss kill, as a clip of its own.
 **0.8.6:** a `.deb` for Ubuntu and Debian, and a completed key is found even when combat
 logging started late.
@@ -167,7 +169,7 @@ it, please say how it went in an issue.
 Download the `.rpm` from [Releases](../../releases), then:
 
 ```bash
-sudo dnf install ./linux-wow-recorder-1.1.0-1.fc44.noarch.rpm
+sudo dnf install ./linux-wow-recorder-1.2.0-1.fc44.noarch.rpm
 ```
 
 dnf brings in ffmpeg and Qt, and on Nobara gpu-screen-recorder too. Open **Linux WoW Recorder**
@@ -229,7 +231,7 @@ For Ubuntu 25.10 and newer and Debian 13. Download the `.deb` from [Releases](..
 then:
 
 ```bash
-sudo apt install ./linux-wow-recorder_1.1.0-1_all.deb
+sudo apt install ./linux-wow-recorder_1.2.0-1_all.deb
 flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
 flatpak install --user flathub com.dec05eba.gpu_screen_recorder
 ```

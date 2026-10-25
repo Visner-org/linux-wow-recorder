@@ -28,6 +28,7 @@ TIME_LIMITS: dict[int, tuple[str, int]] = {
     557: ("Windrunner Spire", 1980),
 }
 _BY_NAME = {name: limit for name, limit in TIME_LIMITS.values()}
+_IDS = {name: challenge for challenge, (name, _) in TIME_LIMITS.items()}
 
 # A key this far under its limit upgrades the keystone by two or three levels instead of one.
 PLUS_TWO, PLUS_THREE = 0.8, 0.6
@@ -39,6 +40,12 @@ def time_limit(challenge: int | None = None, dungeon: str = "") -> int | None:
     if challenge in TIME_LIMITS:
         return TIME_LIMITS[challenge][1]
     return _BY_NAME.get(dungeon)
+
+
+def challenge_id(dungeon: str) -> int | None:
+    """The dungeon's challengeModeID by name, for a key whose START isn't in the log; None for
+    a dungeon not in the table."""
+    return _IDS.get(dungeon)
 
 
 def upgrade(timer: float, limit: float) -> int:

@@ -101,6 +101,16 @@ def test_clip_browser_lists_filters_and_shows_details(qtbot, cfg):
     w.view_button.click()
     assert w.list_stack.currentWidget() is w.cards
 
+    # The bar under the timeline makes the video bigger, remembered.
+    w.player_split.moveSplitter(w.player_split.sizes()[0] + 100, 1)
+    big = w.player_split.sizes()
+    w.player_split.splitterMoved.emit(big[0], 1)
+    again = browser.ClipBrowser()
+    again.resize(w.size())
+    again.show()
+    QApplication.processEvents()
+    assert again.player_split.sizes() == big
+
     w.search.setText("stone")
     assert w.tree.topLevelItemCount() == 0
     assert w.title.text() == "No clips match"
@@ -772,3 +782,53 @@ def test_saving_can_turn_recording_at_login_on_and_off(qtbot, cfg, fake_recorder
     assert w.save_button.text() == "Save"   # enabling alone doesn't restart it
     w.save()
     assert calls == [(True, False)]
+
+
+def test_the_casts_strip_shows_your_casts_and_plays_from_one(qtbot, cfg):
+    make_clip(cfg, "a.mp4", dungeon="Ara-Kara", result="completed", label="+2 Completed",
+              run_start=RUN_START + 60, player="Me-R-US", casters=["Me-R-US", "Healer-R-US"],
+              casts=[[20.0, 1, 0], [21.5, 2, 0, 1.5], [21.0, 3, 1], [5.0, 31884, 0]],
+              spells={"1": "Judgment", "2": "Flash of Light", "3": "Rejuvenation",
+                      "31884": "Avenging Wrath"})
+    make_clip(cfg, "b.mp4", dungeon="The Stonevault", result="completed", label="+2 Completed")
+    w = browser.ClipBrowser()
+    qtbot.addWidget(w)
+    w.show()
+    w.set_mode(model.KEYS)   # an earlier test may have left another view picked
+    w.select(str(cfg.clips_dir / "a.mp4"))
+    assert w.cast_strip.isVisible() and w.casts_button.isVisible()
+    assert [c.name for c in w.cast_strip.casts] == ["Avenging Wrath", "Judgment", "Rejuvenation",
+                                                    "Flash of Light"]
+    assert w.cast_strip.shown == ["Me-R-US"]   # yours only, at first
+    major, you, healer = [a for a in w.casts_menu.actions() if a.isCheckable()]
+    assert major.text() == "Major cooldowns only" and not major.isChecked()
+    assert you.text() == "Me (you)" and you.isChecked() and not healer.isChecked()
+    w.cast_strip.set_position(22.0)   # not seek(): the fake video's player would say 0:00
+    w.cast_strip.grab()   # paints it
+    rect, cast = w.cast_strip.boxes[0]
+    assert cast.name == "Judgment"
+    with qtbot.waitSignal(w.cast_strip.seek) as sought:
+        qtbot.mouseClick(w.cast_strip, Qt.LeftButton, pos=rect.center().toPoint())
+    assert sought.args == [19.0]   # a second before it
+    w.casts_button.click()   # hidden, and remembered
+    assert not w.cast_strip.isVisible()
+    assert browser.ClipBrowser().settings.value("show_casts") == "false"
+    w.casts_button.click()
+    healer.setChecked(True)   # a lane each, and remembered
+    assert w.cast_strip.shown == ["Me-R-US", "Healer-R-US"]
+    w.cast_strip.grab()
+    assert {c.name for _, c in w.cast_strip.boxes} == {"Avenging Wrath", "Judgment", "Rejuvenation",
+                                                       "Flash of Light"}
+    assert browser.ClipBrowser().cast_choice() == (True, {"Healer-R-US"})
+    you.setChecked(False)
+    assert w.cast_strip.shown == ["Healer-R-US"]
+    only_you = next(a for a in w.casts_menu.actions() if a.text() == "Only you")
+    only_you.trigger()
+    assert w.cast_strip.shown == ["Me-R-US"] and w.cast_choice() == (True, set())
+    major.setChecked(True)   # only the big ones (none in this clip but Avenging Wrath)
+    w.cast_strip.grab()
+    assert [c.name for _, c in w.cast_strip.boxes] == ["Avenging Wrath"]
+    assert browser.ClipBrowser().settings.value("cast_major_only") == "true"
+    major.setChecked(False)
+    w.select(str(cfg.clips_dir / "b.mp4"))   # no casts: no strip, no button
+    assert not w.cast_strip.isVisible() and not w.casts_button.isVisible()

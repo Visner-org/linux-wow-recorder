@@ -50,7 +50,13 @@ frame:SetScript("OnEvent", function(_, event, name)
         if name ~= "ForcesLog" then return end
         ForcesLogDB = ForcesLogDB or {}
         ForcesLogDB.runs = ForcesLogDB.runs or {}
-        while #ForcesLogDB.runs > 50 do table.remove(ForcesLogDB.runs, 1) end
+        -- Keeps the newest 10 keys of each dungeon.
+        local seen = {}
+        for i = #ForcesLogDB.runs, 1, -1 do
+            local map = ForcesLogDB.runs[i].map
+            seen[map] = (seen[map] or 0) + 1
+            if seen[map] > 10 then table.remove(ForcesLogDB.runs, i) end
+        end
         frame:UnregisterEvent("ADDON_LOADED")
         local second = time()
         frame:SetScript("OnUpdate", function()

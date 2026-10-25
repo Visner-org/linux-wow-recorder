@@ -20,3 +20,10 @@ def test_forces_and_percent():
     assert forces.percent(588, 409) == 50.06           # of 817
     assert forces.percent(588, 900) == 100.0           # the bar stops at 100
     assert forces.percent(12345, 10) is None
+
+
+def test_spawns_worth_more():
+    assert forces.spawn_forces(250, 134599, 3700, 3392) == 12   # Stormcaller before Galvazzt
+    assert forces.spawn_forces(250, 136076, 3707, 3407) == 30   # Nimbus, same pack
+    assert forces.spawn_forces(250, 134599, 3681, 3375) is None   # the pack before: its NPC's 7
+    assert forces.spawn_forces(250, 134691, 3700, 3392) is None   # not one of them

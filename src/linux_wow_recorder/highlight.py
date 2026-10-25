@@ -28,9 +28,10 @@ def command(clip: Path, start: float, end: float, part: Path) -> list[str]:
 
 
 def details(clip_details: dict, source: Path, start: float, end: float) -> dict:
-    """The highlight's details: the clip's run, with only the bosses, deaths and lusts inside
-    start..end, their times counted from the highlight's start. A boss pull cut off at either end
-    is kept, clamped to the highlight (still going at its end: no end, as in a clip)."""
+    """The highlight's details: the clip's run, with only the bosses, deaths, lusts and casts
+    inside start..end, their times counted from the highlight's start. A boss pull cut off at
+    either end is kept, clamped to the highlight (still going at its end: no end, as in a
+    clip)."""
     length = end - start
 
     def at(t: float | None) -> float | None:
@@ -47,6 +48,8 @@ def details(clip_details: dict, source: Path, start: float, end: float) -> dict:
               if at(d["at"]) is not None]
     lusts = [{**l, "at": at(l["at"])} for l in clip_details.get("lusts") or []
              if at(l["at"]) is not None]
+    casts = [[at(c[0]), *c[1:]] for c in clip_details.get("casts") or []
+             if at(c[0]) is not None]
     copy = {k: v for k, v in clip_details.items() if k not in ("thumbnail", "run_offset")}
     copy.update({
         "clip_start": (clip_details.get("clip_start") or 0) + start,
@@ -54,6 +57,10 @@ def details(clip_details: dict, source: Path, start: float, end: float) -> dict:
         "encounters": encounters,
         "deaths": deaths,
         "lusts": lusts,
+        **({"casts": casts,
+            "spells": {k: v for k, v in (clip_details.get("spells") or {}).items()
+                       if int(k) in {c[1] for c in casts}}}
+           if "casts" in clip_details else {}),
         "deaths_total": len(deaths),
         "bosses_killed": sum(1 for e in encounters if e.get("killed") and e.get("end") is not None),
         "keep": False,

@@ -7,7 +7,7 @@ import re
 import subprocess
 import tempfile
 import time
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -27,7 +27,7 @@ MIN_PULL_SECONDS = 30
 # What find_runs keeps of raid pulls.
 RAIDS_ALL, RAIDS_KILLS, RAIDS_OFF = "all", "kills", "off"
 LOG_EVENTS = ("ZONE_CHANGE|CHALLENGE_MODE_START|CHALLENGE_MODE_END|ENCOUNTER_START|ENCOUNTER_END"
-              "|UNIT_DIED")
+              "|UNIT_DIED|PARTY_KILL")
 
 # Bloodlust and the like. A lust is found by its debuff, which every source, drums included,
 # puts on each player who wasn't sated; the haste buff, when it's listed here with the debuff it
@@ -165,13 +165,22 @@ def combat_logs_between(log_dir: Path, start: float, end: float) -> list[Path]:
 def read_log_events(logs: list[Path]) -> Iterator[tuple[float, str, list[str]]]:
     """Yields (time, event, fields) for the events find_runs needs. grep does the filtering:
     the logs reach 1 GB, and grep reads one in about half a second."""
+    return _grep_events(logs, _GREP)
+
+
+def _grep_events(logs: list[Path], pattern: str, wanted: Callable[[str], bool] | None = None
+                 ) -> Iterator[tuple[float, str, list[str]]]:
+    """(time, event, fields) of the lines grep -E finds with pattern (and wanted lets through,
+    given the line after its time: the CSV parsing is the slow part)."""
     for f in logs:
-        result = subprocess.run(["grep", "-aE", _GREP, str(f)],
+        result = subprocess.run(["grep", "-aE", "-e", pattern, str(f)],
                                 capture_output=True, timeout=300)
         if result.returncode > 1:   # 1 is "no lines matched"
             log.warning(f"Couldn't read {f}: {result.stderr.decode(errors='replace').strip()}")
         for line in result.stdout.decode(errors="replace").splitlines():
             stamp, _, payload = line.partition("  ")
+            if wanted and not wanted(payload):
+                continue
             t = parse_log_time(stamp)
             if t is None:
                 continue
@@ -235,6 +244,7 @@ class _RunFinder:
             "SPELL_AURA_APPLIED": self.aura_applied,
             "SPELL_AURA_REMOVED": self.aura_removed,
             "UNIT_DIED": self.unit_died,
+            "PARTY_KILL": self.party_kill,
         }
 
     def feed(self, t: float, event: str, f: list[str]):
@@ -307,8 +317,9 @@ class _RunFinder:
                                    or self.key.inferred and self.key.instance != inst):
             # Inside a key with none open: logging may have started after the key did (an addon
             # turning it on late), so its START isn't in the log. Read it anyway; a START drops
-            # this, and its END times it (key_end).
-            self.key = _OpenRun(name, inst, t, inferred=True)
+            # this, and its END times it (key_end). The dungeon's name gives its ID, for forces.
+            self.key = _OpenRun(name, inst, t, inferred=True,
+                                challenge=keytimers.challenge_id(name))
         if self.visit:
             if inst == self.visit.instance:
                 self.visit.left_at = None   # back in after a release or a disconnect
@@ -438,19 +449,31 @@ class _RunFinder:
             for r in self.open_runs():
                 r.deaths.append(Death(f[5], t))
             return
+        self.mob_killed(t, f[4])
+
+    def party_kill(self, t: float, f: list[str]):
+        # PARTY_KILL, the same fields as UNIT_DIED. Now and then a mob gets only this line, no
+        # UNIT_DIED, and the bar still counts it.
+        if not f[4].startswith("Player-"):
+            self.mob_killed(t, f[4])
+
+    def mob_killed(self, t: float, guid: str):
+        """Counts a mob in the key's enemy forces, once (it may have a PARTY_KILL and a
+        UNIT_DIED)."""
         key = self.key
-        if key and key.challenge and key.instance == self.instance and f[4] not in key.dead:
-            worth = forces.forces(key.challenge, forces.npc_id(f[4]))
+        if key and key.challenge and key.instance == self.instance and guid not in key.dead:
+            worth = forces.forces(key.challenge, forces.npc_id(guid))
             if worth:
-                key.dead.add(f[4])
+                key.dead.add(guid)
                 key.forces += worth
-                key.kills.append((t, f[4], worth))
+                key.kills.append((t, guid, worth))
 
 
 def drop_despawns(runs: list[Run], logs: list[Path]):
     """Takes the mobs that despawned out of the keys' enemy forces. A despawn (some packs go as
     a boss is pulled) gets a UNIT_DIED like a kill, but the bar doesn't count it; it's the only
-    line with that mob's GUID, where a mob that was fought is in its damage and auras too."""
+    line with that mob's GUID, where a mob that was fought is in its damage and auras too (and
+    its PARTY_KILL)."""
     guids = {g for r in runs for _, g, _ in r.kills}
     if not guids or not logs:
         return
@@ -463,9 +486,108 @@ def drop_despawns(runs: list[Run], logs: list[Path]):
         log.info(f"{r.name}: {sum(g not in fought for _, g, _ in r.kills)} mob(s) despawned, "
                  "not counted in its enemy forces.")
         r.kills = [k for k in r.kills if k[1] in fought]
-        for e in r.encounters:
-            if e.forces is not None and e.end is not None:
-                e.forces = forces.percent(r.challenge, sum(w for t, _, w in r.kills if t <= e.end))
+        _recount(r)
+
+
+def _recount(r: Run):
+    """The forces at each boss kill again, from the key's kills."""
+    for e in r.encounters:
+        if e.forces is not None and e.end is not None:
+            e.forces = forces.percent(r.challenge, sum(w for t, _, w in r.kills if t <= e.end))
+
+
+def count_special_mobs(runs: list[Run], logs: list[Path]):
+    """Adds to the keys' enemy forces what their deaths alone get wrong, read from the damage
+    lines (advanced combat logging): mobs that took a killing blow but have no death line (some
+    never get one, like Temple's Static Anomalies; some die seconds later, maybe out of the
+    logger's range), and spawns worth more than their NPC (forces.SPAWNS), told apart by where
+    they died."""
+    keys = [r for r in runs if r.challenge in forces.COUNTS]
+    if not keys or not logs:
+        return
+    npcs = {n for r in keys for n in forces.COUNTS[r.challenge][1]}
+    placed = {n for c, n in forces.SPAWNS if any(r.challenge == c for r in keys)}
+    counted = {g for r in keys for _, g, _ in r.kills}
+
+    def wanted(payload: str) -> bool:
+        # Most damage lines are on mobs already counted; those are only read for SPAWNS.
+        guid = payload.split(",", 6)[5]
+        npc = forces.npc_id(guid)
+        return npc in npcs and (guid not in counted or npc in placed)
+    killed: dict[str, float] = {}   # GUID -> when it took its first killing blow
+    where: dict[str, tuple[float, float]] = {}   # GUID -> where it last took damage
+    pattern = "_DAMAGE(_LANDED)?,.*-(" + "|".join(map(str, sorted(npcs))) + ")-"
+    for t, event, f in _grep_events(logs, pattern, wanted):
+        info = _damaged_unit(event, f)
+        if info:
+            guid, x, y, overkill = info
+            if overkill > 0:
+                killed.setdefault(guid, t)
+            where[guid] = (x, y)
+    for r in keys:
+        known = {g for _, g, _ in r.kills}
+        kills = [(t, g, forces.forces(r.challenge, forces.npc_id(g))) for g, t in killed.items()
+                 if g not in known and r.start <= t <= r.end]
+        kills = [k for k in r.kills + kills if k[2]]
+        kills = [(t, g, g in where and forces.spawn_forces(r.challenge, forces.npc_id(g),
+                                                            *where[g]) or worth)
+                 for t, g, worth in kills]
+        if sorted(kills) != sorted(r.kills):
+            r.kills = sorted(kills)
+            _recount(r)
+
+
+# The group's casts: players whose source flags say mine (0x1: the player who logged, 0x511),
+# party (0x2, 0x512) or raid (0x4, 0x514), not outsiders (0x8: anyone else nearby). Pets are
+# mine or party too, but don't have Player- GUIDs.
+_CAST_GREP = r'  SPELL_CAST_(START|SUCCESS),Player-[^,]*,"[^"]*",0x[0-9a-fA-F]*[1-7],'
+# A START this long or less before a SUCCESS of the same spell is that cast's start (a hard cast).
+MAX_CAST_SECONDS = 10
+
+
+@dataclass
+class Cast:
+    time: float
+    spell: int                   # spell ID
+    name: str                    # the spell's
+    player: str                  # who cast it: "Name-Realm-Region"
+    cast: float | None = None    # a hard cast's cast time, s; None for an instant or a channel
+    mine: bool = False           # cast by the player who logged (the one recording)
+
+
+def read_casts(logs: list[Path]) -> list[Cast]:
+    """The spells the player who logged and their group cast (each SPELL_CAST_SUCCESS), in time
+    order. Cast times come from the START before it; an interrupted cast has no SUCCESS and
+    isn't listed."""
+    started: dict[tuple[str, int], float] = {}
+    casts = []
+    for t, event, f in _grep_events(logs, _CAST_GREP):
+        try:
+            key = (f[0], int(f[8]))
+        except (IndexError, ValueError):
+            continue
+        if event == "SPELL_CAST_START":
+            started[key] = t
+            continue
+        began = started.pop(key, None)
+        cast = round(t - began, 1) if began is not None and 0 < t - began <= MAX_CAST_SECONDS \
+            else None
+        casts.append(Cast(t, key[1], f[9], f[1], cast or None, int(f[2], 16) & 1 == 1))
+    return sorted(casts, key=lambda c: c.time)
+
+
+def _damaged_unit(event: str, f: list[str]) -> tuple[str, float, float, int] | None:
+    """(GUID, x, y, overkill) of the unit a damage line hit, from its unit info; overkill is -1
+    when the hit didn't kill it. None for other lines and logs without advanced logging."""
+    if not (event.endswith("_DAMAGE") or event.endswith("_DAMAGE_LANDED")):
+        return None
+    i = 8 if event.startswith("SWING_") else 11   # the unit info, after the spell's fields
+    if len(f) < i + 22 or f[i] != f[4]:   # amount, base amount and overkill follow it
+        return None
+    try:
+        return f[i], float(f[i + 14]), float(f[i + 15]), int(f[i + 21])
+    except ValueError:
+        return None
 
 
 def _guids_fought(logs: list[Path], guids: set[str]) -> set[str] | None:

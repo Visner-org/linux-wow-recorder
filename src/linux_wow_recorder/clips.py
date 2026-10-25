@@ -13,7 +13,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .combatlog import Run, combat_logs_between, drop_despawns, find_runs, read_log_events
+from .combatlog import (Cast, Run, combat_logs_between, count_special_mobs, drop_despawns,
+                        find_runs, read_casts, read_log_events)
 from .config import STATE_DIR, Config
 
 log = logging.getLogger(__name__)
@@ -166,7 +167,12 @@ def read_sidecar(clip: Path) -> dict:
 def write_sidecar(clip: Path, data: dict):
     path = sidecar_path(clip)
     tmp = path.with_name(path.name + ".part")
-    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+    text = json.dumps({**data, "casts": None} if "casts" in data else data, indent=2,
+                      ensure_ascii=False)
+    if "casts" in data:   # thousands of them: on one line, not a line per number
+        text = text.replace('\n  "casts": null', '\n  "casts": '
+                            + json.dumps(data["casts"], separators=(",", ":")), 1)
+    tmp.write_text(text + "\n")
     tmp.replace(path)
 
 
@@ -177,7 +183,30 @@ def set_keep(clip: Path, keep: bool):
     write_sidecar(clip, data)
 
 
-def sidecar_for(run: Run, clip_start: float, length: float, recording: Path) -> dict:
+def cast_details(casts: list[Cast], clip_start: float, length: float) -> dict:
+    """The group's casts inside a clip, for its details: "casters", the players, the one
+    recording first ("player"; the one with the most casts if that changed) and then the others
+    by how much they cast; "casts" as [at, spell ID, caster's index] (and the cast time of a
+    hard cast); "spells" naming the IDs."""
+    inside = [c for c in casts if 0 <= c.time - clip_start <= length]
+    counts: dict[str, int] = {}
+    for c in inside:
+        counts[c.player] = counts.get(c.player, 0) + 1
+    mine = [c.player for c in inside if c.mine]
+    player = max(set(mine), key=mine.count) if mine else None
+    casters = sorted(counts, key=lambda name: (name != player, -counts[name]))
+    index = {name: i for i, name in enumerate(casters)}
+    return {
+        "player": player,
+        "casters": casters,
+        "casts": [[round(c.time - clip_start, 1), c.spell, index[c.player],
+                   *([c.cast] if c.cast else [])] for c in inside],
+        "spells": {str(c.spell): c.name for c in inside},
+    }
+
+
+def sidecar_for(run: Run, clip_start: float, length: float, recording: Path,
+                casts: list[Cast] | None = None) -> dict:
     """The clip's details. Times inside the clip are seconds from its start; anything outside
     the clip (a run split over two recordings) is left out."""
     def at(t: float) -> float | None:
@@ -214,6 +243,7 @@ def sidecar_for(run: Run, clip_start: float, length: float, recording: Path) -> 
         "keep": False,
         **({"kind": "raid", "raid": run.raid, "difficulty": run.difficulty, "pull": run.pull}
            if run.is_raid else {}),
+        **(cast_details(casts, clip_start, length) if casts is not None else {}),
     }
 
 
@@ -235,8 +265,10 @@ def cut_command(src: Path, offset: float, length: float, part: Path, faststart: 
             "-map", "0:v", "-map", "0:a?", "-c", "copy", *index, "-f", "mp4", str(part)]
 
 
-def cut_clip(cfg: Config, src: Path, rec_start: float, rec_end: float, run: Run) -> Path | None:
-    """Cuts run's clip out of src and writes its sidecar. None if ffmpeg failed."""
+def cut_clip(cfg: Config, src: Path, rec_start: float, rec_end: float, run: Run,
+             casts: list[Cast] | None = None) -> Path | None:
+    """Cuts run's clip out of src and writes its sidecar (with the player's casts during it).
+    None if ffmpeg failed."""
     offset, stop = clip_window(cfg, rec_start, rec_end, run)
     cfg.clips_dir.mkdir(parents=True, exist_ok=True)
     out = cfg.clips_dir / clip_name(run, rec_start, rec_end)
@@ -262,7 +294,7 @@ def cut_clip(cfg: Config, src: Path, rec_start: float, rec_end: float, run: Run)
                   f"{result.stderr.strip() or '(nothing)'}")
         return None
     part.replace(out)
-    details = sidecar_for(run, rec_start + offset, stop - offset, src)
+    details = sidecar_for(run, rec_start + offset, stop - offset, src, casts)
     details["keep"] = read_sidecar(out).get("keep", False)   # a retry keeps the user's choice
     thumbnail = make_thumbnail(out, details)
     details["thumbnail"] = thumbnail.name if thumbnail else None
@@ -279,10 +311,11 @@ def _move_done(cfg: Config, src: Path, details: dict | None = None):
         write_sidecar(done, details)
 
 
-def session_details(rec_start: float, rec_end: float, runs: list[Run], recording: Path) -> dict:
+def session_details(rec_start: float, rec_end: float, runs: list[Run], recording: Path,
+                    casts: list[Cast] | None = None) -> dict:
     """A full recording's details, for the clip browser's Full sessions: its start and length,
-    and each dungeon run in it shaped like a clip's details, with times from the recording's
-    start."""
+    each dungeon run in it shaped like a clip's details, and the player's casts, with times
+    from the recording's start."""
     length = rec_end - rec_start
     return {
         "version": SIDECAR_VERSION,
@@ -290,6 +323,7 @@ def session_details(rec_start: float, rec_end: float, runs: list[Run], recording
         "length": round(length, 1),
         "runs": [sidecar_for(run, rec_start, length, recording) for run in runs],
         "keep": False,
+        **(cast_details(casts, rec_start, length) if casts is not None else {}),
     }
 
 
@@ -320,6 +354,8 @@ def process_recording(cfg: Config, src: Path) -> SessionResult:
     runs = [r for r in find_runs(read_log_events(logs), cfg.min_run_minutes, cfg.raids)
             if r.end > rec_start and r.start < rec_end]
     drop_despawns(runs, logs)
+    count_special_mobs(runs, logs)
+    casts = read_casts(logs)
     pulls = sum(r.is_raid for r in runs)
     log.info(f"{src.name}: {len(runs) - pulls} dungeon run(s) and {pulls} raid pull(s) in the "
              "combat log.")
@@ -330,7 +366,7 @@ def process_recording(cfg: Config, src: Path) -> SessionResult:
         if not clip_window(cfg, rec_start, rec_end, run):
             log.info(f"{run.name} {run.label} is barely in this recording; skipped.")
             continue
-        clip = cut_clip(cfg, src, rec_start, rec_end, run)
+        clip = cut_clip(cfg, src, rec_start, rec_end, run, casts)
         if clip:
             result.clips.append((run, clip))
         else:
@@ -341,7 +377,7 @@ def process_recording(cfg: Config, src: Path) -> SessionResult:
                          "trying again after the next session.")
         return result
 
-    _move_done(cfg, src, session_details(rec_start, rec_end, runs, src))
+    _move_done(cfg, src, session_details(rec_start, rec_end, runs, src, casts))
     return result
 
 
@@ -384,6 +420,40 @@ def _process_all(cfg: Config, stop: threading.Event | None,
             results.append(SessionResult(src, problem="clip_failed",
                                          detail=f"Processing `{src.name}` failed; see the log."))
     return results
+
+
+def add_casts(cfg: Config) -> tuple[int, int] | None:
+    """Adds the player's casts to the details of the clips and full recordings cut before casts
+    were read, from the combat logs still there. Returns (how many got them, how many have no
+    combat log left), or None while clips are being cut."""
+    CUT_LOCK.parent.mkdir(parents=True, exist_ok=True)
+    with open(CUT_LOCK, "a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return None
+        added = missing = 0
+        read: dict[tuple[Path, ...], list[Cast]] = {}   # a big log is read once for all its clips
+        for folder in (cfg.clips_dir, cfg.processed_dir):
+            if not folder.is_dir():
+                continue
+            for f in sorted(folder.glob("*.json")):
+                details = read_sidecar(f)
+                start = details.get("clip_start", details.get("recording_start"))
+                length = details.get("clip_length", details.get("length"))
+                # "casters": read by this version (the first kept only the player's own)
+                if "casters" in details or start is None or not length:
+                    continue
+                logs = tuple(combat_logs_between(cfg.combat_log_dir, start, start + length))
+                if not logs:
+                    missing += 1
+                    continue
+                if logs not in read:
+                    read[logs] = read_casts(list(logs))
+                details.update(cast_details(read[logs], start, length))
+                write_sidecar(f, details)
+                added += 1
+        return added, missing
 
 
 def stale_recordings(cfg: Config) -> list[Path]:

@@ -74,6 +74,7 @@ daemon.run() loop, every poll_interval seconds
           combat_logs_between()         log files overlapping that span
           combatlog.read_log_events()   grep keeps only the needed events
           combatlog.find_runs()         runs, with bosses, deaths and lusts
+          combatlog.read_casts()        the group's casts (grep, once per recording)
           cut_clip()                    ffmpeg -ss/-t stream copy → clips/<name>.mp4 + .json
           → processed/ + .json          the recording's details, for Full sessions (stays in
                                         sessions/ if a cut failed: retried next time)
@@ -128,6 +129,12 @@ next time.
     takes the debuffs off after a boss wipe and when a key starts, so `SPELL_AURA_REMOVED` of a
     debuff is read too; a debuff applied again while the player still has it is a refresh.
 - Runs shorter than `min_run_minutes` are dropped, except completed keys.
+- **Casts** (`read_casts`, a grep of its own): `SPELL_CAST_SUCCESS` lines whose source is a
+  `Player-` GUID with mine, party or raid affiliation in its flags' last digit (0x511 is the
+  player who logged, 0x512 a party member, 0x514 raid; outsiders, 0x548 and the like, are
+  left out); pets aren't `Player-`. A `SPELL_CAST_START` of the same spell up to 10 s before
+  gives a hard cast's cast time. About 5000 casts in a 20-minute key, ~90 KB in the clip's
+  `.json` (the casts list is written on one line; `write_sidecar`).
 
 grep does the filtering, because logs reach 1 GB. The lust part of the pattern matches only the
 listed spell IDs, so the busy `SPELL_AURA_APPLIED` lines cost nothing: about 0.6 s for 540 MB.
@@ -155,6 +162,20 @@ left; read the result before committing it anyway. What they showed:
 When the log enters an instance with a difficulty the app doesn't know, the service logs
 `Not a dungeon this app knows: <name> (difficulty N)`. If it's a 5-player dungeon, add `N` to
 `DUNGEON_DIFFICULTIES` with its name, and add a test.
+
+### A new expansion: major cooldowns
+
+`cooldowns.py` lists the big damage, healing and defensive spells by spell ID, for the clips
+window's "Major cooldowns only". An expansion replaces some. Count what the group cast in real
+logs and look for new IDs of the same names, and new cooldowns:
+
+```bash
+grep -ahE '  SPELL_CAST_SUCCESS,Player-[^,]*,"[^"]*",0x[0-9a-fA-F]*[1-7],' WoWCombatLog-*.txt \
+  | awk -F, '{print $10 "\t" $11}' | sort | uniq -c | sort -rn
+```
+
+Spells with a short cooldown (cast hundreds of times an hour) aren't major. Mark an ID kept
+from an earlier expansion that wasn't in the logs "(not seen)".
 
 ### A new M+ season
 
@@ -186,6 +207,13 @@ real runs: a timed key's forces should reach 100% by its last boss. A mob killed
 doesn't know (often an NPC ID that changed) shows up as a creature `UNIT_DIED` that adds nothing;
 add it with a comment saying it was logged, not from MDT.
 
+Some kills have no death line: a few mobs never get one (Temple's Static Anomalies, Kings'
+Rest's Shadow of Zul), and some die seconds after their killing blow (Ruby Life Pools'
+Flamelashers and Destroyers), out of range if the logger died meanwhile. So a killing blow
+(overkill in a damage line) counts too. `SPAWNS` in `forces.py` has MDT's clones worth more
+than their NPC, placed by where they died in real keys. Both need advanced combat logging
+(`tools/boss_forces_check.py` shows a boss kill that's still off).
+
 To check the table against the game itself: link `tools/ForcesLog` into WoW's
 `Interface/AddOns`, run keys with combat logging on, `/reload` or log out (that's when WoW saves
 the addon's data), then `uv run python tools/forces_check.py`. It matches each rise of the bar to
@@ -211,7 +239,8 @@ launcher, which names the game in its arguments, are skipped. Add a new client's
 |---|---|
 | `detect.py` | finds a running WoW client in /proc |
 | `recorder.py` | starts and stops gpu-screen-recorder |
-| `combatlog.py` | finds dungeon runs, bosses, deaths and lusts in the combat log (`_RunFinder`: one method per event) |
+| `combatlog.py` | finds dungeon runs, bosses, deaths and lusts in the combat log (`_RunFinder`: one method per event), and the group's casts (`read_casts`) |
+| `cooldowns.py` | the major cooldowns, by spell ID and kind (damage, healing, defensive) |
 | `clips.py` | cuts recordings into clips with ffmpeg, writes the `.json` details, retention cleanup |
 | `notify.py` | Discord or Fluxer webhooks (the same JSON) |
 | `logs.py` | log files, kept on this computer and cleaned; the report file ([Logging](#logging)) |

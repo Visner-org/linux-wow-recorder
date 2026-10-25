@@ -16,6 +16,9 @@ DETAILS = {
                    {"name": "Ki'katal", "start": 900.0, "end": 1000.0, "killed": True}],
     "deaths": [{"name": "A", "at": 150.0}, {"name": "B", "at": 450.0}, {"name": "C", "at": 950.0}],
     "lusts": [{"name": "Bloodlust", "caster": "S", "at": 101.0}],
+    "player": "Me-Realm-US", "casters": ["Me-Realm-US"],
+    "casts": [[100.0, 1, 0], [130.0, 2, 0, 1.5], [500.0, 1, 0]],
+    "spells": {"1": "Judgment", "2": "Flash of Light"},
 }
 
 
@@ -31,6 +34,8 @@ def test_a_highlight_keeps_only_what_happens_inside_it():
     assert "run_offset" not in d and "thumbnail" not in d and d["keep"] is False
     assert d["highlight"] == {"of": "a.mp4", "start": 120.0, "end": 460.0, "length": "5m40s"}
     assert d["label"] == "+10 Completed" and d["run_length"] == "24m00s"   # still the run's
+    assert d["casts"] == [[10.0, 2, 0, 1.5]] and d["spells"] == {"2": "Flash of Light"}
+    assert d["casters"] == ["Me-Realm-US"]
 
 
 def test_the_run_start_stays_when_its_inside():

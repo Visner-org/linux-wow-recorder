@@ -7,8 +7,6 @@ season starts (see docs/development.md, "A new M+ season"). They're from Mythic 
 """
 
 # challengeModeID -> (forces the bar needs, {NPC ID: forces}). Mobs worth nothing are left out.
-# A few of Temple of Sethraliss's spawns are worth more than their NPC's count; the log can't
-# tell spawns apart, so those count as the NPC does.
 COUNTS: dict[int, tuple[int, dict[int, int]]] = {
     # Midnight Season 2 (from 2026-08-18; MDT d673bb141e)
     588: (817, {   # Altar of Fangs
@@ -68,8 +66,7 @@ COUNTS: dict[int, tuple[int, dict[int, int]]] = {
         137969: 15,   # Interment Construct
         137989: 1,   # Embalming Fluid
         138489: 30,   # Shadow of Zul
-        270502: 7,   # Half-Finished Mummy
-        273050: 7,   # Half-Finished Mummy, as logged on 2026-10-22 (not in MDT)
+        270502: 7,   # Half-Finished Mummy (Mchimba's adds, NPC 273050, are worth nothing)
     }),
     587: (655, {   # Murder Row
         234849: 2,   # Unleashed Imp
@@ -174,6 +171,24 @@ COUNTS: dict[int, tuple[int, dict[int, int]]] = {
         268184: 30,   # Devouring Brutalizer
     }),
 }
+
+
+# Spawns worth more than their NPC's count, told apart by where they die (MDT's clones, placed
+# from real keys): (challengeModeID, NPC ID) -> (their forces, (x, y), within yards).
+SPAWNS = {
+    # Temple of Sethraliss: the last pack before Galvazzt
+    (250, 134599): (12, (3703, 3400), 20),   # Imbued Stormcaller
+    (250, 136076): (30, (3703, 3400), 20),   # Agitated Nimbus
+}
+
+
+def spawn_forces(challenge: int | None, npc: int | None, x: float, y: float) -> int | None:
+    """The forces of a spawn worth more than its NPC, killed at (x, y); None for the others."""
+    spawn = SPAWNS.get((challenge, npc))
+    if not spawn:
+        return None
+    worth, (sx, sy), yards = spawn
+    return worth if (x - sx) ** 2 + (y - sy) ** 2 <= yards ** 2 else None
 
 
 def npc_id(guid: str) -> int | None:

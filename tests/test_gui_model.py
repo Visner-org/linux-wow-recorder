@@ -423,3 +423,38 @@ def test_highlights_list_their_own_length_and_frame_events():
     assert model.highlight_around("death", 10.0, None, 1500.0) == (0.0, 20.0)
     assert model.highlight_around("kill", 200.0, None, 1500.0) == (180.0, 210.0)
     assert model.highlight_around("lust", 1490.0, None, 1500.0) == (1485.0, 1500.0)
+
+
+def test_casts_are_read_from_the_details():
+    d = {"casters": ["Me-R-US", "Healer-R-US"],
+         "casts": [[12.0, 2, 1], [3.0, 1, 0, 2.5], ["bad"], [4.0, 1, 7], [5.0, 99, 0]],
+         "spells": {"1": "Pyroblast", "2": "Rejuvenation"}}
+    assert model.casts(d) == [model.CastMark(3.0, 1, "Pyroblast", "Me-R-US", 2.5),
+                              model.CastMark(5.0, 99, "Spell 99", "Me-R-US"),
+                              model.CastMark(12.0, 2, "Rejuvenation", "Healer-R-US")]
+    assert model.casts({}) == [] and model.casters(d) == ["Me-R-US", "Healer-R-US"]
+    assert model.cast_text(model.casts(d)[0]) == "0:03  Me: Pyroblast (cast 2.5 s)"
+    assert model.cast_text(model.CastMark(61.0, 190319, "Combustion", "Me-R-US")) == (
+        "1:01  Me: Combustion (damage cooldown)")
+    many = [model.CastMark(i, spell, "", "A") for i, spell in
+            enumerate([7, 7, 7, 3, 3] + list(range(20, 30)))] + [model.CastMark(0, 3, "", "B")]
+    hues = model.spell_hues(many)
+    assert hues["A", 7] == model.SPELL_HUES[0] and hues["A", 3] == model.SPELL_HUES[1]
+    assert hues["B", 3] == model.SPELL_HUES[0]   # each player's own colours
+    assert len([k for k in hues if k[0] == "A"]) == len(model.SPELL_HUES)
+
+
+def test_a_full_session_shows_its_casts():
+    info = model.session_info(Path("2026-10-08_19-00-00.mkv"),
+                              {"recording_start": 1.0, "length": 60.0, "runs": [],
+                               "casts": [[5.0, 1, 0]], "spells": {"1": "Judgment"},
+                               "player": "Me-R-US", "casters": ["Me-R-US"]}, [])
+    assert model.casts(info.details) == [model.CastMark(5.0, 1, "Judgment", "Me-R-US")]
+    assert info.details["player"] == "Me-R-US"
+
+
+def test_every_major_cooldown_has_a_kind_with_a_colour():
+    from linux_wow_recorder import cooldowns
+    assert set(cooldowns.MAJOR.values()) == set(model.KIND_HUES)
+    assert cooldowns.kind(31884) == "damage" and cooldowns.kind(642) == "defensive"
+    assert cooldowns.kind(98008) == "healing" and cooldowns.kind(53600) is None

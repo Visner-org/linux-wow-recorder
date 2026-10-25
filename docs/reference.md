@@ -17,6 +17,7 @@
 | `run` | watches for WoW and records, in the foreground (what the service runs) |
 | `status` | the config, the service and what it's doing, and any problem with the setup; exit code 1 if there is one |
 | `process` | cuts the recordings waiting in `sessions/` now; refuses while WoW is running |
+| `add-casts` | adds the group's spell casts to clips and full recordings cut before 1.2.0, from the combat logs still there; refuses while clips are being cut |
 | `keep <clip>...` | keeps clips forever, whatever `clip_retention_days` says; `--undo` lets them expire again. A clip is a path, or a file name in `clips/` |
 | `test-recorder` | records 5 seconds to `<output>/test-recording.mkv`; refuses while the service is recording |
 | `pause`, `resume` | stops recording for the rest of this WoW session (what was recorded so far is kept), or records again; the next session always records |
@@ -218,6 +219,10 @@ over two recordings gets one clip from each, each with its own part).
   "lusts": [
     {"name": "Bloodlust", "caster": "Shammy-Realm-US", "at": 206.0}
   ],
+  "player": "Tank-Realm-US",
+  "casters": ["Tank-Realm-US", "Healer-Realm-US"],
+  "casts": [[198.4,53600,0],[199.1,774,1],[201.2,19750,0,1.5]],
+  "spells": {"53600": "Shield of the Righteous", "774": "Rejuvenation", "19750": "Flash of Light"},
   "recording": "2026-10-10_19-03-12.mkv",
   "thumbnail": "2026-10-10 19-03 Ara-Kara, City of Echoes +11 Completed (26m41s).jpg",
   "keep": false
@@ -242,6 +247,7 @@ over two recordings gets one clip from each, each with its own part).
 | `encounters` | each boss pull: its name, start, end (`null` if the log ended mid-pull) and whether it was a kill. A wipe and the kill after it are separate pulls of the same boss. A key's kills have `forces`, the enemy forces percent then (`forces.py`); `null` for wipes, dungeons without a key or not in the table, and older clips. |
 | `deaths` | each player death: the name as logged (`Name-Realm-Region`) and when |
 | `lusts` | each Bloodlust-type effect: `"Bloodlust"`, `"Heroism"`, `"Time Warp"`, `"Primal Rage"`, `"Fury of the Aspects"`, `"Harrier's Cry"` or `"Drums"`; the caster (the drummer for drums), or `null` when the log doesn't say; and when |
+| `player`, `casters`, `casts`, `spells` | the spells cast by the group: `player` is the one whose WoW wrote the combat log (`null` if they cast nothing), `casters` everyone who cast, `player` first, then by how much they cast; each `SPELL_CAST_SUCCESS` in `casts` as `[at, spell ID, index in casters]`, plus the cast time in seconds for a hard cast, all on one line; `spells` names the IDs. Clips cut before 1.2.0 don't have them (`add-casts`). A full recording's `.json` has them too, for the whole recording, not in its `runs` |
 | `recording` | the full recording it was cut from |
 | `thumbnail` | a 480 px wide picture from the clip, 20 s into the first boss pull (a minute into the run without one), beside it; `null` if ffmpeg couldn't make it. Clips cut before pictures existed get one from the clip browser, as `<clip>.jpg`. |
 | `keep` | `true` keeps the clip forever, whatever `clip_retention_days` says |

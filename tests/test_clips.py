@@ -58,6 +58,10 @@ def test_cuts_a_session_into_clips(tmp_path):
         f'{stamp(start + 100)}  UNIT_DIED,0000000000000000,nil,0x80000000,0x80000000,Player-1-A,"Tank-Realm-US",0x511,0x0,0\n'
         f'{stamp(start + 150)}  ENCOUNTER_END,2397,"Ingra Maloch",8,5,1,60000\n'
         f'{stamp(start + 180)}  CHALLENGE_MODE_END,2290,1,7,115000\n'
+        f'{stamp(start + 95)}  SPELL_CAST_SUCCESS,Player-1-A,"Tank-Realm-US",0x511,0x0,'
+        f'Creature-0-1,"Ingra Maloch",0xa48,0x0,53600,"Shield of the Righteous",0x2\n'
+        f'{stamp(start + 96)}  SPELL_CAST_SUCCESS,Player-1-B,"Healer-Realm-US",0x512,0x0,'
+        f'Player-1-A,"Tank-Realm-US",0x511,0x0,8936,"Regrowth",0x8\n'
     )
     os.utime(log, (end, end))
 
@@ -79,6 +83,11 @@ def test_cuts_a_session_into_clips(tmp_path):
     [boss] = details["encounters"]
     assert (boss["name"], boss["start"], boss["end"], boss["killed"]) == ("Ingra Maloch", 40, 100, True)
     assert details["deaths"] == [{"name": "Tank-Realm-US", "at": 50}]
+    # The group's casts, the recording player (flagged as theirs) first.
+    assert details["player"] == "Tank-Realm-US"
+    assert details["casters"] == ["Tank-Realm-US", "Healer-Realm-US"]
+    assert details["casts"] == [[45, 53600, 0], [46, 8936, 1]]
+    assert details["spells"] == {"53600": "Shield of the Righteous", "8936": "Regrowth"}
     # A picture for the clip browser, 20 s into the first pull.
     assert details["thumbnail"] == clip.with_suffix(".jpg").name
     assert clip.with_suffix(".jpg").read_bytes()[:2] == b"\xff\xd8"   # a JPEG
@@ -89,6 +98,7 @@ def test_cuts_a_session_into_clips(tmp_path):
     [whole] = session["runs"]
     assert whole["dungeon"] == "Mists of Tirna Scithe" and abs(whole["run_offset"] - 60) < 2
     assert abs(whole["encounters"][0]["start"] - 90) < 2
+    assert "casts" not in whole and [[round(c[0]), c[1]] for c in session["casts"]] == [[95, 53600], [96, 8936]]
 
 
 def test_clip_name_of_a_raid_pull():
@@ -218,6 +228,7 @@ def test_a_cut_that_comes_out_short_fails_and_is_retried(tmp_path, monkeypatch, 
               level=10, result="completed")
     monkeypatch.setattr(clips, "combat_logs_between", lambda *a: [tmp_path / "log.txt"])
     monkeypatch.setattr(clips, "read_log_events", lambda logs: [])
+    monkeypatch.setattr(clips, "read_casts", lambda logs: [])
     monkeypatch.setattr(clips, "find_runs", lambda events, minutes, raids: [run])
 
     def ffmpeg(cmd, **kw):
@@ -246,6 +257,7 @@ def test_a_cut_whose_index_doesnt_fit_is_cut_again_with_faststart(tmp_path, monk
               level=10, result="completed")
     monkeypatch.setattr(clips, "combat_logs_between", lambda *a: [tmp_path / "log.txt"])
     monkeypatch.setattr(clips, "read_log_events", lambda logs: [])
+    monkeypatch.setattr(clips, "read_casts", lambda logs: [])
     monkeypatch.setattr(clips, "find_runs", lambda events, minutes, raids: [run])
     calls = []
 
@@ -289,3 +301,32 @@ def test_only_one_program_cuts_at_a_time(tmp_path):
         fcntl.flock(other, fcntl.LOCK_EX)       # the service is cutting
         assert process_pending(cfg, wait=False) is None
     assert process_pending(cfg, wait=False) == []
+
+
+def test_add_casts_fills_in_older_clips(tmp_path):
+    cfg = make_cfg(tmp_path)
+    start = 1_800_000_000.0
+    log = cfg.combat_log_dir / f"WoWCombatLog-{datetime.datetime.fromtimestamp(start - 600):%m%d%y_%H%M%S}.txt"
+    log.write_text(
+        f'{stamp(start + 5)}  SPELL_CAST_SUCCESS,Player-1-A,"Me-Realm-US",0x511,0x0,'
+        f'0000000000000000,nil,0x80000000,0x80000000,1,"Judgment",0x2\n'
+        f'{stamp(start + 50)}  SPELL_CAST_SUCCESS,Player-1-A,"Me-Realm-US",0x511,0x0,'
+        f'0000000000000000,nil,0x80000000,0x80000000,2,"Consecration",0x2\n'
+    )
+    os.utime(log, (start + 100, start + 100))
+    cfg.clips_dir.mkdir()
+    cfg.processed_dir.mkdir()
+    clips.write_sidecar(cfg.clips_dir / "old.mp4", {"clip_start": start, "clip_length": 30.0})
+    clips.write_sidecar(cfg.clips_dir / "done.mp4", {"clip_start": start, "clip_length": 30.0,
+                                                     "casts": [], "casters": []})
+    clips.write_sidecar(cfg.clips_dir / "gone.mp4", {"clip_start": start - 90000,
+                                                     "clip_length": 30.0})
+    clips.write_sidecar(cfg.processed_dir / "rec.mkv", {"recording_start": start - 10,
+                                                        "length": 100.0})
+    assert clips.add_casts(cfg) == (2, 1)
+    assert read_sidecar(cfg.clips_dir / "old.mp4")["casts"] == [[5.0, 1, 0]]
+    assert '"casts": [[5.0,1,0]],' in (cfg.clips_dir / "old.json").read_text()   # one line
+    assert read_sidecar(cfg.clips_dir / "done.mp4")["casts"] == []   # already read: left alone
+    assert "casts" not in read_sidecar(cfg.clips_dir / "gone.mp4")   # its log is gone
+    session = read_sidecar(cfg.processed_dir / "rec.mkv")
+    assert session["casts"] == [[15.0, 1, 0], [60.0, 2, 0]] and session["player"] == "Me-Realm-US"

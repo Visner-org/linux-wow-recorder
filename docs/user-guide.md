@@ -76,7 +76,7 @@ And in WoW:
 ### Nobara or Fedora (RPM)
 
 ```bash
-sudo dnf install ./linux-wow-recorder-1.1.0-1.fc44.noarch.rpm
+sudo dnf install ./linux-wow-recorder-1.2.0-1.fc44.noarch.rpm
 ```
 
 dnf installs ffmpeg and Qt from your distro's repos along with it, and on Nobara
@@ -121,7 +121,7 @@ For Ubuntu 25.10 and newer (26.04 is tested) and Debian 13. Download the `.deb` 
 [Releases](https://github.com/Visner-org/linux-wow-recorder/releases) page, then:
 
 ```bash
-sudo apt install ./linux-wow-recorder_1.1.0-1_all.deb
+sudo apt install ./linux-wow-recorder_1.2.0-1_all.deb
 flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
 flatpak install --user flathub com.dec05eba.gpu_screen_recorder
 ```
@@ -347,6 +347,20 @@ at login).
 
   Hover to see what's there. Click a pull, death or lust to play from a few seconds before it;
   click anywhere else to go there.
+- **Casts**: a strip under the video shows the spells cast around where the video is,
+  scrolling as it plays. The line is now: casts to its left are done, those to its right are
+  coming up (paler). Each spell keeps its colour through the clip (each player's ten most cast;
+  the rest are grey); a thin bar before a cast shows its cast time. Hover a cast for who cast
+  it, its name and time; click it to play from just before it. **Casts** after the time (or C)
+  shows or hides the strip; its arrow has a tick for each player in the clip (yours only at
+  first, "Only you" and "Everyone" at the bottom), and each one ticked gets a lane with their
+  name. **Major cooldowns only** at its top shows just the big spells, coloured by kind: damage
+  red (Bloodlust, Avenging Wrath, Combustion, ...), healing green (Tranquility, Spirit Link
+  Totem, ...), defensive blue (Shield Wall, Ice Block, Pain Suppression, ...), over a wider
+  stretch of time. The players you tick stay ticked in other clips they're in. Casts come from the combat
+  log: yours and your party's or raid's, not other players nearby. Clips cut before 1.2.0
+  don't have them; `linux-wow-recorder add-casts` adds them while the combat logs they were cut
+  from are still there.
 - **The events** below, one row per boss pull ("killed in 1:44 · 41.80% forces · 2 deaths")
   holding the deaths and lusts during it; wipes and pulls with deaths are opened. Clicking a row plays from a few
   seconds before it. A key's boss kills show the enemy forces at that moment, counted from the
@@ -358,14 +372,17 @@ at login).
   a boss pull, death or lust in the events for "Make a highlight of this", which marks the pull
   from just before it to just after the kill or wipe, or the moments around a death or lust.
   **Save highlight** puts it in your clips folder in seconds, named after the clip with the times
-  ("... highlight 12m03s-12m49s"), with only the bosses, deaths and lusts inside it. The video
+  ("... highlight 12m03s-12m49s"), with only the bosses, deaths, lusts and casts inside it. The video
   isn't re-encoded, so it starts on the nearest keyframe before the start you picked, at most a
   second or two early. Esc stops. A highlight is a clip like the others: Keep, the trash,
   YouTube and `after_clips` work on it.
 - **Keys**: space plays and pauses; the left and right arrows skip 5 seconds; I and O mark a
-  highlight's start and end; F goes full screen and back (Esc leaves it too).
+  highlight's start and end; C shows or hides your casts; F goes full screen and back (Esc
+  leaves it too).
 - **Full screen**: the button at the end of the timeline, F, or a double-click on the video.
   The video fills the screen with Play and the timeline under it.
+- **Player size**: drag the bar between the timeline and the details to make the video bigger
+  or smaller; it stays that way next time.
 - **Volume**: the slider after the time; the speaker before it mutes and unmutes.
 - **Buttons**: **Play**; beside the title, ☆ Keep (keep it forever), open it in your own video
   player, show it in the file manager, hide the chat (see [Hiding the chat](#hiding-the-chat)),

@@ -62,10 +62,11 @@ def as_list(table: dict) -> list:
 
 
 def deaths(log_dir: Path, start: float, end: float) -> list[tuple[float, int, str]]:
-    """(time, NPC ID, name) of each creature that died in [start, end], once per mob."""
+    """(time, NPC ID, name) of each creature that died in [start, end], once per mob (a few log
+    only a PARTY_KILL)."""
     seen, found = set(), []
     for t, event, f in read_log_events(combat_logs_between(log_dir, start, end)):
-        if event != "UNIT_DIED" or not start <= t <= end or f[4] in seen:
+        if event not in ("UNIT_DIED", "PARTY_KILL") or not start <= t <= end or f[4] in seen:
             continue
         npc = forces.npc_id(f[4])
         if npc is not None:

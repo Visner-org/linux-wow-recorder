@@ -1,4 +1,5 @@
-from linux_wow_recorder.combatlog import drop_despawns, find_runs, parse_log_time, read_log_events
+from linux_wow_recorder.combatlog import (Cast, count_special_mobs, drop_despawns, find_runs,
+                                          parse_log_time, read_casts, read_log_events)
 
 T0 = 1_800_000_000.0
 
@@ -94,6 +95,7 @@ def test_a_key_whose_start_isnt_logged_is_timed_from_its_end():
     # the dungeon (difficulty 8) with no START. The END's in-game time says when it began.
     [run] = find_runs([
         zone(0, 2825, "Den of Nalorakk", 8),
+        died(200, "Creature-0-1-2825-1-241808-0000A", "Territorial Matriarch"),   # 8
         (T0 + 300, "ENCOUNTER_START", ["3203", "Nalorakk", "8", "5", "2825"]),
         (T0 + 400, "ENCOUNTER_END", ["3203", "Nalorakk", "8", "5", "1", "99850"]),
         key_end(1442, 2825, 12, 1_543_915),
@@ -103,6 +105,7 @@ def test_a_key_whose_start_isnt_logged_is_timed_from_its_end():
     assert run.start == T0 + 1442 - 1543.915 and run.end == T0 + 1442
     assert run.time_limit == 1920 and run.level == 12
     assert [e.name for e in run.encounters] == ["Nalorakk"]
+    assert run.challenge == 586 and [e.forces for e in run.encounters] == [1.1]   # 8 of 729
 
 
 def test_a_keystone_dungeon_without_an_end_or_with_a_reset_gives_nothing():
@@ -441,7 +444,7 @@ def test_enemy_forces_at_each_boss_kill():
     ])
     [run] = runs
     assert [e.forces for e in run.encounters] == [None, 6.73]   # 55 of 817
-    # A dungeon not in the table, or a key whose start isn't logged: none.
+    # A dungeon not in the table: none.
     other = find_runs([zone(0, 2290, "New Dungeon", 8), key_start(10, 2290, "New Dungeon", 12),
                        mob(50, 261573, "B"), boss(100), boss_end(130, "Boss", killed=True),
                        key_end(1700, 2290, 12, 1_600_000)])[0]
@@ -469,3 +472,87 @@ def test_despawned_mobs_dont_count(tmp_path):
     drop_despawns([run], [log])
     assert [e.forces for e in run.encounters] == [3.67]   # the fought one: 30
     assert [g for _, g, _ in run.kills] == [fought]
+
+
+def test_mobs_the_deaths_get_wrong(tmp_path):
+    # Temple of Sethraliss: a Static Anomaly that took a killing blow but logs no death, one
+    # that didn't, and two Imbued Stormcallers: one of the 12-forces spawns before Galvazzt
+    # (its killing blow comes before its death line), and a 7.
+    log = tmp_path / "WoWCombatLog-100826_190000.txt"
+    anomaly, hurt = "Creature-0-1-1877-1-134691-0000A", "Creature-0-1-1877-1-134691-0000B"
+    far, near = "Creature-0-1-1877-1-134599-0000C", "Creature-0-1-1877-1-134599-0000D"
+
+    def hit(guid, name, health, x, y, overkill=-1):
+        return (f'SPELL_DAMAGE,Player-1-AAA,"Tank",0x511,0x0,{guid},"{name}",0xa48,0x0,'
+                f'1,"Hit",0x1,{guid},0000000000000000,{health},7161107,0,0,1470,0,0,0,1,0,0,0,'
+                f'{x},{y},1038,0.07,90,1000,1000,{overkill},1,0,0,0,nil,nil,nil,ST')
+
+    def died(guid, name):
+        return f'UNIT_DIED,0000000000000000,nil,0x80000000,0x80000000,{guid},"{name}",0xa48,0x0,0'
+    log.write_text("".join(f"10/8/2026 19:{m}-7  {line}\n" for m, line in [
+        ("00:00.000", 'ZONE_CHANGE,1877,"Temple of Sethraliss",8'),
+        ("00:10.000", 'CHALLENGE_MODE_START,"Temple of Sethraliss",1877,250,12,[10,9]'),
+        ("01:00.000", hit(anomaly, "Static Anomaly", 2000, 3700, 3390)),
+        ("01:01.000", hit(anomaly, "Static Anomaly", 1, 3700, 3390, overkill=999)),
+        ("01:01.500", hit(anomaly, "Static Anomaly", 1, 3700, 3390, overkill=500)),
+        ("01:02.000", hit(hurt, "Static Anomaly", 5000, 3700, 3390)),
+        ("01:03.000", hit(far, "Imbued Stormcaller", 0, 3678, 3353)),
+        ("01:03.100", died(far, "Imbued Stormcaller")),
+        ("01:04.000", hit(near, "Imbued Stormcaller", 1, 3700, 3392, overkill=200)),
+        ("01:14.000", died(near, "Imbued Stormcaller")),
+        ("02:00.000", 'ENCOUNTER_START,2127,"Galvazzt",8,5,1877'),
+        ("02:30.000", 'ENCOUNTER_END,2127,"Galvazzt",8,5,1,30000'),
+        ("30:00.000", "CHALLENGE_MODE_END,1877,1,12,1600000"),
+    ]))
+    [run] = find_runs(read_log_events([log]))
+    assert [e.forces for e in run.encounters] == [2.04]   # the two deaths: 14 of 687
+    count_special_mobs([run], [log])
+    assert [e.forces for e in run.encounters] == [3.49]   # 5 + 7 + 12: 24 of 687
+    assert [(g, w) for _, g, w in run.kills] == [(anomaly, 5), (far, 7), (near, 12)]
+    count_special_mobs([run], [log])   # once only
+    assert [e.forces for e in run.encounters] == [3.49]
+
+
+def test_a_party_kill_with_no_death_counts():
+    def kill(t, guid):
+        return (T0 + t, "PARTY_KILL", ["Player-1-AAA", "Dps-Realm-US", "0x512", "0x0",
+                                       guid, "Mob", "0xa48", "0x0", "0"])
+    hydra, serpent = "Creature-0-1-2290-1-261573-0000A", "Creature-0-1-2290-1-261573-0000B"
+    [run] = find_runs([
+        zone(0, 2290, "Altar of Fangs", 8),
+        (T0 + 10, "CHALLENGE_MODE_START", ["Altar of Fangs", "2290", "588", "12", "[10", "9]"]),
+        kill(50, hydra),                                  # only a PARTY_KILL: 30
+        kill(51, serpent), died(51, serpent, "Mob"),      # both lines: 30, once
+        (T0 + 100, "ENCOUNTER_START", ["2397", "Rav'i", "8", "5", "2290"]),
+        boss_end(130, "Rav'i", killed=True),
+        key_end(1700, 2290, 12, 1_600_000),
+    ])
+    assert [e.forces for e in run.encounters] == [7.34]   # 60 of 817
+
+
+def cast_line(at, event, spell, name, guid="Player-1-ME", who="Me-Realm-US", flags="0x511"):
+    return (f'10/8/2026 19:03:{at:06.3f}-7  {event},{guid},"{who}",{flags},0x0,Creature-0-1-2-3-4-5,'
+            f'"Mob",0xa48,0x0,{spell},"{name}",0x4,Player-1-ME,0000000000000000,100,100\n')
+
+
+def test_read_casts_keeps_the_groups(tmp_path):
+    log = tmp_path / "WoWCombatLog-100826_190000.txt"
+    t = parse_log_time("10/8/2026 19:03:00.000-7")
+    log.write_text(
+        cast_line(1, "SPELL_CAST_START", 11366, "Pyroblast")
+        + cast_line(4.5, "SPELL_CAST_SUCCESS", 11366, "Pyroblast")     # a hard cast
+        + cast_line(5, "SPELL_CAST_SUCCESS", 108853, "Fire Blast")     # an instant
+        + cast_line(6, "SPELL_CAST_START", 133, "Fireball")            # interrupted: no SUCCESS
+        + cast_line(7, "SPELL_CAST_SUCCESS", 2825, "Bloodlust", "Player-1-SH", "Shammy-Realm-US",
+                    "0x512")                                           # a party member's
+        + cast_line(7.5, "SPELL_CAST_SUCCESS", 2825, "Bloodlust", "Player-1-X", "Stranger-Realm-US",
+                    "0x548")                                           # someone nearby
+        + cast_line(8, "SPELL_CAST_SUCCESS", 17253, "Bite", "Pet-0-1-2-3-4-5", "Wolf", "0x1111")
+        + cast_line(20, "SPELL_CAST_SUCCESS", 133, "Fireball")         # the START was long ago
+    )
+    assert read_casts([log]) == [
+        Cast(t + 4.5, 11366, "Pyroblast", "Me-Realm-US", 3.5, mine=True),
+        Cast(t + 5, 108853, "Fire Blast", "Me-Realm-US", mine=True),
+        Cast(t + 7, 2825, "Bloodlust", "Shammy-Realm-US"),
+        Cast(t + 20, 133, "Fireball", "Me-Realm-US", mine=True),
+    ]

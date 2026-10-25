@@ -8,7 +8,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .. import keytimers, state
+from .. import cooldowns, keytimers, state
 
 # Icon names; tray.py draws one for each.
 IDLE, RECORDING, PROCESSING, ATTENTION, OFF = "idle", "recording", "processing", "attention", "off"
@@ -494,6 +494,65 @@ def lust_text(lust: dict) -> str:
     return f"{lust['name']}{who}"
 
 
+@dataclass
+class CastMark:
+    at: float                     # seconds into the clip: when the spell went off
+    spell: int
+    name: str
+    who: str = ""                 # the caster: "Name-Realm-Region"
+    cast: float | None = None     # a hard cast's cast time, s
+
+
+def casters(details: dict) -> list[str]:
+    """Who cast in a clip: the player recording first, then the others by how much they cast."""
+    return [str(name) for name in details.get("casters") or []]
+
+
+def casts(details: dict) -> list[CastMark]:
+    """The group's casts in a clip, in time order ([] for clips without them)."""
+    spells = details.get("spells") or {}
+    names = casters(details)
+    found = []
+    for c in details.get("casts") or []:
+        try:
+            at, spell, who = float(c[0]), int(c[1]), names[int(c[2])]
+            cast = float(c[3]) if len(c) > 3 and c[3] else None
+        except (TypeError, ValueError, IndexError):
+            continue
+        found.append(CastMark(at, spell, spells.get(str(spell), f"Spell {spell}"), who, cast))
+    return sorted(found, key=lambda c: c.at)
+
+
+# Hues far apart, for the spells cast most, most first.
+SPELL_HUES = (210, 30, 120, 290, 0, 175, 55, 330, 250, 90)
+
+
+def spell_hues(casts: list[CastMark]) -> dict[tuple[str, int], int]:
+    """A colour hue for each player's spells cast most in a clip, so they're easy to tell apart;
+    the rest have none (drawn grey). Keyed by (caster, spell ID)."""
+    counts: dict[tuple[str, int], int] = {}
+    for c in casts:
+        counts[c.who, c.spell] = counts.get((c.who, c.spell), 0) + 1
+    hues = {}
+    for who in {who for who, _ in counts}:
+        most = sorted((k for k in counts if k[0] == who), key=lambda k: -counts[k])
+        hues.update(zip(most, SPELL_HUES, strict=False))   # the rest: no hue
+    return hues
+
+
+# Major cooldowns only: a colour per kind instead of per spell.
+KIND_HUES = {cooldowns.OFFENSIVE: 0, cooldowns.HEALING: 120, cooldowns.DEFENSIVE: 210}
+
+
+def cast_text(cast: CastMark) -> str:
+    """For a tooltip: "1:23  Mage: Combustion (damage cooldown)", "... (cast 3.5 s)"."""
+    notes = [f"cast {cast.cast:.1f} s"] if cast.cast else []
+    if cooldowns.kind(cast.spell):
+        notes.append(f"{cooldowns.kind(cast.spell)} cooldown")
+    return f"{mmss(cast.at)}  {short_name(cast.who)}: {cast.name}" + (
+        f" ({', '.join(notes)})" if notes else "")
+
+
 def seek_target(at: float) -> float:
     """Where jumping to an event starts playing: a few seconds before it."""
     return max(0.0, at - LEAD_IN)
@@ -801,6 +860,10 @@ def session_info(path: Path, details: dict, clips: list[dict], cut: bool = True)
         "deaths": [d for r in runs for d in r.get("deaths", [])],
         "lusts": [lust for r in runs for lust in r.get("lusts", [])],
         "keep": bool(details.get("keep")),
+        "player": details.get("player"),
+        "casters": details.get("casters") or [],
+        "casts": details.get("casts") or [],
+        "spells": details.get("spells") or {},
     }
     n = len(runs)
     # Before it's cut, how many deaths and bosses it has isn't known yet.
