@@ -1,0 +1,7 @@
+## Interface: 120105
+## Title: Linux WoW Recorder
+## Notes: Turns combat logging on in dungeons and raids, for Linux WoW Recorder's clips.
+## Author: Visner-org
+## Version: 1
+
+LinuxWoWRecorder.lua

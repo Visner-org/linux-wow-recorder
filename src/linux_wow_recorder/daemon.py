@@ -11,10 +11,10 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import APP_TITLE, __version__, logs, service, state
+from . import APP_TITLE, __version__, addon, logs, service, state
 from .clips import (SessionResult, cleanup, free_gb, new_recording_path, process_pending,
                     stale_recordings)
-from .combatlog import combat_logs_between, read_log_events, run_in_progress
+from .combatlog import combat_logs_between, last_event_time, read_log_events, run_in_progress
 from .config import WOW_SOUND, Config
 from .detect import find_wow, find_wow_process, wow_alive
 from .notify import Notifier
@@ -41,9 +41,10 @@ AUDIO_CHECK_AFTER = 90
 # While "Cut the clips so far" waits for a key or boss pull to end, the combat log is read
 # this often.
 CUT_CHECK_INTERVAL = 30
-# WoW writes the combat log a few seconds late, so a cut waits for a write after it was asked
-# (a key started just before the click isn't in the file yet), or this long if none comes.
-CUT_LOG_WAIT = 60
+# WoW writes the combat log in batches, a minute or more after the events, so a cut waits for an
+# event after it was asked (a key started just before the click isn't in the file yet), or this
+# long if none comes (nothing happening in town).
+CUT_LOG_WAIT = 120
 # While the screen-share dialog waits for a pick (it can open behind WoW).
 PICK_PROBLEM = "Not recording: pick WoW's window in the screen-share dialog."
 # While the output folder is gone (its drive unmounted after the service started).
@@ -141,6 +142,7 @@ class Daemon:
             self.recorder.stop()
         if not find_wow():
             self.start_cutting()   # whatever an earlier run left behind
+        addon.refresh(cfg.combat_log_dir)
 
         log.info("Watching for WoW...")
         misses = 0
@@ -395,8 +397,7 @@ class Daemon:
         if asked <= s.cut or now - s.cut_checked < CUT_CHECK_INTERVAL:
             return
         logs = combat_logs_between(self.cfg.combat_log_dir, s.start, now)
-        written = max((f.stat().st_mtime for f in logs), default=0.0)
-        if written < asked and now - asked < CUT_LOG_WAIT:
+        if (last_event_time(logs) or 0.0) < asked and now - asked < CUT_LOG_WAIT:
             return
         s.cut_checked = now
         if run_in_progress(read_log_events(logs)):

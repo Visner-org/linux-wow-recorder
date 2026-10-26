@@ -248,6 +248,7 @@ def sidecar_for(run: Run, clip_start: float, length: float, recording: Path,
         "keep": False,
         **({"kind": "raid", "raid": run.raid, "difficulty": run.difficulty, "pull": run.pull}
            if run.is_raid else {}),
+        **({"log_late": run.log_late} if run.log_late else {}),
         **(cast_details(casts, clip_start, length) if casts is not None else {}),
     }
 

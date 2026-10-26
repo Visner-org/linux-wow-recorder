@@ -23,6 +23,7 @@
 | `pause`, `resume` | stops recording for the rest of this WoW session (what was recorded so far is kept), or records again; the next session always records |
 | `cut-now` | while WoW runs: cuts the clips recorded so far and records on in a new file (a second or so isn't recorded); inside a key, a dungeon run or a raid boss pull, once it ends |
 | `test-webhooks` | sends a test message to every webhook and names any that failed (`test-discord` is the old name) |
+| `install-addon` | optional: copies the app's WoW addon, which turns combat logging on in dungeons and raids, into the AddOns folder next to the combat log folder ([user guide](user-guide.md#the-wow-addon)); `status` says whether it's installed |
 | `install-service` | installs and starts the systemd user service, which then **starts at every login** until `uninstall-service` (the desktop app's Settings > Advanced does the same with its "Record from every login" tick) |
 | `uninstall-service` | stops and removes the service; the config and recordings stay |
 | `uninstall` | a clean uninstall (Settings > Advanced > Uninstall... runs it): stops and removes the service, the autostart and menu entries the app wrote, the config, logs and runtime files, and for a uv or pipx install the program too; an RPM or Arch package is removed with the `dnf`/`pacman` command it prints. Recordings and clips stay unless asked: `--delete-recordings` removes `sessions/`, `processed/` and `clips/` (nothing else in the output folder, nor other folders' clips). `--yes` asks nothing; `--keep-program` leaves the program installed |
@@ -154,6 +155,7 @@ With both views off, the Keystones button is hidden too.
 | `~/.local/state/linux-wow-recorder/logs/` | the logs ([below](#logs)) |
 | `$XDG_RUNTIME_DIR/linux-wow-recorder/status.json` | what the service is doing ([below](#service-status-statusjson)) |
 | `$XDG_RUNTIME_DIR/linux-wow-recorder/control.json` | a pause (`pause` or the tray), a cut (`cut-now` or the tray), a switch to the monitor or another pick (tray or clips window), for one session |
+| `<WoW>/_retail_/Interface/AddOns/LinuxWoWRecorder/` | the WoW addon (`install-addon` or Settings); updated by the service when the app has a newer one, removed by uninstall |
 | `<output>/sessions/` | the recording being made, and recordings not cut yet (`2026-10-08_19-03-12.mkv`) |
 | `<output>/processed/` | full recordings already cut, each with its details (`.json`) and, once the clip browser has shown it, a picture (`.jpg`) |
 | `<output>/clips/` | the clips (`.mp4`), their details (`.json`) and pictures (`.jpg`) |
@@ -245,7 +247,8 @@ over two recordings gets one clip from each, each with its own part).
 | `clip_start`, `clip_length` | where the clip starts, and how long it is |
 | `run_offset` | how far into the clip the run starts (`pad_before`, unless the recording started later) |
 | `bosses_killed`, `deaths_total` | over the whole run |
-| `encounters` | each boss pull: its name, start, end (`null` if the log ended mid-pull) and whether it was a kill. A wipe and the kill after it are separate pulls of the same boss. A key's kills have `forces`, the enemy forces percent then (`forces.py`); `null` for wipes, dungeons without a key or not in the table, and older clips. |
+| `encounters` | each boss pull: its name, start, end (`null` if the log ended mid-pull) and whether it was a kill. A wipe and the kill after it are separate pulls of the same boss. A key's kills have `forces`, the enemy forces percent then (`forces.py`); `null` for wipes, dungeons without a key or not in the table, keys with `log_late`, and older clips. |
+| `log_late` | a key whose combat log began after its timer did: by this many seconds. Only there when it did; its forces are left out, since kills before the log began aren't in it |
 | `deaths` | each player death: the name as logged (`Name-Realm-Region`) and when |
 | `lusts` | each Bloodlust-type effect: `"Bloodlust"`, `"Heroism"`, `"Time Warp"`, `"Primal Rage"`, `"Fury of the Aspects"`, `"Harrier's Cry"` or `"Drums"`; the caster (the drummer for drums), or `null` when the log doesn't say; and when |
 | `player`, `casters`, `casts`, `spells` | the spells cast by the group: `player` is the one whose WoW wrote the combat log (`null` if they cast nothing), `casters` everyone who cast, `player` first, then by how much they cast; each `SPELL_CAST_SUCCESS` in `casts` as `[at, spell ID, index in casters]`, plus the cast time in seconds for a hard cast, all on one line; `spells` names the IDs. Clips cut before 1.2.0 don't have them (`add-casts`). A full recording's `.json` has them too, for the whole recording, not in its `runs` |

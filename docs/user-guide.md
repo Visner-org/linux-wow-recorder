@@ -64,19 +64,20 @@ And in WoW:
 
 - **Combat logging on in dungeons.** WoW doesn't log by itself. Type `/combatlog` after you
   zone in, or let an addon do it: Raider.IO's client, an "auto combat log" addon, or for WoW
-  Forever, forever-logs-companion. Without a log, the session is still recorded but can't be
-  cut into clips. If logging starts after the key does (an addon can be late), a completed key
-  is still found: its start is worked out from its in-game time. An abandoned key needs logging
-  on from the start.
-- **Advanced Combat Logging** on (Options > Network). It isn't needed to find runs, but it
-  makes the log more complete.
+  Forever, forever-logs-companion. If keys still go missing from your logs, the app has an
+  optional addon of its own ([The WoW addon](#the-wow-addon)). Without a log, the session is
+  still recorded but can't be cut into clips. If logging starts after the key does (an addon can
+  be late), a completed key is still found: its start is worked out from its in-game time. An
+  abandoned key needs logging on from the start.
+- **Advanced Combat Logging** on (Options > Network). It isn't
+  needed to find runs, but it makes the log more complete.
 
 ## Installing
 
 ### Nobara or Fedora (RPM)
 
 ```bash
-sudo dnf install ./linux-wow-recorder-1.2.4-1.fc44.noarch.rpm
+sudo dnf install ./linux-wow-recorder-1.2.5-1.fc44.noarch.rpm
 ```
 
 dnf installs ffmpeg and Qt from your distro's repos along with it, and on Nobara
@@ -121,7 +122,7 @@ For Ubuntu 25.10 and newer (26.04 is tested) and Debian 13. Download the `.deb` 
 [Releases](https://github.com/Visner-org/linux-wow-recorder/releases) page, then:
 
 ```bash
-sudo apt install ./linux-wow-recorder_1.2.4-1_all.deb
+sudo apt install ./linux-wow-recorder_1.2.5-1_all.deb
 flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
 flatpak install --user flathub com.dec05eba.gpu_screen_recorder
 ```
@@ -200,7 +201,8 @@ Open **Linux WoW Recorder** from the app menu (or run `linux-wow-recorder-gui`).
 a short setup opens by itself, in three steps:
 
 1. **Folders**: the combat log folder and the output folder (the Browse buttons help). Under
-   each, a line says what it found: the newest combat log, or the free space.
+   each, a line says what it found: the newest combat log, or the free space. **WoW addon** is
+   optional: leave it unless keys go missing from your logs ([below](#the-wow-addon)).
 2. **What to record**: the capture, frame rate and quality, and the sound. "Record" starts on
    "A window or screen you pick": the test recording opens the screen-share dialog, where you
    choose the WoW window or its monitor.
@@ -248,6 +250,54 @@ config file (see the [reference](reference.md#config-file)).
   main monitor, or the one your desktop's display settings call "1"; the settings window shows
   which monitor it is. With two or more screens, pick the monitor by name instead. On AMD and Intel under Wayland, it needs gpu-screen-recorder's root helper;
   the Flatpak asks for your password once.
+
+### The WoW addon
+
+**Optional.** Most people don't need it: if your clips come out whole, with their pulls and
+enemy forces, leave it out. Install it only if your logs miss keys or their start: clips that
+never get cut ("No combat log covers this session"), or a key's details saying "combat log
+began 1:04 late".
+
+Why that happens: clips come from WoW's combat log, so logging has to be on before a key
+starts. Addons that turn it on (Raider.IO and others) check when you change zones, and that can
+miss a key: zone in at Heroic, put the key in, and the dungeon becomes Mythic+ with no zone
+change, so logging starts only when you walk into the next area. The kills before that aren't
+in the log.
+
+The app comes with a small addon of its own, **Linux WoW Recorder** in your AddOns list, that
+closes that gap. In a dungeon or raid it turns combat logging (and Advanced Combat Logging) on:
+
+- when the keystone slot opens at the Font of Power, before the key starts
+- when a key starts, for the players who didn't put it in
+- when the dungeon's difficulty changes
+- at each boss pull, and after each loading screen
+
+That's all it does. It never turns logging off (WoW or your other addons do that), shows
+nothing, saves nothing and reads nothing else. It's happy alongside other logging addons.
+
+Before you install it:
+
+- **It logs more than you may want.** It turns logging on in every dungeon and raid, Normal and
+  LFR too, and leaves it on until you log out or type `/combatlog`. WoW never deletes combat
+  logs, and a night of keys can be a few hundred MB, so clear out `_retail_/Logs` now and then
+  (the app only reads them).
+- **It changes a WoW setting.** Advanced Combat Logging stays on after you remove the addon;
+  turn it off in Options > Network if you want it off.
+- **It's not from CurseForge or Wago.** Addon managers don't know it and won't update it; the
+  app does. It's two small plain-text files you can read in
+  `_retail_/Interface/AddOns/LinuxWoWRecorder`.
+- **It's for retail WoW.** In Classic or a private server it shows as out of date.
+- **After a big WoW patch** it shows as out of date until the app's next version.
+- An addon can't show you a key it missed: keys logged before you install it stay as they are.
+
+**Installing it:** Settings > Folders and capture > **WoW addon: Install** (it asks first), or
+`linux-wow-recorder install-addon`. It goes into the AddOns folder of the WoW your combat log
+folder belongs to (`_retail_/Interface/AddOns/LinuxWoWRecorder`). Then `/reload` in WoW, or log
+in again. When the app updates, the service updates the addon too. **Removing it:** delete that
+folder, or untick it in WoW's AddOns list. Uninstalling the app removes it.
+
+After a big WoW patch, WoW may list it as out of date until the app's next version: tick **Load
+out of date AddOns** in the AddOns list meanwhile.
 
 ## Everyday use
 
@@ -367,7 +417,9 @@ at login).
   holding the deaths and lusts during it; wipes and pulls with deaths are opened. Clicking a row plays from a few
   seconds before it. A key's boss kills show the enemy forces at that moment, counted from the
   mobs that died in the combat log, so it can be a little off from the game's bar (a mob killed
-  far from you isn't logged). Dungeons outside the current season don't have it.
+  far from you isn't logged). Dungeons outside the current season don't have it, and neither
+  does a key whose combat log began after it did: the details then say "combat log began 1:03
+  late" (the optional [WoW addon](#the-wow-addon) helps if that happens often).
 - **Highlights**: save part of a clip as a clip of its own, to share one boss kill or a wipe.
   The scissors button beside the title marks 30 seconds from where the video is; drag either
   end on the timeline, or play to a moment and press I (start here) or O (end here). Right-click
@@ -626,7 +678,8 @@ If the log says the recorder failed, run `linux-wow-recorder test-recorder` (whi
 closed) to see gpu-screen-recorder's own error.
 
 **"No combat log covers this session."**
-Combat logging was off. Type `/combatlog` in the dungeon, or install an addon that does it.
+Combat logging was off. Type `/combatlog` in the dungeon, or use an auto combat logging addon.
+If that keeps happening, try the app's optional [WoW addon](#the-wow-addon).
 The full recording is still kept in `processed/` for 3 days.
 
 **A session was recorded, but no clips.**

@@ -10,8 +10,9 @@ check for a new version on GitHub if you turn that on. See [Privacy](#privacy).
 
 ![The clip browser: Mythic+ clips with their results, and a run's timeline of boss pulls, deaths and lusts](docs/screenshot.png)
 
-**New in 1.2.4:** draw on a paused frame, play at up to 16x, and cut the clips so far without
-quitting WoW.
+**New in 1.2.5:** an optional small WoW addon, for when your combat logs miss the start of keys.
+**1.2.4:** draw on a paused frame, play at up to 16x, and cut the clips so far without quitting
+WoW.
 **1.2.0:** a timeline of the spells cast under the video, for you and anyone in your group you
 tick.
 **1.1.0:** a key's boss kills show the enemy forces % at that moment.
@@ -144,10 +145,11 @@ this app come from your package manager, when you choose.
 - [gpu-screen-recorder](https://git.dec05eba.com/gpu-screen-recorder/about/) (from your distro
   or the Flatpak)
 - ffmpeg (with ffprobe)
-- **Combat logging on in dungeons.** WoW doesn't log by itself: type `/combatlog` once you're in,
-  or let an addon do it (Raider.IO's client, or any auto combat logging addon). Turn on
-  *Advanced Combat Logging* in WoW's Network settings too. Without a log, a session is still
-  recorded but can't be cut into clips.
+- **Combat logging on in dungeons.** WoW doesn't log by itself: type `/combatlog` once you're
+  in, or use an auto combat logging addon, with *Advanced Combat Logging* on in WoW's Network
+  settings. Without a log, a session is still recorded but can't be cut into clips. If your
+  logs still miss keys, the app has an optional addon ([the WoW
+  addon](docs/user-guide.md#the-wow-addon)).
 
 ## Install
 
@@ -171,7 +173,7 @@ it, please say how it went in an issue.
 Download the `.rpm` from [Releases](../../releases), then:
 
 ```bash
-sudo dnf install ./linux-wow-recorder-1.2.4-1.fc44.noarch.rpm
+sudo dnf install ./linux-wow-recorder-1.2.5-1.fc44.noarch.rpm
 ```
 
 dnf brings in ffmpeg and Qt, and on Nobara gpu-screen-recorder too. Open **Linux WoW Recorder**
@@ -233,7 +235,7 @@ For Ubuntu 25.10 and newer and Debian 13. Download the `.deb` from [Releases](..
 then:
 
 ```bash
-sudo apt install ./linux-wow-recorder_1.2.4-1_all.deb
+sudo apt install ./linux-wow-recorder_1.2.5-1_all.deb
 flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
 flatpak install --user flathub com.dec05eba.gpu_screen_recorder
 ```

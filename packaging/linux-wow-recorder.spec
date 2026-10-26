@@ -60,6 +60,11 @@ if [ "$1" -eq 0 ]; then
 fi
 
 %changelog
+* Mon Oct 26 2026 Linux WoW Recorder - 1.2.5-1
+- An optional WoW addon for combat logs that miss keys (Settings > WoW addon)
+- A key whose combat log began late shows no enemy forces instead of wrong ones
+- Cut the clips so far waits for WoW to finish writing the combat log
+
 * Mon Oct 26 2026 Linux WoW Recorder - 1.2.4-1
 - Cut the clips so far waits for WoW to write the combat log, so a key just started isn't split
 

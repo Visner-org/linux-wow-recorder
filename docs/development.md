@@ -224,6 +224,23 @@ the mobs that died just before it and lists the NPCs whose count differs from th
 Add the buff's spell ID to `LUST_BUFFS` with its name and the debuff it leaves. If that debuff is
 new, add it to `LUST_DEBUFFS`; without it, the lust isn't found at all.
 
+### The WoW addon
+
+`src/linux_wow_recorder/addon/LinuxWoWRecorder/` is shipped in the package and copied into
+`<WoW>/_retail_/Interface/AddOns/` by `addon.install` (Settings or `install-addon`). It turns
+combat logging on in dungeons and raids at the moments zone-only loggers miss (Raider.IO checks
+on zone changes only, so a dungeon entered at Heroic and then keyed had no log for its first
+72 s on 10-26). It never turns logging off. It's opt-in: only the user installs it (Settings
+asks first), since it leaves logging on and changes a CVar; `refresh` only updates a copy
+that's already there. Its `## Version:` is what `addon.status` compares:
+bump it with any change to the addon, and the service (`addon.refresh` at start) updates
+installed copies. Bump `## Interface:` with each WoW patch, or WoW lists it as out of date.
+
+A completed key whose log has no START is timed from its END (`key_end`). Its timer began at
+END minus the in-game time plus 15 s per group death (`DEATH_PENALTY`, measured 15 to 16 s; a
+hunter's Feign Death has no penalty and isn't counted). If the log began more than 20 s after
+that (`LATE_LOG_SECONDS`), kills may be missing: `Run.log_late` is set and its forces dropped.
+
 ## Finding WoW
 
 `detect.wow_flavor` looks for `Wow.exe`, `WowT.exe`, `WowB.exe`, `WowClassic.exe` and so on in
@@ -277,8 +294,10 @@ launcher, which names the game in its arguments, are skipped. Add a new client's
   recorder, starts a new recording and runs the cutter, which skips the file being written. It
   first reads the session's combat logs (`combatlog.run_in_progress`, every 30 s while waiting):
   inside a key, a dungeon run or a boss pull it waits, so a run isn't cut as abandoned and split.
-  WoW writes the log a few seconds late, so it first waits for a write after the click (at most
-  60 s): a key started just before it is in the file by then.
+  WoW writes the log in batches, often a minute or more after the events (measured 10-26: lines
+  up to 75 s old, writes up to 33 s apart mid-fight), so it first waits for a line timestamped
+  after the click (`combatlog.last_event_time`, at most 120 s): a key started just before it is
+  in the file by then.
 - **Setup checklist**: the clip browser shows `model.setup_checklist` (recorder, ffmpeg and co.,
   folders, combat logging, the service) at the top while anything on it isn't ticked.
 - **Window and tray**: `run()` opens the window unless started with `--tray` (the autostart

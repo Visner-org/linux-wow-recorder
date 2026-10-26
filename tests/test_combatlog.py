@@ -1,6 +1,6 @@
 from linux_wow_recorder.combatlog import (Cast, count_special_mobs, drop_despawns, find_runs,
-                                          parse_log_time, read_casts, read_log_events,
-                                          run_in_progress)
+                                          last_event_time, parse_log_time, read_casts,
+                                          read_log_events, run_in_progress)
 
 T0 = 1_800_000_000.0
 
@@ -120,7 +120,24 @@ def test_a_key_whose_start_isnt_logged_is_timed_from_its_end():
     assert run.start == T0 + 1442 - 1543.915 and run.end == T0 + 1442
     assert run.time_limit == 1920 and run.level == 12
     assert [e.name for e in run.encounters] == ["Nalorakk"]
-    assert run.challenge == 586 and [e.forces for e in run.encounters] == [1.1]   # 8 of 729
+    # Kills before the log began aren't in it: forces would be too low, so there are none.
+    assert run.challenge == 586 and [e.forces for e in run.encounters] == [None]
+    assert run.log_late == 102
+
+
+def test_a_key_logged_from_its_start_keeps_its_forces_without_the_start_line():
+    # The addon turns logging on as the key starts: the START line itself is missed, but nothing
+    # died before the log began. The timer starts 10 s later; two deaths add 30 s to its time.
+    [run] = find_runs([
+        zone(0, 2825, "Den of Nalorakk", 8),
+        died(200, "Creature-0-1-2825-1-241808-0000A", "Territorial Matriarch"),   # 8
+        died(250, "Player-1-0A", "Me-Realm-US"),
+        died(260, "Player-1-0B", "You-Realm-US"),
+        (T0 + 300, "ENCOUNTER_START", ["3203", "Nalorakk", "8", "5", "2825"]),
+        (T0 + 400, "ENCOUNTER_END", ["3203", "Nalorakk", "8", "5", "1", "99850"]),
+        key_end(1500, 2825, 12, 1_520_000),
+    ])
+    assert run.log_late is None and [e.forces for e in run.encounters] == [1.1]
 
 
 def test_a_keystone_dungeon_without_an_end_or_with_a_reset_gives_nothing():
@@ -571,3 +588,16 @@ def test_read_casts_keeps_the_groups(tmp_path):
         Cast(t + 7, 2825, "Bloodlust", "Shammy-Realm-US"),
         Cast(t + 20, 133, "Fireball", "Me-Realm-US", mine=True),
     ]
+
+
+def test_last_event_time_is_the_newest_whole_line(tmp_path):
+    log = tmp_path / "WoWCombatLog-102626_120415.txt"
+    assert last_event_time([]) is None
+    log.write_text("10/26/2026 12:04:15.240+0  ZONE_CHANGE,2813,\"Murder Row\",8\n")
+    assert last_event_time([log]) == parse_log_time("10/26/2026 12:04:15.240+0")
+    filler = "10/26/2026 12:05:00.000+0  SPELL_DAMAGE," + "x" * 200 + "\n"
+    with log.open("a") as f:
+        f.write(filler * 400)                                     # past the 64 KB read
+        f.write("10/26/2026 12:06:00.000+0  SPELL_DAMAGE,x\n")
+        f.write("10/26/2026 12:07:00.000+0  SPELL_DA")            # still being written
+    assert last_event_time([log]) == parse_log_time("10/26/2026 12:06:00.000+0")

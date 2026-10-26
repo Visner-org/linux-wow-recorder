@@ -9,7 +9,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import APP_NAME, APP_TITLE, __version__, config, logs, service, state
+from . import APP_NAME, APP_TITLE, __version__, addon, config, logs, service, state
 from .clips import add_casts, free_gb, process_pending, set_keep
 from .config import CONFIG_FILE, NOTIFY_EVENTS, ConfigError
 from .detect import find_wow
@@ -217,6 +217,7 @@ def cmd_status(args) -> int:
     print(f"Output   : {cfg.output_dir}")
     print(f"Recorder : {shlex.join(cfg.recorder_command)} -w {cfg.capture}")
     print(f"Webhooks : {len(cfg.webhook_urls) or 'off'}")
+    print(f"WoW addon: {ADDON_STATUS[addon.status(cfg.combat_log_dir)]}")
     found = config.problems(cfg)
     if not found:
         print(f"Free     : {free_gb(cfg):.1f} GB")
@@ -281,6 +282,23 @@ def cmd_cut_now(args) -> int:
         return 1
     print("Cutting the clips so far; recording goes on. Inside a key or a boss pull, that waits "
           "for its end.")
+    return 0
+
+
+ADDON_STATUS = {addon.INSTALLED: "installed",
+                addon.OLD: "an older version (updated when the service starts)",
+                addon.MISSING: "not installed (install-addon)",
+                addon.NO_WOW: "no WoW folder found"}
+
+
+def cmd_install_addon(args) -> int:
+    """Copies the companion addon into WoW's AddOns folder."""
+    cfg = _load()
+    if why := addon.install(cfg.combat_log_dir):
+        print(why)
+        return 1
+    print("WoW addon installed: it turns combat logging on in dungeons and raids and leaves it on, "
+          "so WoW's Logs folder grows faster. /reload or log in again in WoW to load it.")
     return 0
 
 
@@ -425,6 +443,7 @@ def main():
         ("pause", cmd_pause, "stop recording for the rest of this WoW session"),
         ("resume", cmd_pause, "record again after pause"),
         ("cut-now", cmd_cut_now, "cut the clips so far this session; recording goes on"),
+        ("install-addon", cmd_install_addon, "optional: install a WoW addon that turns combat logging on"),
         ("test-webhooks", cmd_test_webhooks, "send a test message to every webhook"),
         ("install-service", cmd_install_service, "start the recorder at EVERY LOGIN (systemd user service)"),
         ("uninstall-service", cmd_uninstall_service, "stop starting at login: remove the service"),

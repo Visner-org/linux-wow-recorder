@@ -1,8 +1,9 @@
 """A clean uninstall: everything the app made outside its package, and the package itself where
 that doesn't need root.
 
-Removed: the systemd user service, the autostart and menu entries the app wrote, the config
-folder (settings, the clip browser's choices), the state folder (logs) and the runtime files.
+Removed: the systemd user service, the autostart and menu entries the app wrote, its WoW addon,
+the config folder (settings, the clip browser's choices), the state folder (logs) and the
+runtime files.
 Recordings and clips only when asked, and then only the app's own three subfolders of the output
 folder. Clips kept elsewhere ("Also show clips from") are never touched.
 """
@@ -14,7 +15,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import APP_NAME, service, state
+from . import APP_NAME, addon, service, state
 from .config import CONFIG_DIR, STATE_DIR, Config
 
 
@@ -98,6 +99,8 @@ def remove_user_files(cfg: Config | None, delete_recordings: bool) -> list[str]:
         if f.exists():
             f.unlink()
             done.append(str(f))
+    if gone := addon.remove(cfg.combat_log_dir if cfg else None):
+        done.append(str(gone))
     if delete_recordings:
         for folder in recording_folders(cfg):
             shutil.rmtree(folder)

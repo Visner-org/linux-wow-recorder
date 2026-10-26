@@ -1,3 +1,4 @@
+import datetime
 import os
 import threading
 import types
@@ -615,10 +616,12 @@ def test_pick_another_window(make):
 
 
 def write_combat_log(d, when: float):
-    """A combat log in the session, last written at when."""
+    """Adds an event that happened at when to a combat log in the session (written then too)."""
     log = d.cfg.combat_log_dir / "WoWCombatLog-102526_200237.txt"
     log.parent.mkdir(parents=True, exist_ok=True)
-    log.touch()
+    at = datetime.datetime.fromtimestamp(when, datetime.UTC)
+    with log.open("a") as f:
+        f.write(f"{at:%m/%d/%Y %H:%M:%S}.{at.microsecond // 1000:03d}+0  SPELL_DAMAGE,x\n")
     os.utime(log, (when, when))
 
 
@@ -653,20 +656,24 @@ def test_cut_the_clips_so_far_records_on_in_a_new_file(make, monkeypatch):
     assert d.recorder.starts == 2 and d._cutter is None   # acted on once
 
 
-def test_cut_the_clips_so_far_waits_for_the_combat_log_to_be_written(make, monkeypatch):
+def test_cut_the_clips_so_far_waits_for_an_event_after_it_in_the_combat_log(make, monkeypatch):
     d, clock, _ = make()
     blocking = blocking_process_pending(monkeypatch)
     read = []
     monkeypatch.setattr(daemon, "run_in_progress", lambda events: read.append(1) or False)
     monkeypatch.setattr(state, "time", clock)
     d.start_session("Retail", "Wow.exe", pid=100)
-    write_combat_log(d, clock.now - 1)         # last written before the click
+    write_combat_log(d, clock.now - 1)
     assert state.request_cut() is None
     d.check_session(100)                       # a key started just now may not be in it yet
     assert not read and d._cutter is None and not d.status.data["cut_waiting"]
+    clock.now += 30
+    write_combat_log(d, clock.now - 31)        # written now, but WoW's batch is older than the click
+    d.check_session(100)
+    assert not read and d._cutter is None
     clock.now += 3
-    write_combat_log(d, clock.now)
-    d.check_session(100)                       # written since: no need to wait for the interval
+    write_combat_log(d, clock.now - 1)
+    d.check_session(100)                       # an event after it: no need to wait for the interval
     assert read and blocking[0].wait(5)
     blocking[1].set()
     wait_for_cutter(d)

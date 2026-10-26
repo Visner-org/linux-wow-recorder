@@ -1412,6 +1412,8 @@ class ClipBrowser(QWidget):
             pass
         if d.get("chat_hidden"):
             facts.append("chat hidden")
+        if d.get("log_late"):
+            facts.append(f"combat log began {model.mmss(d['log_late'])} late")
         if clip.elsewhere:
             facts.append(f"in {clip.path.parent}")
         self.facts.setText(" · ".join(facts))

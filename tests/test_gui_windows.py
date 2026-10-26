@@ -15,7 +15,7 @@ pytest.importorskip("PySide6.QtMultimedia")
 from PySide6.QtCore import QFile, Qt  # noqa: E402
 from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402
 
-from linux_wow_recorder import config, service  # noqa: E402
+from linux_wow_recorder import addon, config, service  # noqa: E402
 from linux_wow_recorder.clips import read_sidecar, write_sidecar  # noqa: E402
 from linux_wow_recorder.gui import browser, model, settings  # noqa: E402
 
@@ -247,6 +247,24 @@ def test_settings_window_first_run(qtbot, no_config, fake_recorder, tmp_path):
     assert data["paths"] == {"combat_log_dir": str(logs), "output_dir": str(tmp_path / "out")}
     assert w.write()
     assert config.load().output_dir == tmp_path / "out"
+
+
+def test_settings_installs_the_wow_addon(qtbot, cfg, fake_recorder, tmp_path, monkeypatch):
+    answers = [QMessageBox.No, QMessageBox.Yes]
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: answers.pop(0))
+    w = settings.SettingsWindow()
+    qtbot.addWidget(w)
+    assert w.addon_hint.text() == "Set the combat log folder first." and not w.addon_button.isEnabled()
+    logs = tmp_path / "_retail_" / "Logs"
+    logs.mkdir(parents=True)
+    (logs.parent / "WTF").mkdir()
+    w.log_dir.setText(str(logs))
+    assert w.addon_button.isEnabled() and w.addon_button.text() == "Install"
+    w.addon_button.click()   # asked first: No
+    assert not (logs.parent / "Interface").exists()
+    w.addon_button.click()
+    assert (logs.parent / "Interface" / "AddOns" / addon.NAME / f"{addon.NAME}.toc").is_file()
+    assert w.addon_hint.text().startswith("Installed") and not w.addon_button.isEnabled()
 
 
 def test_settings_window_keeps_a_capture_chosen_before_the_list_arrives(qtbot, cfg, fake_recorder):

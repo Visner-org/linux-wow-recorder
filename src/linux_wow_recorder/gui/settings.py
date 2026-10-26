@@ -19,8 +19,8 @@ from PySide6.QtWidgets import (QAbstractButton, QApplication, QButtonGroup, QChe
                                QScrollArea, QSizePolicy, QSpinBox, QStackedWidget, QVBoxLayout,
                                QWidget)
 
-from .. import (APP_TITLE, REPO_URL, __version__, config, logs, recorder, service, state,
-                uninstall, updates)
+from .. import (APP_TITLE, REPO_URL, __version__, addon, config, logs, recorder, service,
+                state, uninstall, updates)
 from ..cli import find_recorder_command
 from ..config import CONFIG_FILE, MAX_WEBHOOKS, NOTIFY_EVENTS, ConfigError
 from ..notify import Notifier
@@ -352,11 +352,47 @@ class SettingsWindow(QDialog):
         self.log_dir.setPlaceholderText("…/World of Warcraft/_retail_/Logs")
         self.log_hint = self.check_label("combat_log_dir")
         form.addRow("Combat log folder", _field(row, self.log_hint))
+        self.addon_button = QPushButton()
+        self.addon_button.clicked.connect(self.install_addon)
+        self.addon_hint = _hint()
+        row = QWidget()
+        h = QHBoxLayout(row)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.addWidget(self.addon_button)
+        h.addWidget(self.addon_hint, 1)
+        form.addRow("WoW addon", row)
+        self.log_dir.textChanged.connect(self.show_addon)
+        self.show_addon()
         row, self.out_dir = self.folder_row(p["output_dir"])
         self.out_dir.setPlaceholderText("A folder with room: a few GB per hour of play")
         self.out_hint = self.check_label("output_dir")
         form.addRow("Output folder", _field(row, self.out_hint))
         return _section(form)
+
+    def addon_log_dir(self) -> Path | None:
+        text = self.log_dir.text().strip()
+        return Path(text).expanduser() if text else None
+
+    def show_addon(self):
+        """The WoW addon's state, for the combat log folder as typed."""
+        now = addon.status(self.addon_log_dir())
+        self.addon_button.setText("Update" if now == addon.OLD else "Install")
+        self.addon_button.setEnabled(now in (addon.MISSING, addon.OLD))
+        self.addon_hint.setText({
+            addon.INSTALLED: "Installed: it turns combat logging on in dungeons and raids.",
+            addon.OLD: "An older version is installed.",
+            addon.MISSING: "Optional: only if keys go missing from your combat logs.",
+            addon.NO_WOW: "Set the combat log folder first.",
+        }[now])
+
+    def install_addon(self):
+        if addon.status(self.addon_log_dir()) == addon.MISSING and QMessageBox.question(
+                self, APP_TITLE, "This adds an addon to WoW that turns combat logging on in "
+                "every dungeon and raid and leaves it on. Install it?") != QMessageBox.Yes:
+            return
+        if why := addon.install(self.addon_log_dir()):
+            QMessageBox.warning(self, APP_TITLE, why)
+        self.show_addon()
 
     def capture_part(self) -> QWidget:
         r = self.data["recorder"]

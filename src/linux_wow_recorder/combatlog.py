@@ -3,6 +3,7 @@
 import csv
 import datetime
 import logging
+import os
 import re
 import subprocess
 import tempfile
@@ -24,6 +25,11 @@ RAID_DIFFICULTIES = {14: "Normal", 15: "Heroic", 16: "Mythic", 17: "LFR", 33: "T
                      7: "LFR", 9: "40 Player"}
 # Raid pulls shorter than this aren't clipped unless the boss died: a pull reset at once.
 MIN_PULL_SECONDS = 30
+# A key's in-game time has this much added per death (measured: 15 to 16 s each).
+DEATH_PENALTY = 15
+# A key whose log began this long after its timer did may have lost kills (no pack dies faster):
+# its enemy forces are left out (Run.log_late).
+LATE_LOG_SECONDS = 20
 # What find_runs keeps of raid pulls.
 RAIDS_ALL, RAIDS_KILLS, RAIDS_OFF = "all", "kills", "off"
 LOG_EVENTS = ("ZONE_CHANGE|CHALLENGE_MODE_START|CHALLENGE_MODE_END|ENCOUNTER_START|ENCOUNTER_END"
@@ -112,6 +118,7 @@ class Run:
     challenge: int | None = None    # a key's challengeModeID
     kills: list[tuple[float, str, int]] = field(default_factory=list)   # a key's counted mobs:
                                     # (time, GUID, forces)
+    log_late: int | None = None     # a key whose combat log began after it did: by this many s
 
     @property
     def is_raid(self) -> bool:
@@ -162,6 +169,27 @@ def combat_logs_between(log_dir: Path, start: float, end: float) -> list[Path]:
     return [f for _, f in sorted(found)]
 
 
+def last_event_time(logs: list[Path]) -> float | None:
+    """When the newest event in the logs happened (the last whole line of the last log). WoW
+    writes the log in batches, up to a minute or more after the events."""
+    if not logs:
+        return None
+    try:
+        with open(logs[-1], "rb") as f:
+            f.seek(0, os.SEEK_END)
+            start = max(0, f.tell() - 65536)
+            f.seek(start)
+            tail = f.read()
+    except OSError:
+        return None
+    lines = tail.split(b"\n")[1 if start else 0:-1]   # the first may be cut, the last unfinished
+    for line in reversed(lines):
+        t = parse_log_time(line.decode(errors="replace").partition("  ")[0])
+        if t is not None:
+            return t
+    return None
+
+
 def read_log_events(logs: list[Path]) -> Iterator[tuple[float, str, list[str]]]:
     """Yields (time, event, fields) for the events find_runs needs. grep does the filtering:
     the logs reach 1 GB, and grep reads one in about half a second."""
@@ -200,6 +228,7 @@ class _OpenRun:
     left_at: float | None = None   # when the player left the instance; None while inside
     keyed: bool = False          # a visit a key was started in: the key's run is used instead
     inferred: bool = False       # a key whose START may not be in the log (zone_change)
+    log_late: int | None = None  # Run.log_late
     raid: str = ""               # a raid pull's raid; name is then the boss
     encounter_id: int | None = None   # a raid pull's
     pull: int | None = None
@@ -218,7 +247,7 @@ class _OpenRun:
         return Run(self.name, self.start, end, label, timer, self.level, self.encounters,
                    self.deaths, self.lusts, result, self.raid,
                    self.difficulty if self.raid else "", self.pull,
-                   challenge=self.challenge, kills=self.kills)
+                   challenge=self.challenge, kills=self.kills, log_late=self.log_late)
 
 
 class _RunFinder:
@@ -368,10 +397,18 @@ class _RunFinder:
                 self.key = None   # a reset, or not this dungeon's key: nothing to time it by
                 return
             # No START: the key began its in-game time before this END (close enough for a clip,
-            # which has pad_before too).
-            key.start, key.level = t - timer_ms / 1000, int(f[2])
+            # which has pad_before too). Its deaths took longer than that in-game time.
+            began = t - timer_ms / 1000 + DEATH_PENALTY * len(key.deaths)
+            seen, key.start, key.level = key.start, t - timer_ms / 1000, int(f[2])
             log.info(f"{key.name} +{key.level}: its start isn't in the combat log (logging began "
                      f"late); timed from its end.")
+            if seen - began > LATE_LOG_SECONDS:
+                # Mobs may have died before the log began: the forces would be too low.
+                key.log_late = round(seen - began)
+                for e in key.encounters:
+                    e.forces = None
+                log.info(f"{key.name} +{key.level}: the combat log began {key.log_late} s into "
+                         f"it; its enemy forces are left out.")
         if self.key:
             self.close_key(t, completed=int(f[1]) > 0, timer_ms=int(f[3]))
 
