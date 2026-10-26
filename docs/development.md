@@ -229,8 +229,8 @@ new, add it to `LUST_DEBUFFS`; without it, the lust isn't found at all.
 `src/linux_wow_recorder/addon/LinuxWoWRecorder/` is shipped in the package and copied into
 `<WoW>/_retail_/Interface/AddOns/` by `addon.install` (Settings or `install-addon`). It turns
 combat logging on in dungeons and raids at the moments zone-only loggers miss (Raider.IO checks
-on zone changes only, so a dungeon entered at Heroic and then keyed had no log for its first
-72 s on 10-26). It never turns logging off. It's opt-in: only the user installs it (Settings
+on zone changes only, so a dungeon entered before it had a difficulty (0 in ZONE_CHANGE) and
+then keyed had no log for its first 72 s on 10-26). It never turns logging off. It's opt-in: only the user installs it (Settings
 asks first), since it leaves logging on and changes a CVar; `refresh` only updates a copy
 that's already there. Its `## Version:` is what `addon.status` compares:
 bump it with any change to the addon, and the service (`addon.refresh` at start) updates

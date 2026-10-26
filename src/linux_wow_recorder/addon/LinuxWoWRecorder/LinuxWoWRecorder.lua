@@ -1,6 +1,6 @@
 -- Linux WoW Recorder cuts its clips from the combat log, so this turns logging on wherever a
 -- clip can come from: dungeons and raids. Other addons start it on zone changes only, and miss
--- a key when the dungeon becomes Mythic+ without one (zoned in at Heroic, then the key went in).
+-- a key when the dungeon becomes Mythic+ without one (zoned in before it had a difficulty).
 -- So it checks again when the keystone slot opens, when the key starts, when the difficulty
 -- changes, at a boss pull and after each loading screen. It never turns logging off.
 

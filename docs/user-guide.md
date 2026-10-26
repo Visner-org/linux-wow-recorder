@@ -260,9 +260,9 @@ began 1:04 late".
 
 Why that happens: clips come from WoW's combat log, so logging has to be on before a key
 starts. Addons that turn it on (Raider.IO and others) check when you change zones, and that can
-miss a key: zone in at Heroic, put the key in, and the dungeon becomes Mythic+ with no zone
-change, so logging starts only when you walk into the next area. The kills before that aren't
-in the log.
+miss a key: zone in before the group is together and the dungeon has no difficulty yet, put
+the key in, and the dungeon becomes Mythic+ with no zone change, so logging starts only when
+you walk into the next area. The kills before that aren't in the log.
 
 The app comes with a small addon of its own, **Linux WoW Recorder** in your AddOns list, that
 closes that gap. In a dungeon or raid it turns combat logging (and Advanced Combat Logging) on:
