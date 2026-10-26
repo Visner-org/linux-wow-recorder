@@ -46,6 +46,7 @@ class Status:
             "picking": False,           # the screen-share dialog is waiting; nothing's recorded
             "capture": None,            # what's recorded this session: "portal", "DP-1", ...
             "monitor_switch": False,    # switched to the monitor ("Record monitor instead")
+            "cut_waiting": False,       # "Cut the clips so far" waits for a key or pull to end
             "last_session": None,       # {"end", "clips": [paths], "problems": [sentences]}
             "updated": None,
         }
@@ -91,6 +92,12 @@ def request_monitor(monitor: bool, path: Path | None = None, status_path: Path |
 def request_repick(path: Path | None = None, status_path: Path | None = None) -> str | None:
     """Asks the service to open the screen-share dialog again, to pick another window."""
     return _request(path, status_path, repick=time.time())
+
+
+def request_cut(path: Path | None = None, status_path: Path | None = None) -> str | None:
+    """Asks the service to cut the clips recorded so far this session and record on in a new
+    file; inside a key or a boss pull, once it ends."""
+    return _request(path, status_path, cut=time.time())
 
 
 def _request(path: Path | None, status_path: Path | None, **asked) -> str | None:
@@ -153,6 +160,11 @@ def pause_requested(session_start: float, path: Path | None = None) -> bool:
 def repick_requested(session_start: float, path: Path | None = None) -> float:
     """When another pick in the screen-share dialog was last asked for (0: never)."""
     return float(_requests(session_start, path).get("repick") or 0)
+
+
+def cut_requested(session_start: float, path: Path | None = None) -> float:
+    """When "Cut the clips so far" was last asked for (0: never)."""
+    return float(_requests(session_start, path).get("cut") or 0)
 
 
 def monitor_requested(session_start: float, path: Path | None = None) -> bool:

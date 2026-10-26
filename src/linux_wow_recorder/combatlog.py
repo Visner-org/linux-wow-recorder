@@ -617,6 +617,16 @@ def _guids_fought(logs: list[Path], guids: set[str]) -> set[str] | None:
     return set(out.decode(errors="replace").split())
 
 
+def run_in_progress(events: Iterable[tuple[float, str, list[str]]]) -> bool:
+    """Whether the events end inside a key, a dungeon run without one or a raid boss pull:
+    cutting the recording now would split that run in two. Standing in the dungeon after a key
+    ended isn't (its visit is the key's)."""
+    finder = _RunFinder()
+    for t, event, f in events:
+        finder.feed(t, event, f)
+    return any(not r.keyed for r in finder.open_runs())
+
+
 def find_runs(events: Iterable[tuple[float, str, list[str]]], min_run_minutes: int = 5,
               raids: str = RAIDS_ALL) -> list[Run]:
     """One Run per dungeon: a keystone from CHALLENGE_MODE_START to its END, or a dungeon

@@ -14,6 +14,7 @@ from pathlib import Path
 from . import APP_TITLE, __version__, logs, service, state
 from .clips import (SessionResult, cleanup, free_gb, new_recording_path, process_pending,
                     stale_recordings)
+from .combatlog import combat_logs_between, read_log_events, run_in_progress
 from .config import WOW_SOUND, Config
 from .detect import find_wow, find_wow_process, wow_alive
 from .notify import Notifier
@@ -37,8 +38,16 @@ CAPTURE_NOTICE = 15
 # How long into a session the programs with sound are logged once: WoW opens its sound a little
 # after it starts.
 AUDIO_CHECK_AFTER = 90
+# While "Cut the clips so far" waits for a key or boss pull to end, the combat log is read
+# this often.
+CUT_CHECK_INTERVAL = 30
+# WoW writes the combat log a few seconds late, so a cut waits for a write after it was asked
+# (a key started just before the click isn't in the file yet), or this long if none comes.
+CUT_LOG_WAIT = 60
 # While the screen-share dialog waits for a pick (it can open behind WoW).
 PICK_PROBLEM = "Not recording: pick WoW's window in the screen-share dialog."
+# While the output folder is gone (its drive unmounted after the service started).
+OUTPUT_PROBLEM = "Not recording: the output folder isn't there (drive not mounted?)."
 
 
 @dataclass
@@ -49,10 +58,13 @@ class Session:
     alerted: bool = False        # recording_failed already sent this session
     disk_warned: bool = False
     disk_stopped: bool = False   # stopped for low disk space; not restarted this session
+    no_output: bool = False      # the output folder is gone; recording starts when it's back
     paused: bool = False         # the user paused recording for this session
     picking: bool = False        # the screen-share dialog is waiting; nothing's recorded yet
     monitor: bool = False        # recording the monitor instead, as asked
     repicked: float = 0.0        # the last "Pick another window" acted on
+    cut: float = 0.0             # the last "Cut the clips so far" acted on
+    cut_checked: float = 0.0     # when the combat log was last read for it
     pid: int | None = None       # WoW's process
     lost_at: float = 0.0         # when what was recorded went away; 0 while it's fine
     captures_lost: int = 0
@@ -158,7 +170,8 @@ class Daemon:
         if self.session:
             log.info("Stopped mid-session: the recording so far is saved and gets cut after "
                      "the next session.")
-            self.recorder.stop()
+            # 25 + 10 + 3 s, within TimeoutStopSec (45 s in units written before 1.2.1).
+            self.recorder.stop(timeout=25)
         cutter = self._cutter
         if cutter is not None:
             # It stops after the recording it's on; the rest are cut next time.
@@ -217,8 +230,9 @@ class Daemon:
         self.recorder.game_exe = exe
         self.recorder.capture = None   # "Record monitor instead" was for the session before
         self.status.update(flavor=flavor, session_start=s.start, wow_pid=pid, problem=None,
-                           monitor_switch=False)
+                           monitor_switch=False, cut_waiting=False)
         s.repicked = state.repick_requested(s.start)   # already done by the run before
+        s.cut = state.cut_requested(s.start)
         if self.check_pause():
             return
         if state.monitor_requested(s.start):
@@ -231,7 +245,12 @@ class Daemon:
 
     def start_recording(self):
         cfg, s = self.cfg, self.session
-        free = free_gb(cfg)
+        try:
+            free = free_gb(cfg)
+        except OSError:
+            self.output_missing()
+            return
+        s.no_output = False
         if free < cfg.stop_below_gb:
             s.disk_stopped = True
             self.status.update(state=state.NOT_RECORDING, recording_file=None, free_gb=round(free, 1),
@@ -262,7 +281,15 @@ class Daemon:
         s = self.session
         self.check_monitor()
         self.check_repick()
+        self.check_cut()
         if self.check_pause() or self.check_pick() or self.check_capture(pid):
+            return
+        if s.no_output:
+            if self.cfg.output_dir.is_dir():
+                log.info("The output folder is back; recording.")
+                self.start_recording()
+                if self.recorder.is_running():
+                    self.status.update(problem=None)
             return
         now = time.time()
         if now - s.last_disk_check >= DISK_CHECK_INTERVAL:
@@ -287,6 +314,21 @@ class Daemon:
         if s.restarts >= MAX_RESTARTS and not self.recorder.is_running():
             log.error("The recorder keeps failing; giving up until WoW is started again.")
             self.status.update(problem="The recorder keeps failing; trying again next session.")
+
+    def output_missing(self):
+        """The output folder is gone: nothing is recorded until it's back (check_session looks
+        every poll), and the user is told once."""
+        s = self.session
+        if not s.no_output:
+            log.error(f"The output folder {self.cfg.output_dir} isn't there (drive not mounted?); "
+                      "not recording until it's back.")
+        s.no_output = True
+        self.status.update(state=state.NOT_RECORDING, recording_file=None, free_gb=None,
+                           problem=OUTPUT_PROBLEM)
+        if not s.alerted:
+            s.alerted = True
+            self.notifier.send("recording_failed", "⚠️ **Not recording:** the output folder "
+                               "isn't there (drive not mounted?).")
 
     def check_pick(self) -> bool:
         """While the screen-share dialog waits: True until a pick starts the recording. Closing
@@ -342,6 +384,33 @@ class Daemon:
         s.picking, s.restarts, s.lost_at = False, 0, 0.0
         self.status.update(recording_file=None, problem=None)
         self.start_recording()
+
+    def check_cut(self):
+        """Cuts the clips recorded so far, as the desktop app (or the CLI) asked, and records on
+        in a new file. Inside a key or a boss pull it waits for the end, so the run isn't split
+        over two recordings."""
+        s = self.session
+        asked = state.cut_requested(s.start)
+        now = time.time()
+        if asked <= s.cut or now - s.cut_checked < CUT_CHECK_INTERVAL:
+            return
+        logs = combat_logs_between(self.cfg.combat_log_dir, s.start, now)
+        written = max((f.stat().st_mtime for f in logs), default=0.0)
+        if written < asked and now - asked < CUT_LOG_WAIT:
+            return
+        s.cut_checked = now
+        if run_in_progress(read_log_events(logs)):
+            if not self.status.data.get("cut_waiting"):
+                log.info("Cutting the clips so far once this run ends, as asked.")
+                self.status.update(cut_waiting=True)
+            return
+        s.cut = asked
+        self.status.update(cut_waiting=False)
+        log.info("Cutting the clips so far, as asked; recording on in a new file.")
+        if self.recorder.is_running() and not s.picking:
+            self.recorder.stop()
+            self.start_recording()
+        self.start_cutting()
 
     def check_capture(self, pid: int | None) -> bool:
         """Handles the recording losing what it records: WoW crashed and came back within a
@@ -424,7 +493,10 @@ class Daemon:
 
     def check_disk(self):
         cfg, s = self.cfg, self.session
-        free = free_gb(cfg)
+        try:
+            free = free_gb(cfg)
+        except OSError:
+            return   # the folder went away: the recorder fails, and its restart says so
         self.status.update(free_gb=round(free, 1))
         if free < cfg.stop_below_gb and self.recorder.is_running():
             log.error(f"Only {free:.1f} GB free; stopping the recording.")
@@ -455,7 +527,7 @@ class Daemon:
                                                 "the recording is saved. Cutting clips...")
         self.status.update(state=state.WAITING, flavor=None, session_start=None, wow_pid=None,
                            recording_file=None, problem=None, picking=False, capture=None,
-                           monitor_switch=False, free_gb=self._free())
+                           monitor_switch=False, cut_waiting=False, free_gb=self._free())
         self.start_cutting()
         log.info("Watching for WoW...")
 

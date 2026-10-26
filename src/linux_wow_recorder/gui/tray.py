@@ -189,6 +189,7 @@ class Tray:
         self.switch_action = self.menu.addAction(model.switch_text(False), self.toggle_monitor)
         self.repick_action = self.menu.addAction(model.REPICK_TEXT, self.repick)
         self.cut_action = self.menu.addAction("Cut waiting recordings now", self.cut_now)
+        self.in_session = False
         self.release_action = self.menu.addAction("", lambda: QDesktopServices.openUrl(
             QUrl(updates.RELEASES_PAGE)))
         self.release_action.setVisible(False)
@@ -257,8 +258,19 @@ class Tray:
         self.service_action.setEnabled(self.service_state != "not installed")
         if not self.set_up() and self.settings_window is None:
             self.show_settings()   # first run: nothing works until it's set up
-        busy = view.recording or (self.status or {}).get("state") == state.PROCESSING
-        self.cut_action.setEnabled(not busy and self.process is None and self._has_pending(force))
+        # During a session it cuts the clips so far (the service does it); otherwise it cuts the
+        # recordings waiting in sessions/.
+        status = self.status or {}
+        self.in_session = view.service_running and bool(status.get("session_start"))
+        if self.in_session:
+            waiting = bool(status.get("cut_waiting"))
+            self.cut_action.setText("Clips get cut when this run ends" if waiting
+                                    else "Cut the clips so far")
+            self.cut_action.setEnabled(not waiting)
+        else:
+            self.cut_action.setText("Cut waiting recordings now")
+            busy = view.recording or status.get("state") == state.PROCESSING
+            self.cut_action.setEnabled(not busy and self.process is None and self._has_pending(force))
         self.autostart_action.setChecked(desktop.autostart_enabled())
         self.hide_action.setVisible(service.at_login())
         self.notify(view)
@@ -408,6 +420,13 @@ class Tray:
             self.show_window()
 
     def cut_now(self):
+        if self.in_session:
+            if why := state.request_cut():
+                QMessageBox.warning(None, APP_TITLE, why)
+            else:
+                self.tray.showMessage(APP_TITLE, "Cutting the clips so far; recording goes on.",
+                                      self.icons[model.PROCESSING])
+            return
         # QProcess keeps the output in memory as it comes: a pipe read only at the end could
         # fill up with log lines and stall the command.
         process = self.process = QProcess()

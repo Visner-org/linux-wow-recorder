@@ -273,6 +273,17 @@ def cmd_pause(args) -> int:
     return 0
 
 
+def cmd_cut_now(args) -> int:
+    """Cuts the clips recorded so far this session; recording goes on in a new file."""
+    why = state.request_cut()
+    if why:
+        print(why)
+        return 1
+    print("Cutting the clips so far; recording goes on. Inside a key or a boss pull, that waits "
+          "for its end.")
+    return 0
+
+
 def cmd_keep(args) -> int:
     """Marks clips to be kept forever (or not), whatever clip_retention_days says."""
     cfg = _load()
@@ -413,6 +424,7 @@ def main():
         ("test-recorder", cmd_test_recorder, "record 5 seconds to check the recorder"),
         ("pause", cmd_pause, "stop recording for the rest of this WoW session"),
         ("resume", cmd_pause, "record again after pause"),
+        ("cut-now", cmd_cut_now, "cut the clips so far this session; recording goes on"),
         ("test-webhooks", cmd_test_webhooks, "send a test message to every webhook"),
         ("install-service", cmd_install_service, "start the recorder at EVERY LOGIN (systemd user service)"),
         ("uninstall-service", cmd_uninstall_service, "stop starting at login: remove the service"),

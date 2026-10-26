@@ -76,7 +76,7 @@ And in WoW:
 ### Nobara or Fedora (RPM)
 
 ```bash
-sudo dnf install ./linux-wow-recorder-1.2.0-1.fc44.noarch.rpm
+sudo dnf install ./linux-wow-recorder-1.2.4-1.fc44.noarch.rpm
 ```
 
 dnf installs ffmpeg and Qt from your distro's repos along with it, and on Nobara
@@ -121,7 +121,7 @@ For Ubuntu 25.10 and newer (26.04 is tested) and Debian 13. Download the `.deb` 
 [Releases](https://github.com/Visner-org/linux-wow-recorder/releases) page, then:
 
 ```bash
-sudo apt install ./linux-wow-recorder_1.2.0-1_all.deb
+sudo apt install ./linux-wow-recorder_1.2.4-1_all.deb
 flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
 flatpak install --user flathub com.dec05eba.gpu_screen_recorder
 ```
@@ -296,7 +296,9 @@ back. To stop, use **Quit and stop recording** in the tray menu.
 - **Left-click** opens the clip browser.
 - **Right-click** opens the menu: the status and the last session, then Clips, **Pause
   recording this session** (while WoW runs: nothing more is recorded until WoW closes, and the
-  next session records as usual; Resume undoes it), **Record monitor instead** (while a window is
+  next session records as usual; Resume undoes it), **Cut the clips so far** (while WoW runs:
+  cuts what was recorded up to now, for a break, and keeps recording in a new file; inside a key,
+  a dungeon or a boss pull it waits for the end, so the run isn't split in two), **Record monitor instead** (while a window is
   picked or awaited: records your "Monitor instead" for the rest of this session; **Record the
   window again** undoes it), **Pick another window** (while recording a picked window: opens the
   screen-share dialog again), Settings, and a Folders and logs submenu. With update checks on,
@@ -376,9 +378,18 @@ at login).
   isn't re-encoded, so it starts on the nearest keyframe before the start you picked, at most a
   second or two early. Esc stops. A highlight is a clip like the others: Keep, the trash,
   YouTube and `after_clips` work on it.
+- **Drawing**: the pencil beside the title (or D) pauses the video and lets you draw on that
+  moment: pen, arrow, box, circle and text (keys 1 to 5), in five colours; Ctrl+Z undoes.
+  **Done**, Esc, playing or seeking goes back to the video and saves the picture beside the
+  clip, named after it with the moment ("... 12m34s.png"); for a clip in a read-only folder,
+  in your clips folder. Nothing drawn, nothing saved. **Copy** also puts it on the clipboard,
+  to paste into Discord. The picture is the video's full size.
 - **Keys**: space plays and pauses; the left and right arrows skip 5 seconds; I and O mark a
-  highlight's start and end; C shows or hides your casts; F goes full screen and back (Esc
-  leaves it too).
+  highlight's start and end; C shows or hides your casts; D draws on the moment; F goes full
+  screen and back (Esc leaves it too).
+- **Play and pause**: Play, space, or a click on the video.
+- **Speed**: the button after the time (1x) steps through 2x, 4x, 8x and 16x, then back to
+  1x. It stays for the next clip.
 - **Full screen**: the button at the end of the timeline, F, or a double-click on the video.
   The video fills the screen with Play and the timeline under it.
 - **Player size**: drag the bar between the timeline and the details to make the video bigger
@@ -403,6 +414,7 @@ New clips show up by themselves.
 ```bash
 linux-wow-recorder status            # is everything OK, and what is the service doing
 linux-wow-recorder process           # cut what's waiting now (only when WoW isn't running)
+linux-wow-recorder cut-now           # while WoW runs: cut the clips so far, keep recording
 linux-wow-recorder keep <clip>       # keep a clip forever; --undo to let it expire again
 linux-wow-recorder logs              # where the logs are, and the last lines
 ```

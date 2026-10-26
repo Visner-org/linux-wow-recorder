@@ -9,8 +9,8 @@ import tempfile
 import time
 from pathlib import Path
 
-from PySide6.QtCore import (QElapsedTimer, QEvent, QFile, QFileSystemWatcher, QLineF, QPointF, QProcess, QRectF,
-                            QSettings, QSize, Qt, QTimer, QUrl, Signal)
+from PySide6.QtCore import (QElapsedTimer, QEvent, QFile, QFileSystemWatcher, QLineF, QPoint, QPointF, QProcess,
+                            QRect, QRectF, QSettings, QSize, Qt, QTimer, QUrl, Signal)
 from PySide6.QtGui import (QColor, QDesktopServices, QFont, QGuiApplication, QIcon, QKeySequence,
                            QPainter, QPainterPath, QPen, QPixmap, QShortcut)
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
@@ -18,7 +18,7 @@ from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import (QAbstractItemView, QButtonGroup, QFrame, QGroupBox, QHBoxLayout,
                                QHeaderView, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu,
                                QMessageBox, QProgressDialog, QPushButton, QSlider, QSplitter, QSplitterHandle,
-                               QStackedWidget, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QToolButton, QTreeWidget,
+                               QStackedWidget, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QToolButton, QToolTip, QTreeWidget,
                                QTreeWidgetItem, QVBoxLayout, QWidget)
 
 import shiboken6
@@ -28,6 +28,7 @@ from ..clips import (SHORT_CUT_SECONDS, media_length, read_sidecar, set_keep, si
 from ..config import CONFIG_DIR
 from ..config import ConfigError
 from . import model, theme
+from .draw import DrawPage
 from .hidechat import HideChatDialog
 
 COLUMNS = ["Date", "Dungeon", "Level", "Result", "Length", "Deaths", "Kept"]
@@ -278,6 +279,7 @@ class CastStrip(QWidget):
         self.position = 0.0
         # While playing, the strip moves on between the player's position updates.
         self.playing = False
+        self.rate = 1.0   # the player's speed
         self.since = QElapsedTimer()
         self.since.start()
         self.ticker = QTimer(self, interval=33)
@@ -318,6 +320,11 @@ class CastStrip(QWidget):
         self.since.restart()
         self.update()
 
+    def set_rate(self, rate: float):
+        self.position = self.now()
+        self.since.restart()
+        self.rate = rate
+
     def set_playing(self, playing: bool):
         self.position = self.now()
         self.since.restart()
@@ -339,10 +346,10 @@ class CastStrip(QWidget):
 
     def now(self) -> float:
         """Where the video is: its last reported position, plus the time since while playing
-        (at most a second, in case it stalled)."""
+        (at most a second of video, in case it stalled), at the player's speed."""
         if not self.playing:
             return self.position
-        return self.position + min(1.0, self.since.elapsed() / 1000)
+        return self.position + min(1.0, self.since.elapsed() / 1000) * self.rate
 
     def _scale(self) -> float:
         return max(1, self.width() - self._left() - self.PAD) / sum(self._span())
@@ -471,7 +478,7 @@ class ClipBrowser(QWidget):
         self.hook_process = None
         self.chat_job = None   # the copy with the chat hidden being made
         self.highlight_job = None   # the highlight being saved
-        self.frame_process: QProcess | None = None   # the frame the chat box is drawn on
+        self.frame_process: QProcess | None = None   # a frame to draw on, or the chat box
         try:
             self.cfg = config.load()
         except ConfigError as e:
@@ -613,7 +620,13 @@ class ClipBrowser(QWidget):
         lv.addWidget(self.count)
 
         # ── Right: player, timeline, details, actions ──
+        before = {shiboken6.getCppPointer(win)[0] for win in QGuiApplication.allWindows()}
         self.video = QVideoWidget()
+        # Qt draws the video in a window of its own (a QVideoWindow), and the mouse goes to it,
+        # not to the widget: the new one, which gets the event filter below too.
+        self.video_window = next((win for win in QGuiApplication.allWindows()
+                                  if win.metaObject().className() == "QVideoWindow"
+                                  and shiboken6.getCppPointer(win)[0] not in before), None)
         self.video.setMinimumSize(480, 270)
         self.video.setStyleSheet("background: black")   # no grey between the letterbox bars
         self.audio = QAudioOutput()
@@ -635,6 +648,15 @@ class ClipBrowser(QWidget):
         # A clip loaded but not played yet: black with the app's icon, not an empty frame.
         self.poster = Poster()
         self.video_stack.addWidget(self.poster)
+        # Drawing on the paused frame (D); playing or seeking goes back to the video, and
+        # leaving it saves the picture.
+        self.draw_page = DrawPage()
+        self.draw_page.done.connect(self.stop_drawing)
+        self.video_stack.addWidget(self.draw_page)
+        self.video_stack.currentChanged.connect(self.left_drawing)
+        self.draw_from = self.video   # what the player showed before
+        self.draw_clip: model.ClipInfo | None = None   # the clip drawn on, while drawing
+        self.draw_at = 0.0
 
         self.play_button = QPushButton(" Play")
         self.play_button.setObjectName("primary")
@@ -684,11 +706,19 @@ class ClipBrowser(QWidget):
         self.casts_button.setMenu(self.casts_menu)
         self.casts_button.setPopupMode(QToolButton.MenuButtonPopup)
         self.casts_button.toggled.connect(self.show_casts)
+        # Speed: each click steps 1x, 2x, 4x, 8x, 16x and back; it stays for the next clip.
+        self.speed_button = QToolButton()
+        self.speed_button.setAutoRaise(True)
+        self.speed_button.setFocusPolicy(Qt.NoFocus)   # Space plays, not this
+        self.speed_button.setMinimumWidth(36)
+        self.speed_button.clicked.connect(self.next_speed)
+        self.show_speed()
         controls = QHBoxLayout()
         controls.addWidget(self.play_button)
         controls.addWidget(self.timeline, 1)
         controls.addWidget(self.time_label)
         controls.addSpacing(6)
+        controls.addWidget(self.speed_button)
         controls.addWidget(self.casts_button)
         controls.addWidget(self.mute_button)
         controls.addWidget(self.volume)
@@ -722,7 +752,7 @@ class ClipBrowser(QWidget):
         for key, slot in ((Qt.Key_Space, self.toggle_play), (Qt.Key_F, self.toggle_full_screen),
                           (Qt.Key_Left, lambda: self.skip(-5)), (Qt.Key_Right, lambda: self.skip(5)),
                           (Qt.Key_I, lambda: self.set_mark(0)), (Qt.Key_O, lambda: self.set_mark(1)),
-                          (Qt.Key_C, self.casts_button.toggle),
+                          (Qt.Key_C, self.casts_button.toggle), (Qt.Key_D, self.start_drawing),
                           (Qt.Key_Escape, self.escape)):
             QShortcut(QKeySequence(key), self, slot)
 
@@ -766,6 +796,9 @@ class ClipBrowser(QWidget):
         self.highlight_button = self._tool_button(
             "Make a highlight: save part of this clip as a clip of its own (I and O mark it)",
             self.start_highlight, "edit-cut", QStyle.SP_DialogSaveButton)
+        self.draw_button = self._tool_button(
+            "Draw on this moment: pauses the video so you can mark it up (D)",
+            self.start_drawing, "draw-freehand", QStyle.SP_FileDialogContentsView)
         # Only there when an after_clips command is set (Settings > Advanced).
         self.hook_button = self._tool_button("Run your after_clips command on this clip again",
                                              self.run_hook, "system-run", QStyle.SP_BrowserReload)
@@ -776,12 +809,12 @@ class ClipBrowser(QWidget):
         header.addWidget(self.result_chip, 0, Qt.AlignVCenter)
         header.addSpacing(12)
         for b in (self.keep_button, open_button, folder_button, self.highlight_button,
-                  self.hide_chat_button, self.youtube_button, self.hook_button):
+                  self.draw_button, self.hide_chat_button, self.youtube_button, self.hook_button):
             header.addWidget(b, 0, Qt.AlignVCenter)
         header.addSpacing(10)
         header.addWidget(self.trash_button, 0, Qt.AlignVCenter)
         self.action_widgets = [self.keep_button, open_button, folder_button, self.highlight_button,
-                               self.hide_chat_button, self.youtube_button, self.hook_button,
+                               self.draw_button, self.hide_chat_button, self.youtube_button, self.hook_button,
                                self.trash_button]
 
         # What full screen hides: the list, and the clip's details and actions.
@@ -812,8 +845,9 @@ class ClipBrowser(QWidget):
         right.splitterMoved.connect(
             lambda *_: self.settings.setValue("player_sizes", right.sizes()))
         self.player_split = right
-        # Double-clicking the video goes full screen and back.
-        for w in (self.video, self.poster, *self.video.findChildren(QWidget)):
+        # Clicking the video plays and pauses; double-clicking goes full screen and back.
+        for w in (self.video, self.poster, *self.video.findChildren(QWidget),
+                  *([self.video_window] if self.video_window else [])):
             w.installEventFilter(self)
         self.show_full_screen_button()
 
@@ -1557,6 +1591,19 @@ class ClipBrowser(QWidget):
         self.settings.setValue("cast_major_only", "true" if on else "false")
         self.cast_strip.set_major_only(on)
 
+    SPEEDS = (1.0, 2.0, 4.0, 8.0, 16.0)
+
+    def next_speed(self):
+        rate = self.player.playbackRate()
+        later = [s for s in self.SPEEDS if s > rate]
+        self.player.setPlaybackRate(later[0] if later else self.SPEEDS[0])
+        self.cast_strip.set_rate(self.player.playbackRate())
+        self.show_speed()
+
+    def show_speed(self):
+        self.speed_button.setText(f"{self.player.playbackRate():g}x")
+        self.speed_button.setToolTip("Speed: click for faster (2x, 4x, 8x, 16x), then back to 1x")
+
     def set_muted(self, muted: bool):
         self.audio.setMuted(muted)
         self.volume.setEnabled(not muted)
@@ -1566,8 +1613,14 @@ class ClipBrowser(QWidget):
         self.mute_button.setToolTip("Unmute" if muted else "Mute")
 
     def eventFilter(self, obj, event):
+        """A click on the video plays or pauses it; a double-click goes full screen. A
+        double-click's two clicks play and pause, so it leaves the video as it was."""
         if event.type() == QEvent.MouseButtonDblClick:
             self.toggle_full_screen()
+            return True
+        if event.type() == QEvent.MouseButtonRelease and event.button() == Qt.LeftButton:
+            if self.current:
+                self.toggle_play()
             return True
         return super().eventFilter(obj, event)
 
@@ -1601,8 +1654,10 @@ class ClipBrowser(QWidget):
             self.player.setPosition(max(0, self.player.position() + seconds * 1000))
 
     def escape(self):
-        """Esc stops making a highlight, or else leaves full screen."""
-        if self.timeline.marks:
+        """Esc leaves the drawing, or stops making a highlight, or else leaves full screen."""
+        if self.video_stack.currentWidget() is self.draw_page:
+            self.stop_drawing()
+        elif self.timeline.marks:
             self.clear_marks()
         elif self.full_screen:
             self.toggle_full_screen()
@@ -1621,6 +1676,68 @@ class ClipBrowser(QWidget):
             f"array:string:{QUrl.fromLocalFile(str(self.current.path)).toString()}", "string:"])
         if not ok:
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.current.path.parent)))
+
+    def start_drawing(self):
+        """Pauses and puts the frame on screen under the drawing tools. Before the video has
+        shown a frame (the poster), ffmpeg reads it."""
+        clip = self.current
+        shown = self.video_stack.currentWidget()
+        if clip is None or self.frame_process or shown is self.draw_page:
+            return
+        self.player.pause()
+        if shown is self.video:
+            image = self.video.videoSink().videoFrame().toImage()
+            if not image.isNull():
+                self.show_drawing(image, self.player.position() / 1000, shown)
+                return
+        at = (self.player.position() / 1000 if self.player.position() > 0
+              else thumbnail_time(clip.details))
+        self.draw_button.setEnabled(False)
+        self.read_frame(clip, at, lambda frame: self.drawing_frame(frame, clip, at, shown))
+
+    def drawing_frame(self, frame: QPixmap, clip: model.ClipInfo, at: float, shown: QWidget):
+        self.draw_button.setEnabled(True)
+        if clip is not self.current:
+            return
+        if frame.isNull():
+            QMessageBox.warning(self, APP_TITLE, "Couldn't read a picture from this clip.")
+            return
+        self.show_drawing(frame.toImage(), at, shown)
+
+    def show_drawing(self, image, at: float, shown: QWidget):
+        self.draw_from, self.draw_at, self.draw_clip = shown, at, self.current
+        self.draw_page.start(image)
+        self.video_stack.setCurrentWidget(self.draw_page)
+
+    def stop_drawing(self):
+        if self.video_stack.currentWidget() is self.draw_page:
+            self.video_stack.setCurrentWidget(self.draw_from)
+
+    def left_drawing(self, _index: int):
+        """The player shows something else now: what was drawn is saved."""
+        if self.draw_clip is not None and self.video_stack.currentWidget() is not self.draw_page:
+            clip, self.draw_clip = self.draw_clip, None
+            self.save_drawing(clip)
+
+    def save_drawing(self, clip: model.ClipInfo) -> Path | None:
+        """Saves the drawing, if anything was drawn, beside the clip ("<clip> 12m34s.png"), or in
+        the clips folder if the clip's folder is read-only, and says so."""
+        if not self.draw_page.canvas.marks:
+            return None
+        folders = [clip.path.parent, *([self.cfg.clips_dir] if self.cfg else [])]
+        folder = next((f for f in folders if os.access(f, os.W_OK)), None)
+        m, s = divmod(int(self.draw_at), 60)
+        name = f"{clip.path.stem} {m}m{s:02d}s"
+        path = folder / f"{name}.png" if folder else None
+        n = 2
+        while path and path.exists():
+            path, n = folder / f"{name} ({n}).png", n + 1
+        if path is None or not self.draw_page.canvas.image().save(str(path)):
+            QMessageBox.warning(self, APP_TITLE, "Couldn't save the drawing.")
+            return None
+        QToolTip.showText(self.video_stack.mapToGlobal(QPoint(12, 12)), f"Drawing saved: {path.name}",
+                          self.video_stack, QRect(), 5000)
+        return path
 
     def upload_to_youtube(self):
         """Copies the clip's description, opens YouTube's upload page in the browser and shows
@@ -1646,24 +1763,30 @@ class ClipBrowser(QWidget):
         self.player.pause()
         at = (self.player.position() / 1000 if self.player.position() > 0
               else thumbnail_time(clip.details))
-        tmp = Path(tempfile.mkdtemp(prefix=f"{APP_NAME}-"))
-        frame_file = tmp / "frame.jpg"
-        cmd = hidechat.frame_command(clip.path, at, frame_file)
-        process = self.frame_process = QProcess(self)
-        process.finished.connect(lambda *_: self.hide_chat_frame(process, clip, tmp))
-        process.errorOccurred.connect(lambda e: e == QProcess.FailedToStart
-                                      and self.hide_chat_frame(process, clip, tmp))
         self.hide_chat_button.setEnabled(False)
+        self.read_frame(clip, at, lambda frame: self.hide_chat_frame(frame, clip))
+
+    def read_frame(self, clip: model.ClipInfo, at: float, done):
+        """ffmpeg reads the frame at `at` s, in the background (a slow drive); done(frame) gets
+        it, a null QPixmap if it couldn't."""
+        tmp = Path(tempfile.mkdtemp(prefix=f"{APP_NAME}-"))
+        cmd = hidechat.frame_command(clip.path, at, tmp / "frame.jpg")
+        process = self.frame_process = QProcess(self)
+
+        def finished():
+            if self.frame_process is not process:
+                return   # errorOccurred and finished both came
+            self.frame_process = None
+            process.deleteLater()
+            frame = QPixmap(str(tmp / "frame.jpg"))
+            shutil.rmtree(tmp, ignore_errors=True)
+            done(frame)
+        process.finished.connect(lambda *_: finished())
+        process.errorOccurred.connect(lambda e: e == QProcess.FailedToStart and finished())
         process.start(cmd[0], cmd[1:])
         QTimer.singleShot(60_000, process, process.kill)   # a drive that stopped answering
 
-    def hide_chat_frame(self, process: QProcess, clip: model.ClipInfo, tmp: Path):
-        if self.frame_process is not process:
-            return   # errorOccurred and finished both came
-        self.frame_process = None
-        process.deleteLater()
-        frame = QPixmap(str(tmp / "frame.jpg"))
-        shutil.rmtree(tmp, ignore_errors=True)
+    def hide_chat_frame(self, frame: QPixmap, clip: model.ClipInfo):
         self.hide_chat_button.setEnabled(True)
         if frame.isNull():
             QMessageBox.warning(self, APP_TITLE, "Couldn't read a picture from this clip.")
@@ -1949,6 +2072,7 @@ class ClipBrowser(QWidget):
         self.reload()
 
     def closeEvent(self, event):
+        self.stop_drawing()   # saves it
         if self.full_screen:   # opens as a window next time
             self.toggle_full_screen()
         self.player.pause()

@@ -47,3 +47,29 @@ def test_recorder_command(tmp_path):
     rec.game_exe = "Wow.exe"
     cmd = rec.command(tmp_path / "out.mkv")
     assert cmd[cmd.index("-a") + 1] == "app:Wow.exe|app:World of Warcraft"
+
+
+def test_a_leftover_recorder_is_adopted_only_if_it_writes_the_saved_file(tmp_path, monkeypatch):
+    """The state file outlives a reboot: its process ID can be another recorder's by then."""
+    import json
+    import subprocess
+    import sys
+
+    from linux_wow_recorder import recorder
+    monkeypatch.setattr(recorder, "STATE_FILE", tmp_path / "recorder.json")
+    ours = str(tmp_path / "2026-10-25_18-00-00.mkv")
+    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)",
+                             "gpu-screen-recorder", "-o", ours])
+    try:
+        data = config.DEFAULTS | {"paths": {"combat_log_dir": str(tmp_path),
+                                            "output_dir": str(tmp_path)}}
+        cfg = config.from_dict(data)
+        recorder.STATE_FILE.write_text(json.dumps({"pid": proc.pid, "file": ours}))
+        assert Recorder(cfg).adopt_leftover()
+        recorder.STATE_FILE.write_text(json.dumps({"pid": proc.pid,
+                                                   "file": str(tmp_path / "other.mkv")}))
+        assert not Recorder(cfg).adopt_leftover()
+        assert not recorder.STATE_FILE.exists()
+    finally:
+        proc.kill()
+        proc.wait()

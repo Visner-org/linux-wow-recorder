@@ -35,8 +35,8 @@ ExecStart={_exec_start()}
 # Also covers the output folder's drive not being mounted yet at login.
 Restart=on-failure
 RestartSec=10
-# Enough for the recorder to save the file it's writing.
-TimeoutStopSec=45
+# Enough for the recorder to save the file it's writing, and the rest of Daemon.run's stop.
+TimeoutStopSec=60
 # The recorder needs the display and the session's D-Bus (for Wayland's portal).
 PassEnvironment=DISPLAY WAYLAND_DISPLAY DBUS_SESSION_BUS_ADDRESS XDG_RUNTIME_DIR XDG_CURRENT_DESKTOP
 

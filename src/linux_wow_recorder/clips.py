@@ -38,8 +38,13 @@ class SessionResult:
 
 
 def new_recording_path(cfg: Config) -> Path:
-    stamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    return cfg.sessions_dir / f"{stamp}.mkv"
+    """Named after the time to the second. A recording stopped and started again within the
+    same second waits for the next one, so the new file doesn't overwrite the old."""
+    while True:
+        path = cfg.sessions_dir / f"{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.mkv"
+        if not path.exists():
+            return path
+        time.sleep(0.1)
 
 
 def pending_recordings(cfg: Config) -> list[Path]:

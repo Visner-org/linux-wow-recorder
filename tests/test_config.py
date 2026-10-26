@@ -59,6 +59,13 @@ def test_bad_after_clips_quoting_is_a_config_error(tmp_path):
         config.from_dict(data)
 
 
+def test_a_list_where_a_string_goes_is_a_config_error(tmp_path):
+    data = config.load_raw(tmp_path / "missing.toml")
+    data["recorder"]["command"] = ["gpu-screen-recorder"]
+    with pytest.raises(config.ConfigError):
+        config.from_dict(data)
+
+
 def test_webhooks_round_trip_and_old_single_url(tmp_path):
     data = config.load_raw(tmp_path / "missing.toml")
     data["discord"]["webhook_urls"] = ["https://discord.com/api/webhooks/1/a",

@@ -1,3 +1,4 @@
+import os
 import threading
 import types
 from pathlib import Path
@@ -225,6 +226,47 @@ def test_low_disk_space_warns_once_then_stops(make):
     clock.now += daemon.DISK_CHECK_INTERVAL
     d.check_session()                   # not restarted after a stop for disk space
     assert d.recorder.starts == 1
+
+
+def test_a_missing_output_folder_is_said_and_recording_starts_when_its_back(make, monkeypatch):
+    d, clock, disk = make()
+    gone = types.SimpleNamespace(on=True)
+
+    def free(cfg):
+        if gone.on:
+            raise FileNotFoundError(cfg.output_dir)
+        return disk.free
+    monkeypatch.setattr(daemon, "free_gb", free)
+    d.start_session("Retail", "Wow.exe", 1)
+    assert d.recorder.starts == 0
+    assert d.status.data["state"] == state.NOT_RECORDING
+    assert d.status.data["problem"] == daemon.OUTPUT_PROBLEM
+    for _ in range(daemon.MAX_RESTARTS + 2):   # waits, however long it takes
+        clock.now += daemon.DISK_CHECK_INTERVAL
+        d.check_session(1)
+    assert d.recorder.starts == 0 and d.notifier.sent.count("recording_failed") == 1
+
+    gone.on = False
+    d.cfg.output_dir.mkdir(parents=True)
+    clock.now += 5
+    d.check_session(1)
+    assert d.recorder.running and d.status.data["state"] == state.RECORDING
+    assert d.status.data["problem"] is None
+
+
+def test_the_output_folder_going_away_mid_session_is_said(make, monkeypatch):
+    d, clock, _ = make()
+    d.start_session("Retail", "Wow.exe", 1)
+    def gone(cfg):
+        raise FileNotFoundError(cfg.output_dir)
+    monkeypatch.setattr(daemon, "free_gb", gone)
+    clock.now += daemon.DISK_CHECK_INTERVAL
+    d.check_session(1)                  # the disk check doesn't fail on it
+    d.recorder.running = False          # the recorder can't write: it dies
+    clock.now += 5
+    d.check_session(1)
+    assert d.status.data["problem"] == daemon.OUTPUT_PROBLEM
+    assert d.notifier.sent.count("recording_failed") == 1
 
 
 def test_run_records_a_session_and_cuts_it(make, monkeypatch):
@@ -570,6 +612,81 @@ def test_pick_another_window(make):
     d.recorder.waiting = False
     d.check_session(100)
     assert d.status.data["state"] == state.RECORDING
+
+
+def write_combat_log(d, when: float):
+    """A combat log in the session, last written at when."""
+    log = d.cfg.combat_log_dir / "WoWCombatLog-102526_200237.txt"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.touch()
+    os.utime(log, (when, when))
+
+
+def test_cut_the_clips_so_far_records_on_in_a_new_file(make, monkeypatch):
+    d, clock, _ = make()
+    entered, release, calls = blocking_process_pending(monkeypatch)
+    in_key = [True]
+    monkeypatch.setattr(daemon, "run_in_progress", lambda events: in_key[0])
+    d.start_session("Retail", "Wow.exe", pid=100)
+    first = d.recorder.file
+    first.parent.mkdir(parents=True)
+    first.touch()                              # the next one, maybe the same second, isn't named so
+    monkeypatch.setattr(state, "time", clock)
+    assert state.request_cut() is None
+    write_combat_log(d, clock.now + 1)
+    d.check_session(100)                       # inside a key: it waits
+    assert d.recorder.starts == 1 and d._cutter is None and d.status.data["cut_waiting"]
+    in_key[0] = False
+    clock.now += 5
+    d.check_session(100)                       # the log isn't read again so soon
+    assert d._cutter is None
+    clock.now += daemon.CUT_CHECK_INTERVAL
+    d.check_session(100)
+    assert entered.wait(5)
+    assert d.recorder.starts == 2 and d.recorder.running and d.recorder.file != first
+    assert calls == [d.recorder.file]          # the new recording isn't cut
+    assert not d.status.data["cut_waiting"] and d.status.data["state"] == state.RECORDING
+    release.set()
+    wait_for_cutter(d)
+    clock.now += daemon.CUT_CHECK_INTERVAL
+    d.check_session(100)
+    assert d.recorder.starts == 2 and d._cutter is None   # acted on once
+
+
+def test_cut_the_clips_so_far_waits_for_the_combat_log_to_be_written(make, monkeypatch):
+    d, clock, _ = make()
+    blocking = blocking_process_pending(monkeypatch)
+    read = []
+    monkeypatch.setattr(daemon, "run_in_progress", lambda events: read.append(1) or False)
+    monkeypatch.setattr(state, "time", clock)
+    d.start_session("Retail", "Wow.exe", pid=100)
+    write_combat_log(d, clock.now - 1)         # last written before the click
+    assert state.request_cut() is None
+    d.check_session(100)                       # a key started just now may not be in it yet
+    assert not read and d._cutter is None and not d.status.data["cut_waiting"]
+    clock.now += 3
+    write_combat_log(d, clock.now)
+    d.check_session(100)                       # written since: no need to wait for the interval
+    assert read and blocking[0].wait(5)
+    blocking[1].set()
+    wait_for_cutter(d)
+
+
+def test_cut_the_clips_so_far_goes_ahead_if_the_combat_log_stays_quiet(make, monkeypatch):
+    d, clock, _ = make()
+    blocking = blocking_process_pending(monkeypatch)
+    monkeypatch.setattr(daemon, "run_in_progress", lambda events: False)
+    monkeypatch.setattr(state, "time", clock)
+    d.start_session("Retail", "Wow.exe", pid=100)
+    assert state.request_cut() is None
+    clock.now += daemon.CUT_LOG_WAIT - 1
+    d.check_session(100)
+    assert d._cutter is None
+    clock.now += 1
+    d.check_session(100)
+    assert blocking[0].wait(5)
+    blocking[1].set()
+    wait_for_cutter(d)
 
 
 def test_pick_another_window_does_nothing_for_a_monitor(make):

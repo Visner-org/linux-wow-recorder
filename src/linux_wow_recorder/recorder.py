@@ -59,15 +59,16 @@ def audio_source(track: str, game_exe: str | None) -> str:
     return "|".join(parts)
 
 
-def _alive(pid: int) -> bool:
-    """True if pid is a running (not zombie) gpu-screen-recorder."""
+def _alive(pid: int, output: str | None = None) -> bool:
+    """True if pid is a running (not zombie) gpu-screen-recorder, writing to output if given."""
     try:
         stat = Path(f"/proc/{pid}/stat").read_text()
         cmdline = Path(f"/proc/{pid}/cmdline").read_bytes()
     except OSError:
         return False
     state = stat.rpartition(")")[2].split()[0]
-    return state != "Z" and b"gpu-screen-recorder" in cmdline
+    return (state != "Z" and b"gpu-screen-recorder" in cmdline
+            and (output is None or os.fsencode(output) in cmdline.split(b"\0")))
 
 
 def _signal_group(pid: int, sig: int):
@@ -206,7 +207,9 @@ class Recorder:
             state = json.loads(STATE_FILE.read_text())
         except (FileNotFoundError, ValueError):
             return False
-        if not _alive(state.get("pid", 0)):
+        # The state file outlives a reboot, and its process ID may be another recorder's by
+        # then (a replay buffer, say): only the one writing this run's file is ours.
+        if not _alive(state.get("pid", 0), state.get("file")):
             STATE_FILE.unlink(missing_ok=True)
             return False
         self.pid, self.file = state["pid"], Path(state["file"])

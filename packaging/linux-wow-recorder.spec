@@ -60,6 +60,20 @@ if [ "$1" -eq 0 ]; then
 fi
 
 %changelog
+* Mon Oct 26 2026 Linux WoW Recorder - 1.2.4-1
+- Cut the clips so far waits for WoW to write the combat log, so a key just started isn't split
+
+* Sun Oct 25 2026 Linux WoW Recorder - 1.2.3-1
+- Drawings save themselves beside the clip when you leave them
+
+* Sun Oct 25 2026 Linux WoW Recorder - 1.2.2-1
+- Cut the clips so far while WoW runs (tray menu or `cut-now`); recording goes on
+
+* Sun Oct 25 2026 Linux WoW Recorder - 1.2.1-1
+- Draw on a paused moment of a clip (D), then copy or save the picture
+- Click the video to play or pause; a 2x to 16x speed button
+- Says so when the clips folder is missing, and records once it's back
+
 * Sun Oct 25 2026 Linux WoW Recorder - 1.2.0-1
 - Casts: a strip under the video shows the spells cast, with a tick for each player in the
   group and one for major cooldowns only; `linux-wow-recorder add-casts` adds them to older

@@ -1,5 +1,6 @@
 from linux_wow_recorder.combatlog import (Cast, count_special_mobs, drop_despawns, find_runs,
-                                          parse_log_time, read_casts, read_log_events)
+                                          parse_log_time, read_casts, read_log_events,
+                                          run_in_progress)
 
 T0 = 1_800_000_000.0
 
@@ -35,6 +36,20 @@ def test_completed_key():
     assert (run.name, run.label) == ("Mists of Tirna Scithe", "+12 Completed")
     assert run.start == T0 + 10 and run.end == T0 + 1700
     assert run.length == "27m30s"   # the in-game timer, not the wall-clock time
+
+
+def test_a_run_in_progress_is_one_not_ended_yet_with_the_player_inside():
+    key = [zone(0, 2290, "Mists of Tirna Scithe", 8), key_start(10, 2290, "Mists of Tirna Scithe", 12)]
+    assert run_in_progress(key)
+    assert not run_in_progress(key + [key_end(1700, 2290, 12, 1_650_000)])
+    mythic = [zone(0, 2290, "Mists of Tirna Scithe", 23)]   # in before the key, at Mythic 0
+    assert run_in_progress(mythic)
+    assert not run_in_progress(mythic + key[1:] + [key_end(1700, 2290, 12, 1_650_000)])
+    assert not run_in_progress(key + [zone(900, 0, "Ardenweald", 0)])   # left: abandoned
+    assert not run_in_progress([zone(0, 2552, "Liberation of Undermine", 15)])
+    pull = (T0 + 60, "ENCOUNTER_START", ["3009", "Vexie", "15", "20", "2552"])
+    assert run_in_progress([zone(0, 2552, "Liberation of Undermine", 15), pull])
+    assert not run_in_progress([])
 
 
 def test_abandoned_key_ends_when_leaving():

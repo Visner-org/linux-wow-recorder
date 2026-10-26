@@ -234,7 +234,7 @@ def from_dict(data: dict) -> Config:
             other_clip_dirs=[Path(f).expanduser() for f in _list(c["other_folders"]) if f.strip()],
             clips_window={k: bool(v) for k, v in data["clips_window"].items()},
         )
-    except (TypeError, ValueError) as e:
+    except (TypeError, ValueError, AttributeError) as e:   # AttributeError: a list for a string
         raise ConfigError(f"Bad value in the config: {e}") from e
 
 

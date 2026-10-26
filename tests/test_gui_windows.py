@@ -701,6 +701,59 @@ def test_the_chat_box_is_drawn_moved_and_resized(qtbot):
     assert picker.box == (0.0, 0.0, 0.5, 0.5)
 
 
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="needs ffmpeg")
+def test_drawing_on_a_frame_is_copied_and_saved_when_left(qtbot, cfg):
+    from PySide6.QtCore import QPoint
+    from PySide6.QtGui import QGuiApplication
+    clip = make_clip(cfg, "a.mp4", dungeon="Ara-Kara", level=2, result="completed",
+                     label="+2 Completed", clip_length=2.0)
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "color=black:size=320x180:rate=10",
+                    "-t", "2", "-pix_fmt", "yuv420p", "-f", "mp4", str(clip)], check=True)
+    w = browser.ClipBrowser()
+    qtbot.addWidget(w)
+    w.resize(1200, 800)
+    w.show()
+    assert w.video_stack.currentWidget() is w.poster
+    w.draw_button.click()   # nothing played yet: ffmpeg reads the frame
+    qtbot.waitUntil(lambda: w.video_stack.currentWidget() is w.draw_page, timeout=60_000)
+    canvas = w.draw_page.canvas
+    assert canvas.frame.width() == 320 and not w.draw_page.undo_button.isEnabled()
+    w.draw_page.tools.buttons()[1].click()   # the arrow
+    pic = canvas.picture()
+    a = QPoint(int(pic.x() + pic.width() / 4), int(pic.y() + pic.height() / 2))
+    b = QPoint(int(pic.x() + pic.width() * 3 / 4), int(pic.y() + pic.height() / 2))
+    qtbot.mousePress(canvas, Qt.LeftButton, pos=a)
+    qtbot.mouseMove(canvas, b)
+    qtbot.mouseRelease(canvas, Qt.LeftButton, pos=b)
+    assert [m.tool for m in canvas.marks] == ["arrow"] and w.draw_page.undo_button.isEnabled()
+    qtbot.mouseClick(canvas, Qt.LeftButton, pos=a)   # a click with a shape tool draws nothing
+    assert len(canvas.marks) == 1
+    image = canvas.image()
+    assert image.size() == canvas.frame.size()
+    assert max(image.pixelColor(160, y).red() for y in range(85, 96)) > 200   # red, on black
+    w.draw_page.copy_button.click()
+    assert QGuiApplication.clipboard().image().size() == image.size()
+    w.escape()                                 # leaving saves it, beside the clip
+    assert w.video_stack.currentWidget() is w.poster
+    out = cfg.clips_dir / "a 0m01s.png"        # the poster: the picture's moment
+    assert out.exists()
+    w.draw_button.click()                      # the same moment again: a name of its own
+    qtbot.waitUntil(lambda: w.video_stack.currentWidget() is w.draw_page, timeout=60_000)
+    assert not canvas.marks                    # a new drawing
+    qtbot.mousePress(canvas, Qt.LeftButton, pos=a)
+    qtbot.mouseRelease(canvas, Qt.LeftButton, pos=a)   # a dot with the pen
+    w.draw_page.tools.buttons()[0].click()
+    qtbot.mouseClick(canvas, Qt.LeftButton, pos=a)
+    assert canvas.marks
+    w.close()
+    assert (cfg.clips_dir / "a 0m01s (2).png").exists()
+    w.show()
+    w.draw_button.click()                      # nothing drawn: nothing saved
+    qtbot.waitUntil(lambda: w.video_stack.currentWidget() is w.draw_page, timeout=60_000)
+    w.escape()
+    assert sorted(p.name for p in cfg.clips_dir.glob("*.png")) == ["a 0m01s (2).png", "a 0m01s.png"]
+
+
 def test_full_screen_keeps_the_player_and_timeline(qtbot, cfg):
     make_clip(cfg, "a.mp4", dungeon="Ara-Kara", result="completed", label="+2 Completed")
     w = browser.ClipBrowser()
@@ -832,3 +885,49 @@ def test_the_casts_strip_shows_your_casts_and_plays_from_one(qtbot, cfg):
     major.setChecked(False)
     w.select(str(cfg.clips_dir / "b.mp4"))   # no casts: no strip, no button
     assert not w.cast_strip.isVisible() and not w.casts_button.isVisible()
+
+
+def test_clicking_the_video_plays_and_pauses(qtbot, cfg, monkeypatch):
+    make_clip(cfg, "a.mp4", dungeon="Ara-Kara", result="completed", label="+2 Completed")
+    w = browser.ClipBrowser()
+    qtbot.addWidget(w)
+    w.show()
+    w.set_mode(model.KEYS)
+    w.select(str(cfg.clips_dir / "a.mp4"))
+    toggles = []
+    monkeypatch.setattr(w, "toggle_play", lambda: toggles.append(1))
+    qtbot.mouseClick(w.poster, Qt.LeftButton)   # before it's played: the poster
+    assert toggles == [1]
+    qtbot.mouseClick(w.poster, Qt.RightButton)   # not a right click
+    assert toggles == [1]
+    qtbot.mouseDClick(w.poster, Qt.LeftButton)   # full screen, and playing as it was
+    assert w.full_screen and len(toggles) % 2 == 1
+    w.toggle_full_screen()
+
+
+def test_clicks_on_the_playing_video_reach_the_player(qtbot, cfg, monkeypatch):
+    """Qt draws a playing video in a window of its own, which gets the clicks."""
+    from PySide6.QtTest import QTest
+    w = browser.ClipBrowser()
+    qtbot.addWidget(w)
+    w.show()
+    qtbot.waitExposed(w)
+    video = w.video_window
+    assert video is not None and video.metaObject().className() == "QVideoWindow"
+    toggles = []
+    monkeypatch.setattr(w, "current", object())
+    monkeypatch.setattr(w, "toggle_play", lambda: toggles.append(1))
+    QTest.mouseClick(video, Qt.LeftButton)
+    assert toggles == [1]
+
+
+def test_the_speed_button_steps_through_the_speeds(qtbot, cfg):
+    w = browser.ClipBrowser()
+    qtbot.addWidget(w)
+    assert w.speed_button.text() == "1x"
+    seen = []
+    for _ in range(5):
+        w.speed_button.click()
+        seen.append((w.speed_button.text(), w.player.playbackRate(), w.cast_strip.rate))
+    assert seen == [("2x", 2.0, 2.0), ("4x", 4.0, 4.0), ("8x", 8.0, 8.0), ("16x", 16.0, 16.0),
+                    ("1x", 1.0, 1.0)]

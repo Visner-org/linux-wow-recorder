@@ -21,6 +21,7 @@
 | `keep <clip>...` | keeps clips forever, whatever `clip_retention_days` says; `--undo` lets them expire again. A clip is a path, or a file name in `clips/` |
 | `test-recorder` | records 5 seconds to `<output>/test-recording.mkv`; refuses while the service is recording |
 | `pause`, `resume` | stops recording for the rest of this WoW session (what was recorded so far is kept), or records again; the next session always records |
+| `cut-now` | while WoW runs: cuts the clips recorded so far and records on in a new file (a second or so isn't recorded); inside a key, a dungeon run or a raid boss pull, once it ends |
 | `test-webhooks` | sends a test message to every webhook and names any that failed (`test-discord` is the old name) |
 | `install-service` | installs and starts the systemd user service, which then **starts at every login** until `uninstall-service` (the desktop app's Settings > Advanced does the same with its "Record from every login" tick) |
 | `uninstall-service` | stops and removes the service; the config and recordings stay |
@@ -152,7 +153,7 @@ With both views off, the Keystones button is hidden too.
 | `~/.local/state/linux-wow-recorder/recorder.json` | the recorder's process, so a restarted service can stop one left running |
 | `~/.local/state/linux-wow-recorder/logs/` | the logs ([below](#logs)) |
 | `$XDG_RUNTIME_DIR/linux-wow-recorder/status.json` | what the service is doing ([below](#service-status-statusjson)) |
-| `$XDG_RUNTIME_DIR/linux-wow-recorder/control.json` | a pause (`pause` or the tray), a switch to the monitor or another pick (tray or clips window), for one session |
+| `$XDG_RUNTIME_DIR/linux-wow-recorder/control.json` | a pause (`pause` or the tray), a cut (`cut-now` or the tray), a switch to the monitor or another pick (tray or clips window), for one session |
 | `<output>/sessions/` | the recording being made, and recordings not cut yet (`2026-10-08_19-03-12.mkv`) |
 | `<output>/processed/` | full recordings already cut, each with its details (`.json`) and, once the clip browser has shown it, a picture (`.jpg`) |
 | `<output>/clips/` | the clips (`.mp4`), their details (`.json`) and pictures (`.jpg`) |
@@ -293,6 +294,7 @@ is missing, its `pid` isn't running, or `state` is `"stopped"`, the service isn'
   "picking": false,
   "capture": "portal",
   "monitor_switch": false,
+  "cut_waiting": false,
   "last_session": {"end": 1791610000.0, "clips": ["/media/.../clips/....mp4"], "problems": []},
   "updated": 1791694660.2
 }
@@ -308,5 +310,6 @@ is missing, its `pid` isn't running, or `state` is `"stopped"`, the service isn'
 | `stopped` | the service has exited |
 
 `problem` is a sentence while something is wrong, `null` otherwise. `capture` is what this
-session records (`-w`), and `monitor_switch` is true once it was switched to the monitor. `last_session` is the last
+session records (`-w`), and `monitor_switch` is true once it was switched to the monitor. `cut_waiting` is
+true while a cut asked for (`cut-now`) waits for a key, dungeon run or boss pull to end. `last_session` is the last
 time recordings were cut: when, the new clips, and any problems (as Discord message text).

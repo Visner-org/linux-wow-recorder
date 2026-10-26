@@ -273,6 +273,12 @@ launcher, which names the game in its arguments, are skipped. Add a new client's
   `control.json` beside `status.json`, naming the session it's for; the service reads it every
   poll and stops or restarts its own recorder. A new session clears it, so the next WoW records.
   The app stays a client: it asks, the service records or doesn't.
+- **Cut the clips so far**: the same file, with the time it was asked. The service stops the
+  recorder, starts a new recording and runs the cutter, which skips the file being written. It
+  first reads the session's combat logs (`combatlog.run_in_progress`, every 30 s while waiting):
+  inside a key, a dungeon run or a boss pull it waits, so a run isn't cut as abandoned and split.
+  WoW writes the log a few seconds late, so it first waits for a write after the click (at most
+  60 s): a key started just before it is in the file by then.
 - **Setup checklist**: the clip browser shows `model.setup_checklist` (recorder, ffmpeg and co.,
   folders, combat logging, the service) at the top while anything on it isn't ticked.
 - **Window and tray**: `run()` opens the window unless started with `--tray` (the autostart

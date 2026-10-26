@@ -61,6 +61,10 @@ def test_tray_menu_follows_the_service(tmp_path, monkeypatch, qapp_or_skip):
     status.update(state=state.RECORDING, session_start=1.0)
     t.refresh()
     assert "Pause recording this session" in texts()
+    assert "Cut the clips so far" in texts() and t.cut_action.isEnabled()
+    status.update(cut_waiting=True)
+    t.refresh()
+    assert "Clips get cut when this run ends" in texts() and not t.cut_action.isEnabled()
     status.update(state=state.PAUSED)
     t.refresh()
     assert "Resume recording" in texts() and t.title.text() == "Paused for this session"
