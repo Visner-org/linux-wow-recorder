@@ -93,10 +93,12 @@ file take their defaults, and unknown ones are ignored.
 | Key | Default | Sent when |
 |---|---|---|
 | `session_started` | false | WoW started and recording began |
+| `combat_log_started` | false | WoW started writing a combat log (checked once a minute) |
 | `session_ended` | false | WoW closed and the recording was saved |
 | `clips_ready` | true | clips are ready after a session |
 | `no_runs` | false | a session ended with no dungeon runs or raid pulls in it |
 | `no_combat_log` | true | no combat log covers a session |
+| `combat_log_off` | true | WoW has run 10 minutes and no combat log is being written |
 | `recording_failed` | true | the recorder didn't start, or stopped mid-session |
 | `low_disk_space` | true | free space is under `min_free_gb`, or recording stopped under `stop_below_gb` |
 | `clip_failed` | true | a clip couldn't be cut |

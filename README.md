@@ -10,7 +10,10 @@ check for a new version on GitHub if you turn that on. See [Privacy](#privacy).
 
 ![The clip browser: Mythic+ clips with their results, and a run's timeline of boss pulls, deaths and lusts](docs/screenshot.png)
 
-**New in 1.2.5:** an optional small WoW addon, for when your combat logs miss the start of keys.
+**New in 1.2.7:** on KDE Plasma, the WoW window you pick is remembered, so the screen-share
+dialog no longer asks each time you start WoW. Also: drag to scrub, a warning when combat
+logging is off, an optional "Combat logging started" message, and Clear old logs.
+**1.2.5:** an optional small WoW addon, for when your combat logs miss the start of keys.
 **1.2.4:** draw on a paused frame, play at up to 16x, and cut the clips so far without quitting
 WoW.
 **1.2.0:** a timeline of the spells cast under the video, for you and anyone in your group you
@@ -55,7 +58,8 @@ WoW closes
 - **Records only WoW's sound** by default, so Discord voice and music stay out of your clips.
   All desktop sound, your microphone, or no sound are options.
 - **Records the whole screen, one monitor, or only the WoW window**, picked in your desktop's
-  screen-share dialog, so notifications and other windows stay out of the video.
+  screen-share dialog, so notifications and other windows stay out of the video. On KDE
+  Plasma the pick is remembered from one launch to the next; GNOME asks each time.
 - **Desktop app (optional):** a tray icon (grey: waiting, red: recording, amber: cutting clips),
   a clip browser with a timeline of pulls, deaths and lusts (full screen too), and a settings
   window.
@@ -173,7 +177,7 @@ it, please say how it went in an issue.
 Download the `.rpm` from [Releases](../../releases), then:
 
 ```bash
-sudo dnf install ./linux-wow-recorder-1.2.5-1.fc44.noarch.rpm
+sudo dnf install ./linux-wow-recorder-1.2.7-1.fc44.noarch.rpm
 ```
 
 dnf brings in ffmpeg and Qt, and on Nobara gpu-screen-recorder too. Open **Linux WoW Recorder**
@@ -235,7 +239,7 @@ For Ubuntu 25.10 and newer and Debian 13. Download the `.deb` from [Releases](..
 then:
 
 ```bash
-sudo apt install ./linux-wow-recorder_1.2.5-1_all.deb
+sudo apt install ./linux-wow-recorder_1.2.7-1_all.deb
 flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
 flatpak install --user flathub com.dec05eba.gpu_screen_recorder
 ```
@@ -328,10 +332,12 @@ Webhooks. You choose which events send a message:
 | Setting | Sent when | Default |
 |---|---|---|
 | `session_started` | WoW started and recording began | off |
+| `combat_log_started` | WoW started writing a combat log | off |
 | `session_ended` | WoW closed and the recording was saved | off |
 | `clips_ready` | clips are ready: each run's dungeon, level, result, length, bosses killed, deaths and lusts | on |
 | `no_runs` | a session ended with no dungeon runs or raid pulls in it | off |
 | `no_combat_log` | no combat log covers a session (combat logging was off?) | on |
+| `combat_log_off` | WoW has run 10 minutes and no combat log is being written | on |
 | `recording_failed` | the recorder didn't start, or stopped mid-session | on |
 | `low_disk_space` | the output folder's drive is nearly full, or recording stopped because of it | on |
 | `clip_failed` | a clip couldn't be cut | on |

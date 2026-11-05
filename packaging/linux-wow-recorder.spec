@@ -18,6 +18,8 @@ Requires:       python3-pyside6
 # In Nobara's repos, not Fedora's; dnf installs it where it can and skips it where it can't.
 Recommends:     gpu-screen-recorder
 Recommends:     flatpak
+# Opens the screen-share dialog once WoW's window is up; without it, right away.
+Recommends:     xprop
 # Either ffmpeg (RPM Fusion) or ffmpeg-free provides these.
 Requires:       /usr/bin/ffmpeg
 Requires:       /usr/bin/ffprobe
@@ -60,6 +62,16 @@ if [ "$1" -eq 0 ]; then
 fi
 
 %changelog
+* Thu Nov 05 2026 Linux WoW Recorder - 1.2.7-1
+- The screen-share dialog waits for WoW's window; on KDE Plasma the picked window is remembered
+- Drag on the timeline or the casts strip to scrub
+- A warning when WoW runs 10 minutes without writing a combat log
+- An optional "Combat logging started" message (Discord/Fluxer)
+- Settings: a WoW addon page, and Clear old logs
+- Full sessions get Highlight, Hide chat and YouTube
+- The "WoW started" message waits until WoW is being recorded
+- Keep clips deletes a clip's drawings along with it; a kept clip's stay
+
 * Mon Oct 26 2026 Linux WoW Recorder - 1.2.5-1
 - An optional WoW addon for combat logs that miss keys (Settings > WoW addon)
 - A key whose combat log began late shows no enemy forces instead of wrong ones

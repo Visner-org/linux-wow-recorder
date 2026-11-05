@@ -3,6 +3,7 @@
 They need the gui extra and the gui-test group: uv run --extra gui --group gui-test pytest
 """
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -12,7 +13,8 @@ import pytest
 pytest.importorskip("pytestqt")
 pytest.importorskip("PySide6.QtMultimedia")
 
-from PySide6.QtCore import QFile, Qt  # noqa: E402
+from PySide6.QtCore import QFile, QPoint, Qt  # noqa: E402
+from PySide6.QtMultimedia import QMediaPlayer  # noqa: E402
 from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402
 
 from linux_wow_recorder import addon, config, service  # noqa: E402
@@ -254,7 +256,7 @@ def test_settings_installs_the_wow_addon(qtbot, cfg, fake_recorder, tmp_path, mo
     monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: answers.pop(0))
     w = settings.SettingsWindow()
     qtbot.addWidget(w)
-    assert w.addon_hint.text() == "Set the combat log folder first." and not w.addon_button.isEnabled()
+    assert w.addon_hint.text().startswith("Set the combat log folder first") and not w.addon_button.isEnabled()
     logs = tmp_path / "_retail_" / "Logs"
     logs.mkdir(parents=True)
     (logs.parent / "WTF").mkdir()
@@ -265,6 +267,30 @@ def test_settings_installs_the_wow_addon(qtbot, cfg, fake_recorder, tmp_path, mo
     w.addon_button.click()
     assert (logs.parent / "Interface" / "AddOns" / addon.NAME / f"{addon.NAME}.toc").is_file()
     assert w.addon_hint.text().startswith("Installed") and not w.addon_button.isEnabled()
+    w.addon_remove.click()
+    assert not (logs.parent / "Interface" / "AddOns" / addon.NAME).exists()
+    assert w.addon_hint.text() == "Not installed." and not w.addon_remove.isEnabled()
+
+
+def test_settings_shows_the_combat_logs_and_clears_old_ones_to_the_trash(qtbot, cfg, fake_recorder,
+                                                                          tmp_path, monkeypatch):
+    logs = tmp_path / "_retail_" / "Logs"
+    logs.mkdir(parents=True)
+    (logs / "WoWCombatLog-102526_200000.txt").write_bytes(b"x" * 2_000_000)
+    (logs / "WoWCombatLog-102626_120000.txt").write_bytes(b"x" * 500_000)
+    old = (logs / "WoWCombatLog-102526_200000.txt")
+    os.utime(old, (1, 1))
+    trashed, answers = [], [QMessageBox.No, QMessageBox.Yes]
+    monkeypatch.setattr(settings.QFile, "moveToTrash", lambda f: trashed.append(Path(f)) or True)
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: answers.pop(0))
+    w = settings.SettingsWindow()
+    qtbot.addWidget(w)
+    w.log_dir.setText(str(logs))
+    assert w.logs_size.text() == "2 logs, 2 MB on disk."
+    w.clear_logs_button.click()   # asked first: No
+    assert trashed == []
+    w.clear_logs_button.click()   # the one just written stays: WoW may have it open
+    assert trashed == [old]
 
 
 def test_settings_window_keeps_a_capture_chosen_before_the_list_arrives(qtbot, cfg, fake_recorder):
@@ -290,7 +316,7 @@ def test_saving_restarts_the_service_only_when_the_config_changed(qtbot, cfg, fa
     monkeypatch.setattr(settings.desktop, "remove_autostart", lambda: None)
     w = settings.SettingsWindow()
     qtbot.addWidget(w)
-    assert not w.wizard and w.sidebar.count() == 6
+    assert not w.wizard and w.sidebar.count() == 7
     qtbot.waitUntil(lambda: w.save_button.text() == "Save", timeout=3000)
 
     w.tray_at_login.toggle()                  # not in the config file: no restart
@@ -334,7 +360,7 @@ def test_a_problem_marks_its_page(qtbot, cfg, fake_recorder):
     w = settings.SettingsWindow()
     qtbot.addWidget(w)
     w.command.setText("no-such-recorder")
-    qtbot.waitUntil(lambda: w.sidebar.item(4).text().endswith("⚠"), timeout=2000)
+    qtbot.waitUntil(lambda: w.sidebar.item(5).text().endswith("⚠"), timeout=2000)
     assert "isn't installed" in w.checks["recorder_command"].text()
 
 
@@ -426,6 +452,18 @@ def test_full_sessions_list_the_recordings(qtbot, cfg):
 
     w.mode_buttons["keys"].click()
     assert w.current.path.name == "a.mp4"
+
+
+def test_a_session_not_cut_yet_gets_no_copy_beside_it(qtbot, cfg):
+    # A copy in sessions/ would be cut as a recording of its own.
+    cfg.sessions_dir.mkdir(parents=True)
+    (cfg.sessions_dir / "2026-10-12_16-39-07.mkv").write_bytes(b"x" * 1_100_000)
+    w = browser.ClipBrowser()
+    qtbot.addWidget(w)
+    w.mode_buttons["sessions"].click()
+    assert w.current.result == "uncut"
+    assert not w.hide_chat_button.isVisibleTo(w) and not w.keep_button.isVisibleTo(w)
+    w.mode_buttons["keys"].click()   # remembered
 
 
 def test_a_clip_moved_to_another_folder(qtbot, cfg, tmp_path):
@@ -790,6 +828,82 @@ def test_full_screen_keeps_the_player_and_timeline(qtbot, cfg):
     assert w.full_screen
     w.close()
     assert not w.full_screen
+
+
+def test_dragging_the_timeline_scrubs_paused_and_plays_on_after(qtbot, cfg, monkeypatch):
+    w = browser.ClipBrowser()
+    qtbot.addWidget(w)
+    tl = w.timeline
+    tl.resize(416, 70)   # 400 px of track: 1 px is 0.25 s of a 100 s clip
+    tl.set_clip(100, {})
+    playing, sought = [True], []
+    monkeypatch.setattr(w.player, "playbackState", lambda: QMediaPlayer.PlayingState
+                        if playing[0] else QMediaPlayer.PausedState)
+    monkeypatch.setattr(w.player, "pause", lambda: playing.__setitem__(0, False))
+    monkeypatch.setattr(w.player, "play", lambda: playing.__setitem__(0, True))
+    monkeypatch.setattr(w.player, "setPosition", lambda ms: sought.append(ms))
+    y = sum(tl.TRACK) // 2
+    qtbot.mousePress(tl, Qt.LeftButton, pos=QPoint(208, y))
+    assert not playing[0] and sought == [50_000] and tl.position == 50
+    qtbot.mouseMove(tl, QPoint(209, y))   # a twitch is still a click
+    qtbot.mouseMove(tl, QPoint(48, y))    # drawn now, sought once 50 s's frame is up
+    assert sought == [50_000] and tl.position == 10
+    w.scrub_frame(None)
+    assert sought == [50_000, 10_000]
+    w.on_position(50_000)   # the player catching up doesn't pull the playhead back
+    assert tl.position == 10
+    qtbot.mouseMove(tl, QPoint(68, y))
+    qtbot.mouseMove(tl, QPoint(88, y))    # only the newest waits
+    w.scrub_frame(None)
+    assert sought == [50_000, 10_000, 20_000]
+    qtbot.mouseMove(tl, QPoint(108, y))
+    qtbot.mouseRelease(tl, Qt.LeftButton, pos=QPoint(108, y))   # no waiting for the last one
+    assert sought[-1] == 25_000 and playing[0]
+    playing[0] = False   # paused before: it stays paused
+    qtbot.mousePress(tl, Qt.LeftButton, pos=QPoint(108, y))
+    qtbot.mouseRelease(tl, Qt.LeftButton, pos=QPoint(108, y))
+    assert not playing[0] and sought[-1] == 25_000
+
+
+def test_dragging_the_casts_scrubs_paused_and_plays_on_after(qtbot, cfg, monkeypatch):
+    w = browser.ClipBrowser()
+    qtbot.addWidget(w)
+    strip = w.cast_strip
+    strip.resize(336, strip.height())   # 320 px for 16 s: 20 px a second
+    monkeypatch.setattr(w, "clip_seconds", lambda: 100.0)
+    playing, sought = [True], []
+    monkeypatch.setattr(w.player, "playbackState", lambda: QMediaPlayer.PlayingState
+                        if playing[0] else QMediaPlayer.PausedState)
+    monkeypatch.setattr(w.player, "pause", lambda: playing.__setitem__(0, False))
+    monkeypatch.setattr(w.player, "play", lambda: playing.__setitem__(0, True))
+    monkeypatch.setattr(w.player, "setPosition", lambda ms: sought.append(ms))
+    strip.set_position(50)
+    qtbot.mousePress(strip, Qt.LeftButton, pos=QPoint(200, 10))
+    assert not playing[0] and sought == []   # grabbed, not sought yet
+    qtbot.mouseMove(strip, QPoint(160, 10))   # pulled 2 s of casts to the left: 2 s later
+    assert sought == [52_000] and strip.now() == 52
+    w.on_position(50_000)   # the player catching up doesn't pull the strip back
+    assert strip.now() == 52
+    qtbot.mouseMove(strip, QPoint(260, 10))   # and back: drawn now, sought once 52 s is up
+    assert strip.now() == 47 and sought == [52_000]
+    w.scrub_frame(None)
+    assert sought == [52_000, 47_000]
+    w.scrub_frame(None)   # a frame with nothing waiting: nothing more
+    assert sought == [52_000, 47_000]
+    w.scrub_busy.timeout.emit()   # a seek that showed no frame doesn't hold up the next
+    qtbot.mouseMove(strip, QPoint(3000, 10))   # not before the start
+    qtbot.mouseRelease(strip, Qt.LeftButton, pos=QPoint(3000, 10))
+    assert sought[-1] == 0 and playing[0]
+    strip.set_position(98)
+    qtbot.mousePress(strip, Qt.LeftButton, pos=QPoint(200, 10))
+    qtbot.mouseMove(strip, QPoint(0, 10))   # nor past the end
+    qtbot.mouseRelease(strip, Qt.LeftButton, pos=QPoint(0, 10))
+    assert sought[-1] == 100_000
+    playing[0] = False   # a click while paused: it goes there and stays paused
+    strip.set_position(50)
+    qtbot.mousePress(strip, Qt.LeftButton, pos=QPoint(268, 10))
+    qtbot.mouseRelease(strip, Qt.LeftButton, pos=QPoint(268, 10))
+    assert sought[-1] == 51_000 and not playing[0]
 
 
 def test_the_speaker_mutes(qtbot, cfg):

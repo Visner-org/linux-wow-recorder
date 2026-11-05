@@ -9,6 +9,7 @@ arch=('any')
 url="https://github.com/Visner-org/linux-wow-recorder"
 license=('GPL-3.0-or-later')
 depends=('python' 'pyside6' 'qt6-multimedia' 'gpu-screen-recorder' 'ffmpeg' 'grep' 'systemd' 'hicolor-icon-theme')
+optdepends=("xorg-xprop: opens the screen-share dialog once WoW's window is up")
 makedepends=('python-build' 'python-installer' 'python-hatchling')
 checkdepends=('python-pytest')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/$pkgver.tar.gz")

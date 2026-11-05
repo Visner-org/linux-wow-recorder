@@ -10,7 +10,7 @@ import shlex
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QProcess, Qt, QTimer, QUrl
+from PySide6.QtCore import QEvent, QFile, QProcess, Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (QAbstractButton, QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog,
                                QFileDialog, QFormLayout, QHBoxLayout, QLabel,
@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (QAbstractButton, QApplication, QButtonGroup, QChe
                                QScrollArea, QSizePolicy, QSpinBox, QStackedWidget, QVBoxLayout,
                                QWidget)
 
-from .. import (APP_TITLE, REPO_URL, __version__, addon, config, logs, recorder, service,
+from .. import (APP_TITLE, REPO_URL, __version__, addon, clips, config, logs, recorder, service,
                 state, uninstall, updates)
 from ..cli import find_recorder_command
 from ..config import CONFIG_FILE, MAX_WEBHOOKS, NOTIFY_EVENTS, ConfigError
@@ -32,21 +32,20 @@ PORTAL_INFO = """\
 <p>Notifications, Discord messages, your browser and anything else on screen stay out of the
 video, even when you alt-tab. Alt-tabbing freezes the video on WoW's last frame instead of
 showing your desktop.</p>
-<p><b>The catch: it asks every time you start WoW.</b> When recording starts, your desktop's
-screen-share dialog asks what to record; pick the World of Warcraft window. A new WoW window
-counts as a new window, so on most desktops the dialog comes back every time you launch the
-game. Recording starts once you've picked.</p>
-<p>If you pick a whole screen in that dialog instead, it's remembered and you aren't asked
-again, but everything on that screen is recorded. To stop being asked without the dialog, pick
-a monitor (DP-1, HDMI-A-1, ...) in this list.</p>"""
+<p><b>Your desktop asks what to record.</b> Once WoW's window shows up, the screen-share
+dialog opens over it: pick the World of Warcraft window. Recording starts once you've picked.
+On KDE Plasma the pick is remembered the next time you start WoW; GNOME asks every
+time.</p>
+<p>A whole screen picked in that dialog is remembered too, but everything on it is recorded.
+To never see the dialog, pick a monitor (DP-1, HDMI-A-1, ...) in this list.</p>"""
 
 DEFAULT_CAPTURE = [("portal", "A window or screen you pick (e.g. only WoW)"),
                    ("screen", model.SCREEN_LABEL)]
-PAGES = ("Folders and capture", "Sound", "Clips and storage", "Notifications", "Advanced",
-         "About")
+PAGES = ("Folders and capture", "Sound", "Clips and storage", "Notifications", "WoW addon",
+         "Advanced", "About")
 # Which page each checked field is on, so the sidebar can mark a page with a problem.
 FIELD_PAGE = {"combat_log_dir": 0, "output_dir": 0, "stop_below_gb": 2, "other_folders": 2,
-              "webhooks": 3, "recorder_command": 4, "after_clips": 4}
+              "webhooks": 3, "recorder_command": 5, "after_clips": 5}
 # Settings only the desktop app reads: changing them doesn't restart the service.
 APP_ONLY = (("clips", "other_folders"), ("updates", "check"),
             *(("clips_window", key) for key in config.CLIPS_WINDOW))
@@ -192,6 +191,8 @@ class SettingsWindow(QDialog):
             [_heading("Clips"), p["clips"], _heading("Storage"), p["storage"],
              _heading("Clips window"), self.clips_window_part()],
             [_heading("Discord or Fluxer messages"), p["notify"]],
+            [_heading("WoW addon (optional)"), self.addon_part(), _heading("Combat logs"),
+             self.combat_logs_part()],
             [_heading("Recorder"), p["recorder"], _heading("After clips"), p["hook"],
              _heading("Background service"), p["service"], _heading("Logs"), p["logging"],
              _heading("Uninstall"), self.uninstall_part()],
@@ -352,22 +353,87 @@ class SettingsWindow(QDialog):
         self.log_dir.setPlaceholderText("…/World of Warcraft/_retail_/Logs")
         self.log_hint = self.check_label("combat_log_dir")
         form.addRow("Combat log folder", _field(row, self.log_hint))
-        self.addon_button = QPushButton()
-        self.addon_button.clicked.connect(self.install_addon)
-        self.addon_hint = _hint()
-        row = QWidget()
-        h = QHBoxLayout(row)
-        h.setContentsMargins(0, 0, 0, 0)
-        h.addWidget(self.addon_button)
-        h.addWidget(self.addon_hint, 1)
-        form.addRow("WoW addon", row)
-        self.log_dir.textChanged.connect(self.show_addon)
-        self.show_addon()
         row, self.out_dir = self.folder_row(p["output_dir"])
         self.out_dir.setPlaceholderText("A folder with room: a few GB per hour of play")
         self.out_hint = self.check_label("output_dir")
         form.addRow("Output folder", _field(row, self.out_hint))
         return _section(form)
+
+    def addon_part(self) -> QWidget:
+        """The companion WoW addon: what it's for, and install or remove it. Not in setup: it's
+        for when logs miss keys."""
+        self.addon_button = QPushButton()
+        self.addon_button.clicked.connect(self.install_addon)
+        self.addon_remove = QPushButton("Remove")
+        self.addon_remove.clicked.connect(self.remove_addon)
+        self.addon_hint = _hint()
+        row = QHBoxLayout()
+        row.addWidget(self.addon_button)
+        row.addWidget(self.addon_remove)
+        row.addWidget(self.addon_hint, 1)
+        self.log_dir.textChanged.connect(self.show_addon)
+        self.show_addon()
+        more = QLabel(f'<a href="{REPO_URL}/blob/main/docs/user-guide.md#the-wow-addon">'
+                      "More in the user guide</a>")
+        more.setOpenExternalLinks(True)
+        return _section(
+            _hint("Most people don't need it. Install it only if clips go missing, or a key's "
+                  "details say the combat log began late."),
+            _hint("Clips are cut from WoW's combat log, so logging has to be on when a key "
+                  "starts. Addons like Raider.IO turn it on when you change zones, which misses "
+                  "a key put in after you zoned in."),
+            _hint("This small addon turns combat logging and Advanced Combat Logging on in "
+                  "every dungeon and raid: after each loading screen, when the keystone slot "
+                  "opens, when a key starts and at each boss pull. It never turns logging off, "
+                  "shows nothing and sends nothing."),
+            _hint("Logging stays on until you log out, so WoW's Logs folder grows faster: clear "
+                  "it out now and then. Advanced Combat Logging stays on after you remove the "
+                  "addon. After a big WoW patch it shows as out of date until the app updates "
+                  "it."),
+            row, more)
+
+    def combat_logs_part(self) -> QWidget:
+        """How much room WoW's combat logs take, and a button to move the old ones to the trash."""
+        self.clear_logs_button = QPushButton("Clear old logs...")
+        self.clear_logs_button.clicked.connect(self.clear_logs)
+        self.logs_size = _hint()
+        row = QHBoxLayout()
+        row.addWidget(self.clear_logs_button)
+        row.addWidget(self.logs_size, 1)
+        self.log_dir.textChanged.connect(self.show_logs_size)
+        self.show_logs_size()
+        return _section(
+            _hint("WoW never deletes its combat logs. Clips only need a log until they're cut: "
+                  "the logs a recording still waits for, and the one WoW is writing, are kept."),
+            row)
+
+    def show_logs_size(self):
+        logs = clips.combat_logs(self.addon_log_dir())
+        size = sum(f.stat().st_size for f in logs)
+        self.clear_logs_button.setEnabled(bool(logs))
+        self.logs_size.setText(
+            f"{len(logs)} log{'s' * (len(logs) != 1)}, {model.size_text(size)} on disk."
+            if logs else "No combat logs." if self.addon_log_dir() else "")
+
+    def clear_logs(self):
+        try:
+            pending = clips.pending_recordings(config.load())
+        except (ConfigError, OSError):
+            pending = []   # no saved output folder: no recordings yet
+        old, kept = clips.clearable_logs(self.addon_log_dir(), pending)
+        if not old:
+            QMessageBox.information(self, APP_TITLE, "Every log is still needed: a recording "
+                                    "waits for it, or WoW is writing it.")
+            return
+        size = model.size_text(sum(f.stat().st_size for f in old))
+        also = f" {kept} still needed stay." if kept else ""
+        if QMessageBox.question(self, APP_TITLE, f"Move {len(old)} combat log"
+                                f"{'s' * (len(old) != 1)} ({size}) to the trash?{also}") != QMessageBox.Yes:
+            return
+        left = [f for f in old if not QFile.moveToTrash(str(f))]
+        if left:
+            QMessageBox.warning(self, APP_TITLE, f"Couldn't move {len(left)} to the trash.")
+        self.show_logs_size()
 
     def addon_log_dir(self) -> Path | None:
         text = self.log_dir.text().strip()
@@ -378,11 +444,12 @@ class SettingsWindow(QDialog):
         now = addon.status(self.addon_log_dir())
         self.addon_button.setText("Update" if now == addon.OLD else "Install")
         self.addon_button.setEnabled(now in (addon.MISSING, addon.OLD))
+        self.addon_remove.setEnabled(now in (addon.INSTALLED, addon.OLD))
         self.addon_hint.setText({
-            addon.INSTALLED: "Installed: it turns combat logging on in dungeons and raids.",
+            addon.INSTALLED: "Installed. /reload in WoW after installing or removing it.",
             addon.OLD: "An older version is installed.",
-            addon.MISSING: "Optional: only if keys go missing from your combat logs.",
-            addon.NO_WOW: "Set the combat log folder first.",
+            addon.MISSING: "Not installed.",
+            addon.NO_WOW: "Set the combat log folder first (Folders and capture).",
         }[now])
 
     def install_addon(self):
@@ -392,6 +459,13 @@ class SettingsWindow(QDialog):
             return
         if why := addon.install(self.addon_log_dir()):
             QMessageBox.warning(self, APP_TITLE, why)
+        self.show_addon()
+
+    def remove_addon(self):
+        try:
+            addon.remove(self.addon_log_dir())
+        except OSError as e:
+            QMessageBox.warning(self, APP_TITLE, f"Couldn't remove the addon: {e}")
         self.show_addon()
 
     def capture_part(self) -> QWidget:

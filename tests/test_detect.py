@@ -1,6 +1,9 @@
+import types
+
 import pytest
 
-from linux_wow_recorder.detect import find_wow_process, wow_alive, wow_flavor, wow_process
+from linux_wow_recorder import detect
+from linux_wow_recorder.detect import find_wow_process, wow_alive, wow_flavor, wow_process, wow_window
 
 
 @pytest.mark.parametrize("args, flavor", [
@@ -66,3 +69,38 @@ def test_a_launcher_alone_still_counts(tmp_path):
     proc = fake_proc(tmp_path, {10: ["umu-run", r"C:\WoW\_retail_\Wow.exe"]}, zombie=(10,))
     assert find_wow_process(proc) == ("Retail", "Wow.exe", 10)
     assert not wow_alive(10, proc)              # a zombie is gone
+
+
+def _fake_xprop(monkeypatch, windows):
+    """xprop answering with these windows: {id: (pid, name)}."""
+    def xprop(display, *args):
+        if args[0] == "-root":
+            return "_NET_CLIENT_LIST(WINDOW): window id # " + ", ".join(windows) + "\n"
+        pid, name = windows[args[1]]
+        return f'_NET_WM_PID(CARDINAL) = {pid}\n_NET_WM_NAME(UTF8_STRING) = "{name}"\n'
+    monkeypatch.setattr(detect, "x_display", lambda: {"DISPLAY": ":0"})
+    monkeypatch.setattr(detect.shutil, "which", lambda name: "/usr/bin/xprop")
+    monkeypatch.setattr(detect, "_xprop", xprop)
+
+
+def test_wow_window_by_process_or_name(monkeypatch):
+    _fake_xprop(monkeypatch, {"0x1": (50, "Battle.net"), "0x2": (1234, "Wine window")})
+    assert wow_window(1234) is True
+    assert wow_window(123) is False   # not a prefix match
+    _fake_xprop(monkeypatch, {"0x1": (7, "World of Warcraft")})
+    assert wow_window(1234) is True   # a Flatpak's Wine: its own process IDs
+
+
+def test_wow_window_cant_tell_without_x(monkeypatch):
+    monkeypatch.setattr(detect, "x_display", lambda: {})
+    assert wow_window(1234) is None
+
+
+def test_the_display_comes_from_systemd_when_the_service_has_none(monkeypatch):
+    # Started at boot, before the desktop told systemd.
+    monkeypatch.delenv("DISPLAY", raising=False)
+    monkeypatch.delenv("XAUTHORITY", raising=False)
+    out = "HOME=/home/me\nDISPLAY=:0\nXAUTHORITY=/run/user/1000/xauth_new\n"
+    monkeypatch.setattr(detect.subprocess, "run",
+                        lambda *a, **k: types.SimpleNamespace(stdout=out))
+    assert detect.x_display() == {"DISPLAY": ":0", "XAUTHORITY": "/run/user/1000/xauth_new"}

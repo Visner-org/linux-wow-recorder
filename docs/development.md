@@ -50,6 +50,9 @@ libfontconfig1 libdbus-1-3 libglib2.0-0t64 libpulse0` there).
 daemon.run() loop, every poll_interval seconds
   detect.find_wow()                   scans /proc for Wow*.exe in a process's command line
   WoW found → start_session()
+      window_pending()                portal capture: waits for WoW's window (detect.wow_window,
+                                      xprop) up to 60 s, so the dialog opens on top of WoW
+                                      and KDE can restore the saved window pick
       recorder.start()                gpu-screen-recorder → <output>/sessions/<time>.mkv
       status.json: recording
   WoW still running → check_session()
@@ -227,14 +230,15 @@ new, add it to `LUST_DEBUFFS`; without it, the lust isn't found at all.
 ### The WoW addon
 
 `src/linux_wow_recorder/addon/LinuxWoWRecorder/` is shipped in the package and copied into
-`<WoW>/_retail_/Interface/AddOns/` by `addon.install` (Settings or `install-addon`). It turns
-combat logging on in dungeons and raids at the moments zone-only loggers miss (Raider.IO checks
-on zone changes only, so a dungeon entered before it had a difficulty (0 in ZONE_CHANGE) and
-then keyed had no log for its first 72 s on 10-26). It never turns logging off. It's opt-in: only the user installs it (Settings
-asks first), since it leaves logging on and changes a CVar; `refresh` only updates a copy
-that's already there. Its `## Version:` is what `addon.status` compares:
-bump it with any change to the addon, and the service (`addon.refresh` at start) updates
-installed copies. Bump `## Interface:` with each WoW patch, or WoW lists it as out of date.
+`<WoW>/_retail_/Interface/AddOns/` by `addon.install` (Settings > WoW addon, or
+`install-addon`). It turns combat logging on in dungeons and raids at the moments zone-only
+loggers miss (Raider.IO checks on zone changes only, so a dungeon entered before it had a
+difficulty (0 in ZONE_CHANGE) and then keyed had no log for its first 72 s on 10-26). It never
+turns logging off. It's opt-in: only the user installs it (Settings asks first), since it leaves
+logging on and changes a CVar; `refresh` only updates a copy that's already there. Its
+`## Version:` is what `addon.status` compares: bump it with any change to the addon, and the
+service (`addon.refresh` at start) updates installed copies. Bump `## Interface:` with each WoW patch,
+or WoW lists it as out of date.
 
 A completed key whose log has no START is timed from its END (`key_end`). Its timer began at
 END minus the in-game time plus 15 s per group death (`DEATH_PENALTY`, measured 15 to 16 s; a
@@ -409,7 +413,7 @@ them has a graphics card, so nothing was recorded; recording is only proven on N
 | Fedora Silverblue / Kinoite 44 | uv | their images (`quay.io/fedora/fedora-silverblue:44`, `-kinoite:44`) ship `ffmpeg-free`, git and Flatpak, no Flathub remote |
 | CachyOS | PKGBUILD | VM (KDE, Wayland): `makepkg -si` from the GitHub tag, setup finished |
 | Bazzite | uv + gsr Flatpak | VM (KDE, Wayland): setup finished; it made the menu entry and found the Flatpak |
-| Ubuntu 26.04 | uv, then .deb | VM (GNOME, Wayland): both; switching from uv to the .deb found the stale-unit bug |
+| Ubuntu 26.04 | uv, then .deb | VM (GNOME, Wayland): both; switching from uv to the .deb found the stale-unit bug. GNOME 50 doesn't restore a picked window for a new WoW (10-28, Wine's Notepad as `Wow.exe`: the same window was restored, a relaunched one got the dialog; GNOME listed it with no app icon) |
 | Debian 13 | .deb | `debian:13` container: installs, the GUI modules load |
 | Ubuntu 24.04 / Pop!_OS 24.04 | uv | `ubuntu:24.04` container (Python 3.12); Pop!_OS live ISO in a VM: COSMIC registers the tray icon (StatusNotifierWatcher) and its menu |
 | openSUSE Tumbleweed | uv | container: gpu-screen-recorder, PySide6 (`python313-PySide6`), ffmpeg and Flatpak are in its OSS repo; ffmpeg has OpenH264 only |

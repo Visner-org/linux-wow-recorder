@@ -16,7 +16,7 @@ from .clips import (SessionResult, cleanup, free_gb, new_recording_path, process
                     stale_recordings)
 from .combatlog import combat_logs_between, last_event_time, read_log_events, run_in_progress
 from .config import WOW_SOUND, Config
-from .detect import find_wow, find_wow_process, wow_alive
+from .detect import find_wow, find_wow_process, wow_alive, wow_window
 from .notify import Notifier
 from .recorder import WOW_SOUND_NAME, Recorder
 
@@ -38,6 +38,12 @@ CAPTURE_NOTICE = 15
 # How long into a session the programs with sound are logged once: WoW opens its sound a little
 # after it starts.
 AUDIO_CHECK_AFTER = 90
+# How long into a session a missing combat log is warned about, once: WoW may sit at the login
+# screen for a while, and the addon turns logging on when a character is in.
+LOG_CHECK_AFTER = 600
+# Until a combat log is found, the logs folder is looked at this often.
+LOG_RECHECK_INTERVAL = 60
+NO_LOG_PROBLEM = "No combat log is being written. Is combat logging on?"
 # While "Cut the clips so far" waits for a key or boss pull to end, the combat log is read
 # this often.
 CUT_CHECK_INTERVAL = 30
@@ -45,6 +51,11 @@ CUT_CHECK_INTERVAL = 30
 # event after it was asked (a key started just before the click isn't in the file yet), or this
 # long if none comes (nothing happening in town).
 CUT_LOG_WAIT = 120
+# With portal capture the screen-share dialog waits for WoW's window, so it opens on top of WoW
+# instead of behind it while WoW loads: this long after the window shows up, or at most this long
+# if it never does (Wine's own Wayland driver: no X11 window to see).
+WINDOW_SETTLE = 5
+WINDOW_WAIT = 60
 # While the screen-share dialog waits for a pick (it can open behind WoW).
 PICK_PROBLEM = "Not recording: pick WoW's window in the screen-share dialog."
 # While the output folder is gone (its drive unmounted after the service started).
@@ -62,6 +73,9 @@ class Session:
     no_output: bool = False      # the output folder is gone; recording starts when it's back
     paused: bool = False         # the user paused recording for this session
     picking: bool = False        # the screen-share dialog is waiting; nothing's recorded yet
+    announced: bool = False      # session_started sent, once WoW was being recorded
+    window_wait: float = 0.0     # when it started waiting for WoW's window; 0 when not
+    window_seen: float = 0.0     # when WoW's window showed up while waiting
     monitor: bool = False        # recording the monitor instead, as asked
     repicked: float = 0.0        # the last "Pick another window" acted on
     cut: float = 0.0             # the last "Cut the clips so far" acted on
@@ -70,6 +84,9 @@ class Session:
     lost_at: float = 0.0         # when what was recorded went away; 0 while it's fine
     captures_lost: int = 0
     audio_checked: bool = False
+    log_checked: float = 0.0     # when the logs folder was last looked at for a combat log
+    log_found: bool = False      # a combat log is being written; combat_log_started sent
+    log_missing: bool = False    # the no-combat-log warning is up
     last_disk_check: float = 0.0
 
 
@@ -242,11 +259,37 @@ class Daemon:
             self.recorder.capture = self.cfg.monitor or "screen"
             self.status.update(monitor_switch=True)
         self.start_recording()
-        if self.recorder.is_running():
-            self.notifier.send("session_started", f"🔴 WoW {flavor} started; recording.")
+
+    def window_pending(self) -> bool:
+        """With portal capture: True while the screen-share dialog waits for WoW's window, so it
+        opens on top of WoW once it's loaded, rather than behind it."""
+        s = self.session
+        if self.recorder.capture_mode != "portal" or s.pid is None:
+            s.window_wait = s.window_seen = 0.0
+            return False
+        now = time.time()
+        shown = wow_window(s.pid)
+        if not s.window_wait:
+            if shown is not False:
+                return False
+            s.window_wait = now
+            log.info("Waiting for WoW's window before opening the screen-share dialog.")
+            if self.status.data["state"] == state.RECORDING:   # a new WoW: the old one's recording ended
+                self.status.update(state=state.WAITING, recording_file=None)
+        if shown and not s.window_seen:
+            s.window_seen = now
+        waited_out = now - s.window_wait >= WINDOW_WAIT
+        if shown is None or waited_out or (s.window_seen and now - s.window_seen >= WINDOW_SETTLE):
+            if waited_out and not s.window_seen:
+                log.warning("WoW's window wasn't seen; opening the screen-share dialog anyway.")
+            s.window_wait = s.window_seen = 0.0
+            return False
+        return True
 
     def start_recording(self):
         cfg, s = self.cfg, self.session
+        if self.window_pending():
+            return
         try:
             free = free_gb(cfg)
         except OSError:
@@ -271,6 +314,7 @@ class Daemon:
             else:
                 self.status.update(state=state.RECORDING, recording_file=str(self.recorder.file),
                                    picking=False)
+                self.announce()
             return
         self.status.update(state=state.NOT_RECORDING, recording_file=None, picking=False,
                            problem="The recorder didn't start.")
@@ -286,12 +330,15 @@ class Daemon:
         self.check_cut()
         if self.check_pause() or self.check_pick() or self.check_capture(pid):
             return
+        if s.window_wait:
+            self.start_recording()
+            self.recording_again()   # for whoever started the wait
+            return
         if s.no_output:
             if self.cfg.output_dir.is_dir():
                 log.info("The output folder is back; recording.")
                 self.start_recording()
-                if self.recorder.is_running():
-                    self.status.update(problem=None)
+                self.recording_again()
             return
         now = time.time()
         if now - s.last_disk_check >= DISK_CHECK_INTERVAL:
@@ -300,6 +347,9 @@ class Daemon:
         if not s.audio_checked and now - s.start >= AUDIO_CHECK_AFTER:
             s.audio_checked = True
             self.check_audio()
+        if not s.log_found and now - s.log_checked >= LOG_RECHECK_INTERVAL:
+            s.log_checked = now
+            self.check_combat_log(s, now)
         if s.disk_stopped or self.recorder.is_running() or s.restarts >= MAX_RESTARTS:
             return
 
@@ -316,6 +366,20 @@ class Daemon:
         if s.restarts >= MAX_RESTARTS and not self.recorder.is_running():
             log.error("The recorder keeps failing; giving up until WoW is started again.")
             self.status.update(problem="The recorder keeps failing; trying again next session.")
+
+    def announce(self):
+        """session_started, the first time WoW is being recorded this session: not while the
+        screen-share dialog or WoW's window is waited for."""
+        s = self.session
+        if not s.announced:
+            s.announced = True
+            self.notifier.send("session_started", f"🔴 WoW {s.flavor} started; recording.")
+
+    def recording_again(self):
+        """After a new recording was started for what went wrong: the problem goes, once it's
+        recording. Not while the screen-share dialog waits: that problem stays up."""
+        if self.recorder.is_running() and not self.session.picking:
+            self.status.update(problem=None)
 
     def output_missing(self):
         """The output folder is gone: nothing is recorded until it's back (check_session looks
@@ -346,6 +410,7 @@ class Daemon:
             log.info(f"Picked; recording to {self.recorder.file}")
             self.status.update(state=state.RECORDING, recording_file=str(self.recorder.file),
                                picking=False, problem=None)
+            self.announce()
             return False
         log.warning("The screen-share dialog was closed without a pick; not recording this "
                     "session.")
@@ -429,8 +494,7 @@ class Daemon:
                 s.lost_at, s.pid = 0.0, pid if pid is not None else s.pid
                 log.info("WoW is back; starting a new recording.")
                 self.start_recording()
-                if self.recorder.is_running():
-                    self.status.update(problem=None)
+                self.recording_again()
                 return False
             if waited >= CAPTURE_NOTICE and self.status.data["state"] != state.NOT_RECORDING:
                 pick = " (pick it in the screen-share dialog)" if self.recorder.capture_mode == "portal" else ""
@@ -455,8 +519,7 @@ class Daemon:
         if restarted:   # WoW's already back
             s.lost_at = 0.0
             self.start_recording()
-            if self.recorder.is_running():
-                self.status.update(problem=None)
+            self.recording_again()
             return False
         s.lost_at = time.time()
         return True
@@ -474,6 +537,32 @@ class Daemon:
         if not wanted & {a.lower() for a in apps}:
             log.warning("WoW's sound isn't among them, so it isn't being recorded. Please "
                         "report the list above.")
+
+    def check_combat_log(self, s: Session, now: float):
+        """Sends combat_log_started once a combat log is being written this session. Warns once
+        if none is LOG_CHECK_AFTER into it, and takes the warning down once one is. The desktop
+        app shows the problem; Discord/Fluxer get the combat_log_off message."""
+        try:
+            found = combat_logs_between(self.cfg.combat_log_dir, s.start, now)
+        except OSError:
+            return
+        if found:
+            s.log_found = True
+            log.info("A combat log is being written.")
+            self.notifier.send("combat_log_started", "📜 Combat logging started.")
+            if s.log_missing:
+                s.log_missing = False
+                if self.status.data.get("problem") == NO_LOG_PROBLEM:
+                    self.status.update(problem=None)
+            return
+        if s.log_missing or now - s.start < LOG_CHECK_AFTER:
+            return
+        s.log_missing = True
+        log.warning("WoW has been running a while and no combat log is being written.")
+        self.status.update(problem=NO_LOG_PROBLEM)
+        self.notifier.send("combat_log_off", "⚠️ **WoW is running but no combat log is being "
+                           "written**, so this session's runs can't be clipped. Is combat "
+                           "logging on?")
 
     def check_pause(self) -> bool:
         """Pauses or resumes recording as the desktop app (or the CLI) asked. True while

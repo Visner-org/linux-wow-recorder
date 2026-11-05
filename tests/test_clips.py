@@ -185,10 +185,17 @@ def test_cleanup_skips_kept_clips_and_takes_sidecars(tmp_path):
     for clip in (kept, expired):
         clip.with_suffix(".jpg").write_bytes(b"x")
         os.utime(clip.with_suffix(".jpg"), (old, old))
+    # Drawings go with their clip, made whenever; a highlight's are its own.
+    drawings = ["kept 12m34s.png", "expired 0m05s.png", "expired 0m05s (2).png",
+                "expired highlight 1m00s-2m00s 0m10s.png"]
+    for name in drawings:
+        (cfg.clips_dir / name).write_bytes(b"x")
     assert cleanup(cfg) == 1
     assert kept.exists() and kept.with_suffix(".json").exists() and kept.with_suffix(".jpg").exists()
     assert not expired.exists() and not expired.with_suffix(".json").exists()
     assert not expired.with_suffix(".jpg").exists()
+    assert sorted(f.name for f in cfg.clips_dir.glob("*.png")) == [
+        "expired highlight 1m00s-2m00s 0m10s.png", "kept 12m34s.png"]
 
 
 def test_cleanup_never_deletes_recordings_not_cut_yet(tmp_path):
@@ -330,3 +337,29 @@ def test_add_casts_fills_in_older_clips(tmp_path):
     assert "casts" not in read_sidecar(cfg.clips_dir / "gone.mp4")   # its log is gone
     session = read_sidecar(cfg.processed_dir / "rec.mkv")
     assert session["casts"] == [[15.0, 1, 0], [60.0, 2, 0]] and session["player"] == "Me-Realm-US"
+
+
+def test_clearable_logs_keep_what_a_recording_or_wow_still_needs(tmp_path, monkeypatch):
+    logs = tmp_path / "Logs"
+    (logs / "archive").mkdir(parents=True)
+    now = datetime.datetime(2026, 10, 26, 18, 0).timestamp()
+    monkeypatch.setattr(clips.time, "time", lambda: now)
+
+    def log(opened: datetime.datetime, last_write: float) -> Path:
+        f = logs / f"WoWCombatLog-{opened:%m%d%y_%H%M%S}.txt"
+        f.write_text("x")
+        os.utime(f, (last_write, last_write))
+        return f
+
+    old = log(datetime.datetime(2026, 10, 25, 20, 0), now - 86400)
+    waited_for = log(datetime.datetime(2026, 10, 26, 12, 0), now - 3 * 3600)
+    open_now = log(datetime.datetime(2026, 10, 26, 16, 0), now - 60)   # WoW is writing it
+    (logs / "archive" / "WoWCombatLog-102026_100000.txt").write_text("x")   # another addon's
+    rec = tmp_path / "2026-10-26_12-30-00.mkv"   # waiting to be cut, 12:30 to 13:30
+    rec.write_text("")
+    os.utime(rec, (now - 4.5 * 3600, now - 4.5 * 3600))
+    monkeypatch.setattr(clips, "recording_span", lambda p: (now - 5.5 * 3600, now - 4.5 * 3600))
+    assert clips.combat_logs(logs) == [old, waited_for, open_now]
+    assert clips.clearable_logs(logs, [rec]) == ([old], 2)
+    assert clips.clearable_logs(logs, []) == ([old, waited_for], 1)
+    assert clips.clearable_logs(None, []) == ([], 0)

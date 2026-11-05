@@ -20,10 +20,12 @@ MAX_WEBHOOKS = 25
 # Webhook message events: key -> (on by default, description shown in setup and in the config file).
 NOTIFY_EVENTS = {
     "session_started":  (False, "WoW started and recording began"),
+    "combat_log_started": (False, "WoW started writing a combat log"),
     "session_ended":    (False, "WoW closed and the recording was saved"),
     "clips_ready":      (True,  "Clips are ready after a session"),
     "no_runs":          (False, "A session ended with no dungeon runs or raid pulls in it"),
     "no_combat_log":    (True,  "No combat log covers a session (combat logging off?)"),
+    "combat_log_off":   (True,  "WoW has been running a while and no combat log is being written"),
     "recording_failed": (True,  "The recorder didn't start, or stopped mid-session"),
     "low_disk_space":   (True,  "Free space in the output folder is low"),
     "clip_failed":      (True,  "A clip couldn't be cut"),

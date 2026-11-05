@@ -56,6 +56,35 @@ def pending_recordings(cfg: Config) -> list[Path]:
     return sorted(found, key=lambda f: f.stat().st_mtime)
 
 
+# A combat log written to this recently may be the one WoW has open.
+LOG_IN_USE = 600
+
+
+def combat_logs(log_dir: Path | None) -> list[Path]:
+    """WoW's own combat logs, right in its Logs folder (not other addons' archives in it)."""
+    if not log_dir or not log_dir.is_dir():
+        return []
+    return sorted(f for f in log_dir.glob("WoWCombatLog*.txt") if f.is_file())
+
+
+def clearable_logs(log_dir: Path | None, pending: list[Path]) -> tuple[list[Path], int]:
+    """The combat logs nothing needs any more: not one a recording waiting to be cut (or being
+    made) needs, nor one written in the last LOG_IN_USE seconds. Returns them, and how many
+    are kept."""
+    logs = combat_logs(log_dir)
+    needed: set[Path] = set()
+    for rec in pending:
+        try:
+            # A recording that can't be read keeps every log up to its last write.
+            start, end = recording_span(rec) or (0.0, rec.stat().st_mtime)
+        except OSError:
+            continue   # cut and moved meanwhile
+        needed.update(combat_logs_between(log_dir, start, end))
+    now = time.time()
+    keep = {f for f in logs if f in needed or now - f.stat().st_mtime < LOG_IN_USE}
+    return [f for f in logs if f not in keep], len(keep)
+
+
 def recording_span(path: Path) -> tuple[float, float] | None:
     """(start, end) of a recording as Unix times: it ends at its last write, and starts its
     duration earlier. Falls back on the time in the file name if ffprobe can't read it."""
@@ -122,6 +151,16 @@ def sidecar_path(clip: Path) -> Path:
 def thumbnail_path(clip: Path) -> Path:
     """The clip's picture for the clip browser: "<clip>.mp4" -> "<clip>.jpg"."""
     return clip.with_suffix(".jpg")
+
+
+def drawings(clip: Path) -> list[Path]:
+    """The pictures drawn on the clip, beside it: "<clip> 12m34s.png", "<clip> 12m34s (2).png"
+    (the clips window's save_drawing)."""
+    name = re.compile(re.escape(clip.stem) + r" \d+m\d{2}s(?: \(\d+\))?\.png")
+    try:
+        return [f for f in clip.parent.iterdir() if name.fullmatch(f.name)]
+    except OSError:
+        return []
 
 
 def thumbnail_time(details: dict) -> float:
@@ -474,7 +513,7 @@ def stale_recordings(cfg: Config) -> list[Path]:
 def cleanup(cfg: Config) -> int:
     """Deletes cut recordings (processed/) and clips older than their retention, except those
     marked keep. Recordings not cut yet (sessions/) are never deleted; see stale_recordings.
-    Returns the count (a video and its details and picture count as one)."""
+    Returns the count (a video and its details, picture and drawings count as one)."""
     deleted = 0
     for folders, days in (((cfg.processed_dir,), cfg.session_retention_days),
                           ((cfg.clips_dir,), cfg.clip_retention_days)):
@@ -485,8 +524,9 @@ def cleanup(cfg: Config) -> int:
             if not folder.is_dir():
                 continue
             for f in folder.iterdir():
-                # Details and pictures go with their video, below; one whose video is gone is left.
-                if f.suffix in (".json", ".jpg"):
+                # Details, pictures and drawings go with their video, below; one whose video is
+                # gone is left.
+                if f.suffix in (".json", ".jpg", ".png"):
                     continue
                 try:
                     if not f.is_file() or f.stat().st_mtime >= cutoff:
@@ -497,6 +537,8 @@ def cleanup(cfg: Config) -> int:
                     f.unlink()
                     sidecar_path(f).unlink(missing_ok=True)
                     thumbnail_path(f).unlink(missing_ok=True)
+                    for drawing in drawings(f):
+                        drawing.unlink(missing_ok=True)
                     deleted += 1
                 except OSError as e:
                     log.warning(f"Couldn't delete {f}: {e}")

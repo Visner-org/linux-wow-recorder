@@ -45,6 +45,9 @@ _URL = re.compile(r"https?://[^\s\"'<>]+", re.IGNORECASE)
 # Not part of a longer dotted number or name (a version like 1.2.3.4.5, libfoo-1.2.3.4).
 _IPV4 = re.compile(r"(?<![\w.-])(?!127\.0\.0\.1\b)(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}"
                    r"(?:25[0-5]|2[0-4]\d|1?\d?\d)(?![\w-]|\.\d)")
+# A four-part version (a local build, 1.2.5.1) looks like an address: kept after the words the
+# app's own version follows ("Version 1.2.5.1 was installed", "Linux WoW Recorder 1.2.5.1 on").
+_VERSION_BEFORE = re.compile(r"(?:version|recorder|app) $", re.IGNORECASE)
 _LOG_LINE = re.compile(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} \[[A-Z]+\] ")   # FORMAT's
 _crash_file = None   # kept open for faulthandler
 
@@ -81,7 +84,11 @@ def clean(text: str, webhooks: list[str] = ()) -> str:
     text = _WEBHOOK.sub("<webhook URL>", text)
     for pattern, label in _IDENTITY:
         text = pattern.sub(label, text)
-    return _IPV4.sub("<IP>", text)
+    return _IPV4.sub(_ip, text)
+
+
+def _ip(m: re.Match) -> str:
+    return m.group(0) if _VERSION_BEFORE.search(m.string[max(0, m.start() - 9):m.start()]) else "<IP>"
 
 
 class _CleanFilter(logging.Filter):

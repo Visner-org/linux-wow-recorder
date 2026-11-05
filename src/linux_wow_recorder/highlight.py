@@ -27,11 +27,12 @@ def command(clip: Path, start: float, end: float, part: Path) -> list[str]:
     return cut_command(clip, start, end - start, part, faststart=True)
 
 
-def details(clip_details: dict, source: Path, start: float, end: float) -> dict:
+def details(clip_details: dict, source: Path, start: float, end: float,
+            session: bool = False) -> dict:
     """The highlight's details: the clip's run, with only the bosses, deaths, lusts and casts
     inside start..end, their times counted from the highlight's start. A boss pull cut off at
     either end is kept, clamped to the highlight (still going at its end: no end, as in a
-    clip)."""
+    clip). session: made from a full session, so it's listed there."""
     length = end - start
 
     def at(t: float | None) -> float | None:
@@ -65,7 +66,7 @@ def details(clip_details: dict, source: Path, start: float, end: float) -> dict:
         "bosses_killed": sum(1 for e in encounters if e.get("killed") and e.get("end") is not None),
         "keep": False,
         "highlight": {"of": source.name, "start": round(start, 1), "end": round(end, 1),
-                      "length": length_text(length)},
+                      "length": length_text(length), **({"session": True} if session else {})},
     })
     offset = at(clip_details.get("run_offset"))
     if offset is not None:

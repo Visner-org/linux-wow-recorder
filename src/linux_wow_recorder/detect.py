@@ -5,7 +5,10 @@ builds of those), it ends up as a Wine process whose command line names the game
 host sees processes inside Flatpak sandboxes too, so one scan of /proc covers all of them.
 """
 
+import os
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 # Wow.exe, WowT.exe (PTR), WowB.exe (beta), WowClassic.exe, WowClassicT.exe, WowClassicB.exe,
@@ -92,3 +95,46 @@ def find_wow() -> str | None:
     """The flavor of the WoW client running now ("Retail", "Classic", ...), or None."""
     found = find_wow_process()
     return found[0] if found else None
+
+
+def x_display() -> dict[str, str]:
+    """DISPLAY and XAUTHORITY as the desktop has them now. A service started at boot runs
+    before the desktop hands them to systemd, so its own environment has none; and
+    XAUTHORITY changes with each login."""
+    found = {k: os.environ[k] for k in ("DISPLAY", "XAUTHORITY") if os.environ.get(k)}
+    try:
+        out = subprocess.run(["systemctl", "--user", "show-environment"], capture_output=True,
+                             text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return found
+    for line in out.splitlines():
+        key, _, value = line.partition("=")
+        if key in ("DISPLAY", "XAUTHORITY") and value:
+            found[key] = value
+    return found
+
+
+def _xprop(display: dict[str, str], *args: str) -> str:
+    return subprocess.run(["xprop", *args], capture_output=True, text=True, timeout=5,
+                          check=True, env={**os.environ, **display}).stdout
+
+
+def wow_window(pid: int) -> bool | None:
+    """True once WoW's window is up: an X11 window of process pid, or one named "World of
+    Warcraft" (a Flatpak's Wine has process IDs of its own). Wine draws through XWayland unless
+    told otherwise. None if that can't be told: no X display, no xprop, Wine's Wayland driver."""
+    display = x_display()
+    if not display.get("DISPLAY") or not shutil.which("xprop"):
+        return None
+    try:
+        listed = _xprop(display, "-root", "_NET_CLIENT_LIST")
+        if "#" not in listed:
+            return None
+        for window in re.findall(r"0x[0-9a-fA-F]+", listed.partition("#")[2]):
+            props = _xprop(display, "-id", window, "_NET_WM_PID", "_NET_WM_NAME")
+            if re.search(rf"_NET_WM_PID\(CARDINAL\) = {pid}$", props, re.MULTILINE) or \
+                    '= "World of Warcraft"' in props:
+                return True
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return False

@@ -38,6 +38,10 @@ def test_a_highlight_keeps_only_what_happens_inside_it():
     assert d["casters"] == ["Me-Realm-US"]
 
 
+def test_a_highlight_of_a_full_session_says_so():
+    assert highlight.details(DETAILS, Path("a.mkv"), 20.0, 60.0, session=True)["highlight"]["session"]
+
+
 def test_the_run_start_stays_when_its_inside():
     assert highlight.details(DETAILS, Path("a.mp4"), 20.0, 60.0)["run_offset"] == 10.0
 

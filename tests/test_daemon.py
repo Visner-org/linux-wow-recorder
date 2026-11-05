@@ -101,6 +101,7 @@ def make(tmp_path, monkeypatch):
         monkeypatch.setattr(daemon, "cleanup", lambda cfg: 0)
         monkeypatch.setattr(daemon, "stale_recordings", lambda cfg: stale)
         monkeypatch.setattr(daemon, "wow_alive", lambda pid: False)
+        monkeypatch.setattr(daemon, "wow_window", lambda pid: True)
         d = daemon.Daemon(cfg)
         d.recorder = FakeRecorder(cfg, works)
         d.notifier = FakeNotifier()
@@ -518,11 +519,100 @@ def test_waiting_for_a_pick_isnt_recording(make):
     assert d.status.data["recording_file"] is None
     for _ in range(daemon.MAX_RESTARTS + 1):   # waiting, not dead: never restarted
         d.check_session(100)
-    assert d.recorder.starts == 1
+    assert d.recorder.starts == 1 and "session_started" not in d.notifier.sent
     d.recorder.waiting = False                 # picked
     d.check_session(100)
     assert d.status.data["state"] == state.RECORDING and d.status.data["problem"] is None
     assert d.status.data["recording_file"] == str(d.recorder.file)
+    assert d.notifier.sent == ["session_started"]
+
+
+def test_the_dialog_waits_for_wows_window(make, monkeypatch):
+    d, clock, _ = make()
+    shown = types.SimpleNamespace(now=False)
+    monkeypatch.setattr(daemon, "wow_window", lambda pid: shown.now)
+    d.start_session("Retail", "Wow.exe", pid=100)
+    assert d.recorder.starts == 0 and "session_started" not in d.notifier.sent
+    for _ in range(3):   # still loading: not a dead recorder
+        clock.now += 5
+        d.check_session(100)
+    assert d.recorder.starts == 0 and d.session.restarts == 0
+    shown.now = True
+    d.check_session(100)
+    assert d.recorder.starts == 0              # settling
+    clock.now += daemon.WINDOW_SETTLE
+    d.check_session(100)
+    assert d.recorder.starts == 1 and d.status.data["state"] == state.RECORDING
+    assert d.notifier.sent == ["session_started"]
+
+
+def test_the_dialog_opens_anyway_if_wows_window_isnt_seen(make, monkeypatch):
+    d, clock, _ = make()
+    monkeypatch.setattr(daemon, "wow_window", lambda pid: False)
+    d.start_session("Retail", "Wow.exe", pid=100)
+    clock.now += daemon.WINDOW_WAIT
+    d.check_session(100)
+    assert d.recorder.starts == 1
+
+
+def test_a_monitor_doesnt_wait_for_wows_window(make, monkeypatch):
+    d, _, _ = make()
+    d.cfg.capture = "DP-2"
+    monkeypatch.setattr(daemon, "wow_window", lambda pid: False)
+    d.start_session("Retail", "Wow.exe", pid=100)
+    assert d.recorder.starts == 1
+
+
+def test_a_restarted_wow_isnt_recording_while_its_window_loads(make, monkeypatch):
+    d, clock, _ = make()
+    d.start_session("Retail", "Wow.exe", pid=100)
+    shown = types.SimpleNamespace(now=False)
+    monkeypatch.setattr(daemon, "wow_window", lambda pid: shown.now)
+    d.check_session(200)   # closed and started again between two polls
+    assert d.recorder.starts == 1 and d.status.data["state"] != state.RECORDING
+    shown.now = True
+    d.check_session(200)
+    clock.now += daemon.WINDOW_SETTLE
+    d.check_session(200)
+    assert d.recorder.starts == 2 and d.status.data["state"] == state.RECORDING
+    assert d.notifier.sent == ["session_started"]   # once a session
+
+
+def test_the_window_closed_warning_goes_once_the_window_waited_for_records(make, monkeypatch):
+    d, clock, _ = make()
+    d.start_session("Retail", "Wow.exe", pid=100)
+    d.recorder.lost = True
+    d.check_session(100)   # its window closed; WoW is still there
+    clock.now += daemon.CAPTURE_NOTICE
+    d.check_session(100)
+    assert "window closed" in d.status.data["problem"]
+    shown = types.SimpleNamespace(now=False)
+    monkeypatch.setattr(daemon, "wow_window", lambda pid: shown.now)
+    clock.now += daemon.CAPTURE_RETRY
+    d.check_session(100)
+    shown.now = True
+    d.check_session(100)
+    clock.now += daemon.WINDOW_SETTLE
+    d.check_session(100)
+    assert d.status.data["state"] == state.RECORDING and d.status.data["problem"] is None
+
+
+def test_a_new_wow_waiting_for_a_pick_still_says_so(make):
+    d, _, _ = make()
+    d.start_session("Retail", "Wow.exe", pid=100)
+    d.recorder.picking = True
+    d.check_session(200)   # a new WoW: KDE couldn't restore the pick
+    assert d.status.data["problem"] == daemon.PICK_PROBLEM
+
+
+def test_nothing_picked_sends_no_session_messages(make):
+    d, _, _ = make()
+    d.recorder.picking = True
+    d.start_session("Retail", "Wow.exe", pid=100)
+    d.recorder.running = False   # the dialog was closed
+    d.check_session(100)
+    d.end_session()
+    assert d.notifier.sent == []
 
 
 def test_closing_the_dialog_without_a_pick_ends_this_sessions_recording(make):
@@ -759,3 +849,52 @@ def test_a_launcher_process_found_first_isnt_a_wow_restart(make, monkeypatch):
     monkeypatch.setattr(daemon, "wow_alive", lambda pid: False)
     d.check_session(300)
     assert d.recorder.starts == 1
+
+
+def test_a_missing_combat_log_is_warned_about_once(make, tmp_path):
+    d, clock, _ = make()
+    (tmp_path / "logs").mkdir()
+    d.start_session("Retail")
+    clock.now += daemon.LOG_CHECK_AFTER - 1
+    d.check_session()
+    assert "combat_log_off" not in d.notifier.sent
+    clock.now += daemon.LOG_RECHECK_INTERVAL
+    d.check_session()
+    clock.now += daemon.LOG_RECHECK_INTERVAL
+    d.check_session()
+    assert d.notifier.sent.count("combat_log_off") == 1
+    assert "combat log" in d.status.data["problem"]
+
+
+def test_combat_log_warning_goes_away_once_a_log_is_written(make, tmp_path):
+    d, clock, _ = make()
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    d.start_session("Retail")
+    clock.now += daemon.LOG_CHECK_AFTER + 1
+    d.check_session()
+    assert "combat log" in d.status.data["problem"]
+    stamp = datetime.datetime.fromtimestamp(clock.now).strftime("%m%d%y_%H%M%S")
+    (logs / f"WoWCombatLog-{stamp}.txt").write_text("x")
+    os.utime(logs / f"WoWCombatLog-{stamp}.txt", (clock.now, clock.now))
+    clock.now += daemon.LOG_RECHECK_INTERVAL + 1
+    d.check_session()
+    assert d.status.data["problem"] is None
+    assert d.notifier.sent.count("combat_log_off") == 1
+    assert d.notifier.sent.count("combat_log_started") == 1
+
+
+def test_no_warning_when_a_combat_log_is_being_written(make, tmp_path):
+    d, clock, _ = make()
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    d.start_session("Retail")
+    stamp = datetime.datetime.fromtimestamp(clock.now).strftime("%m%d%y_%H%M%S")
+    (logs / f"WoWCombatLog-{stamp}.txt").write_text("x")
+    os.utime(logs / f"WoWCombatLog-{stamp}.txt", (clock.now, clock.now))
+    d.check_session()
+    assert d.notifier.sent.count("combat_log_started") == 1   # right away, not 10 minutes in
+    clock.now += daemon.LOG_CHECK_AFTER + 1
+    d.check_session()
+    assert "combat_log_off" not in d.notifier.sent
+    assert d.notifier.sent.count("combat_log_started") == 1

@@ -15,6 +15,7 @@ _COLORS = {             # (light, dark)
     "good": ("#176f30", "#4cc26b"),       # text and chip outline: completed, all fine
     "warning": ("#8a5300", "#f0b44c"),    # text: something to look at
     "error": ("#c4312f", "#ff7b72"),      # text: something that stops recording
+    "highlight": ("#7b3fc4", "#b98af0"),  # chip outline: a highlight of a full session
 }
 
 

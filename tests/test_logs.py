@@ -151,6 +151,10 @@ def test_the_update_check_asks_github_only():
 
 def test_ip_addresses_go_but_version_numbers_stay():
     assert logs.clean("peer 192.168.1.20:443, ip=10.0.0.5.") == "peer <IP>:443, ip=<IP>."
+    for line in ("Version 1.2.5.1 was installed; restarting into it.",
+                 "Linux WoW Recorder 1.2.5.1 on Nobara Linux 44", "Desktop app 1.2.5.1 on Fedora"):
+        assert logs.clean(line) == line   # a local build's version, not an address
+    assert logs.clean("server 10.0.0.5 on version 3") == "server <IP> on version 3"
     for text in ("libfoo-1.2.3.4", "version 1.2.3.4.5", "v1.2.3.4", "999.1.1.1"):
         assert logs.clean(text) == text
 

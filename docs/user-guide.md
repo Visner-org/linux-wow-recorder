@@ -77,7 +77,7 @@ And in WoW:
 ### Nobara or Fedora (RPM)
 
 ```bash
-sudo dnf install ./linux-wow-recorder-1.2.5-1.fc44.noarch.rpm
+sudo dnf install ./linux-wow-recorder-1.2.7-1.fc44.noarch.rpm
 ```
 
 dnf installs ffmpeg and Qt from your distro's repos along with it, and on Nobara
@@ -122,7 +122,7 @@ For Ubuntu 25.10 and newer (26.04 is tested) and Debian 13. Download the `.deb` 
 [Releases](https://github.com/Visner-org/linux-wow-recorder/releases) page, then:
 
 ```bash
-sudo apt install ./linux-wow-recorder_1.2.5-1_all.deb
+sudo apt install ./linux-wow-recorder_1.2.7-1_all.deb
 flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
 flatpak install --user flathub com.dec05eba.gpu_screen_recorder
 ```
@@ -201,8 +201,7 @@ Open **Linux WoW Recorder** from the app menu (or run `linux-wow-recorder-gui`).
 a short setup opens by itself, in three steps:
 
 1. **Folders**: the combat log folder and the output folder (the Browse buttons help). Under
-   each, a line says what it found: the newest combat log, or the free space. **WoW addon** is
-   optional: leave it unless keys go missing from your logs ([below](#the-wow-addon)).
+   each, a line says what it found: the newest combat log, or the free space.
 2. **What to record**: the capture, frame rate and quality, and the sound. "Record" starts on
    "A window or screen you pick": the test recording opens the screen-share dialog, where you
    choose the WoW window or its monitor.
@@ -236,9 +235,13 @@ config file (see the [reference](reference.md#config-file)).
 
 - **A window or screen you pick** (`portal`, the default): Wayland's own screen-share dialog. Pick the WoW
   window to record only WoW: notifications and other windows stay out of the video, and
-  alt-tabbing shows WoW's last frame instead of your desktop. A picked screen is remembered;
-  whether a picked window is remembered from one WoW session to the next depends on your desktop,
-  so the dialog may come back each time. It never needs root. Nothing is recorded until you pick:
+  alt-tabbing shows WoW's last frame instead of your desktop. The dialog opens a few seconds
+  after WoW's window shows up, so it lands on top of WoW instead of behind it. A picked screen
+  is remembered. A picked window is remembered on KDE Plasma: the next time you start WoW,
+  recording starts without the dialog. GNOME asks every time you start WoW. Waiting for WoW's
+  window needs `xprop`, which most desktops have; without it the dialog opens right away (on
+  KDE that means it asks every time), and if no window is seen it opens after a minute. It
+  never needs root. Nothing is recorded until you pick:
   while the dialog waits (it can open behind WoW), the tray and the clips window say so and
   offer **Record monitor instead**, which records the monitor set under "Monitor instead" for
   the rest of that session. Picked the wrong window? **Pick another window** (tray menu, or under
@@ -279,8 +282,9 @@ Before you install it:
 
 - **It logs more than you may want.** It turns logging on in every dungeon and raid, Normal and
   LFR too, and leaves it on until you log out or type `/combatlog`. WoW never deletes combat
-  logs, and a night of keys can be a few hundred MB, so clear out `_retail_/Logs` now and then
-  (the app only reads them).
+  logs, and a night of keys can be a few hundred MB. The same Settings page shows how much room
+  they take, and **Clear old logs...** moves the ones nothing needs to the trash: it keeps the
+  logs a recording still waits to be cut from, and the one WoW is writing.
 - **It changes a WoW setting.** Advanced Combat Logging stays on after you remove the addon;
   turn it off in Options > Network if you want it off.
 - **It's not from CurseForge or Wago.** Addon managers don't know it and won't update it; the
@@ -290,11 +294,11 @@ Before you install it:
 - **After a big WoW patch** it shows as out of date until the app's next version.
 - An addon can't show you a key it missed: keys logged before you install it stay as they are.
 
-**Installing it:** Settings > Folders and capture > **WoW addon: Install** (it asks first), or
+**Installing it:** Settings > **WoW addon** > **Install** (it asks first), or
 `linux-wow-recorder install-addon`. It goes into the AddOns folder of the WoW your combat log
 folder belongs to (`_retail_/Interface/AddOns/LinuxWoWRecorder`). Then `/reload` in WoW, or log
-in again. When the app updates, the service updates the addon too. **Removing it:** delete that
-folder, or untick it in WoW's AddOns list. Uninstalling the app removes it.
+in again. When the app updates, the service updates the addon too. **Removing it:** **Remove**
+on the same page, or untick it in WoW's AddOns list. Uninstalling the app removes it.
 
 After a big WoW patch, WoW may list it as out of date until the app's next version: tick **Load
 out of date AddOns** in the AddOns list meanwhile.
@@ -398,12 +402,16 @@ at login).
     Heroism, Time Warp, Primal Rage, Fury of the Aspects, Harrier's Cry, drums)
 
   Hover to see what's there. Click a pull, death or lust to play from a few seconds before it;
-  click anywhere else to go there.
+  click anywhere else to go there. Hold the button down and drag to scrub back and forth: the
+  video pauses while you hold it (and stays still when the pointer does), then plays on when
+  you let go if it was playing.
 - **Casts**: a strip under the video shows the spells cast around where the video is,
   scrolling as it plays. The line is now: casts to its left are done, those to its right are
   coming up (paler). Each spell keeps its colour through the clip (each player's ten most cast;
   the rest are grey); a thin bar before a cast shows its cast time. Hover a cast for who cast
-  it, its name and time; click it to play from just before it. **Casts** after the time (or C)
+  it, its name and time; click it to play from just before it. Grab the strip and drag it to
+  scrub: pull the casts left to go forward, right to go back. The video pauses while you hold
+  it, then plays on when you let go if it was playing. **Casts** after the time (or C)
   shows or hides the strip; its arrow has a tick for each player in the clip (yours only at
   first, "Only you" and "Everyone" at the bottom), and each one ticked gets a lane with their
   name. **Major cooldowns only** at its top shows just the big spells, coloured by kind: damage
@@ -435,7 +443,8 @@ at login).
   **Done**, Esc, playing or seeking goes back to the video and saves the picture beside the
   clip, named after it with the moment ("... 12m34s.png"); for a clip in a read-only folder,
   in your clips folder. Nothing drawn, nothing saved. **Copy** also puts it on the clipboard,
-  to paste into Discord. The picture is the video's full size.
+  to paste into Discord. The picture is the video's full size. "Keep clips" deletes the
+  pictures along with their clip; a kept clip's stay.
 - **Keys**: space plays and pauses; the left and right arrows skip 5 seconds; I and O mark a
   highlight's start and end; C shows or hides your casts; D draws on the moment; F goes full
   screen and back (Esc leaves it too).
@@ -483,6 +492,7 @@ the channel's or community's settings > Webhooks. Then choose which messages to 
 | Message | Sent when | On by default |
 |---|---|---|
 | WoW started | WoW started and recording began | no |
+| Combat logging started | WoW started writing a combat log | no |
 | WoW closed | WoW closed and the recording was saved | no |
 | Clips ready | clips were cut, listing each run with bosses killed, deaths and lusts | yes |
 | No runs | a session had no dungeon runs or raid pulls | no |
@@ -582,13 +592,15 @@ ask; normal clips are never changed.
 
 The copy is saved beside the clip as "... (chat hidden).mp4" (in `clips/` if the clip's folder
 is read only) and shows up in the list like any clip, so the YouTube button works on it too.
+A full session gets a copy too once it's been cut, listed under Full sessions.
 
 - The box is in the same spot for the whole clip. If you move your chat frame in WoW, move
   the box too.
 - The video has to be encoded again, unlike cutting. With an NVIDIA card that takes about a
   seventh of the clip's length (a 20-minute clip: about 3 minutes); on AMD or Intel graphics
   (VA-API) or the CPU it's slower.
-- The copy is deleted after "Keep clips" days like other clips; ☆ Keep it to keep it.
+- The copy is deleted after "Keep clips" days like other clips (a full session's after "Keep
+  full recordings" days); ☆ Keep it to keep it.
 
 ### Keeping clips somewhere else
 

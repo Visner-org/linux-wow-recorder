@@ -46,10 +46,13 @@ PREVIEW_PAUSED = "Recording active, preview paused to save resources"
 class Timeline(QWidget):
     """The clip as a scrub bar with lanes: boss pulls as spans above it (kill or wipe), deaths
     and lusts below it, and a small legend. Clicking an event jumps a few seconds before it;
-    clicking anywhere else seeks there. Hovering names what's under the pointer. While a
-    highlight is being made, its start and end are shown on the track and can be dragged."""
+    clicking anywhere else seeks there. Holding the button down and dragging scrubs through the
+    clip, paused. Hovering names what's under the pointer. While a highlight is being made, its
+    start and end are shown on the track and can be dragged."""
     seek = Signal(float)
     marks_changed = Signal(float, float)   # a highlight's start or end was dragged
+    scrub_started = Signal()   # the button went down on the timeline: the player pauses
+    scrub_ended = Signal()     # and up again: it plays on if it was playing
 
     PAD = 8           # left and right margin, px
     SNAP = 6          # px: a click this close to an event jumps to it
@@ -70,6 +73,8 @@ class Timeline(QWidget):
         self.markers: list[model.Marker] = []   # every event, for snapping and tooltips
         self.marks: tuple[float, float] | None = None   # the highlight being made
         self.dragging: int | None = None   # 0: its start, 1: its end
+        self.scrubbing = False
+        self.scrub_from: float | None = None   # x of the press, until the pointer moves away
 
     def sizeHint(self) -> QSize:
         return QSize(400, 70)
@@ -89,6 +94,8 @@ class Timeline(QWidget):
         self.position, self.marks = position, marks
 
     def set_position(self, seconds: float):
+        if self.scrubbing:
+            return   # the pointer has the playhead; the player catches up
         self.position = seconds
         self.update()
 
@@ -215,14 +222,19 @@ class Timeline(QWidget):
         self.dragging = self._mark_at(x, y)
         if self.dragging is not None:
             return
+        self.scrubbing, self.scrub_from = True, x
+        self.scrub_started.emit()
         near = self._near(x)
         boss = self._boss_at(x, y)
         if near:
-            self.seek.emit(model.seek_target(min(near, key=lambda m: abs(self._x(m.at) - x)).at))
+            at = model.seek_target(min(near, key=lambda m: abs(self._x(m.at) - x)).at)
         elif boss:
-            self.seek.emit(model.seek_target(boss.start))
+            at = model.seek_target(boss.start)
         else:
-            self.seek.emit(self._seconds(x))
+            at = self._seconds(x)
+        self.position = at
+        self.update()
+        self.seek.emit(at)
 
     def mouseMoveEvent(self, event):
         if not self.length:
@@ -237,6 +249,14 @@ class Timeline(QWidget):
             self.set_marks(tuple(marks))
             self.marks_changed.emit(*self.marks)
             return
+        if self.scrubbing:
+            if self.scrub_from is not None and abs(x - self.scrub_from) < 3:
+                return   # still a click: it keeps the event it snapped to
+            self.scrub_from = None
+            self.position = self._seconds(x)
+            self.update()
+            self.seek.emit(self.position)
+            return
         self.setCursor(Qt.SizeHorCursor if self._mark_at(x, y) is not None else Qt.PointingHandCursor)
         names = [f"{model.mmss(m.at)}  {m.text}" for m in self._near(x)]
         boss = self._boss_at(x, y)
@@ -249,14 +269,19 @@ class Timeline(QWidget):
 
     def mouseReleaseEvent(self, event):
         self.dragging = None
+        if self.scrubbing:
+            self.scrubbing = False
+            self.scrub_ended.emit()
 
 
 class CastStrip(QWidget):
     """The spells cast around where the video is, a lane per player shown: a box per cast with
     the spell's name, scrolling as the video plays, the newest at the playhead line. A hard cast
     has a thin bar back to where it started. Clicking a cast plays from just before it; hovering
-    names it."""
+    names it. Grabbing it and dragging scrubs through the video, paused while held."""
     seek = Signal(float)
+    scrub_started = Signal()   # the button went down on the strip: the player pauses
+    scrub_ended = Signal()     # and up again: it plays on if it was playing
 
     BEFORE, AFTER = 12.0, 4.0   # seconds shown before and after the playhead
     WIDER = 5         # major cooldowns only: that many times more, as they're few
@@ -285,6 +310,9 @@ class CastStrip(QWidget):
         self.ticker = QTimer(self, interval=33)
         self.ticker.timeout.connect(self.update)
         self.boxes: list[tuple[QRectF, model.CastMark]] = []   # as last painted
+        self.length = 0.0   # the clip's, to stop a drag at its end (0: not known)
+        self.grab_at: tuple[float, float] | None = None   # (x, video position) where the button went down
+        self.dragged = False
         self.set_shown([])
 
     def set_casts(self, casts: list[model.CastMark], you: str | None = None):
@@ -316,6 +344,8 @@ class CastStrip(QWidget):
         return self.PAD + (self.LABEL if len(self.shown) > 1 else 0)
 
     def set_position(self, seconds: float):
+        if self.dragged:
+            return   # the pointer has the strip; the player catches up
         self.position = seconds
         self.since.restart()
         self.update()
@@ -326,7 +356,8 @@ class CastStrip(QWidget):
         self.rate = rate
 
     def set_playing(self, playing: bool):
-        self.position = self.now()
+        if not self.dragged:
+            self.position = self.now()
         self.since.restart()
         self.playing = playing
         if playing and self.isVisible():
@@ -440,15 +471,41 @@ class CastStrip(QWidget):
     def mousePressEvent(self, event):
         if event.button() != Qt.LeftButton:
             return
-        x, y = event.position().x(), event.position().y()
-        cast = self._cast_at(x, y)
-        now = self.now()
-        self.seek.emit(max(0.0, cast.at - self.LEAD_IN) if cast
-                       else max(0.0, now + (x - self._x(now, now)) / self._scale()))
+        self.scrub_started.emit()   # paused first, so now() holds still
+        self.grab_at, self.dragged = (event.position().x(), self.now()), False
 
     def mouseMoveEvent(self, event):
-        cast = self._cast_at(event.position().x(), event.position().y())
+        x = event.position().x()
+        if self.grab_at is not None:
+            if not self.dragged and abs(x - self.grab_at[0]) < 3:
+                return   # still a click
+            if not self.dragged:
+                self.dragged = True
+                self.setCursor(Qt.ClosedHandCursor)
+                QToolTip.hideText()
+            # Like dragging a map: pulling the casts left brings later ones to the line.
+            to = max(0.0, self.grab_at[1] - (x - self.grab_at[0]) / self._scale())
+            self.position = min(to, self.length) if self.length else to
+            self.update()
+            self.seek.emit(self.position)
+            return
+        cast = self._cast_at(x, event.position().y())
         self.setToolTip(model.cast_text(cast) if cast else "")
+
+    def mouseReleaseEvent(self, event):
+        if self.grab_at is None:
+            return
+        if self.dragged:
+            self.dragged = False
+            self.setCursor(Qt.PointingHandCursor)
+        else:   # a click: a cast plays from just before it, anywhere else from there
+            x, y = event.position().x(), event.position().y()
+            cast = self._cast_at(x, y)
+            now = self.now()
+            self.seek.emit(max(0.0, cast.at - self.LEAD_IN) if cast
+                           else max(0.0, now + (x - self._x(now, now)) / self._scale()))
+        self.grab_at = None
+        self.scrub_ended.emit()
 
 
 class StayOpenMenu(QMenu):
@@ -465,6 +522,7 @@ class StayOpenMenu(QMenu):
 class ClipBrowser(QWidget):
     closed = Signal()   # the window was closed; the app stays in the tray
     settings_requested = Signal()
+    SCRUB_WAIT_MS = 500   # a scrub's seek that shows no frame stops holding up the next after this
     def __init__(self, service_state=None):
         """service_state(): the service's state, as service.state() words; the tray passes
         what it already knows from systemd's signals."""
@@ -633,6 +691,7 @@ class ClipBrowser(QWidget):
         self.player = QMediaPlayer()
         self.player.setAudioOutput(self.audio)
         self.player.setVideoOutput(self.video)
+        self.video.videoSink().videoFrameChanged.connect(self.scrub_frame)
         self.player.positionChanged.connect(self.on_position)
         self.player.durationChanged.connect(self.on_duration)
         self.player.playbackStateChanged.connect(self.on_state)
@@ -667,6 +726,15 @@ class ClipBrowser(QWidget):
         self.timeline = Timeline()
         self.timeline.seek.connect(self.seek)
         self.timeline.marks_changed.connect(lambda *_: self.show_marks())
+        self.timeline.scrub_started.connect(self.scrub_start)
+        self.timeline.scrub_ended.connect(self.scrub_end)
+        self.scrub_resume = False
+        # While scrubbing, a seek waits for the frame of the one before (35 to 150 ms on a 1440p
+        # clip: it decodes from the keyframe before), and only the newest waits.
+        self.scrubbing = False
+        self.scrub_pending: float | None = None
+        self.scrub_busy = QTimer(self, singleShot=True, interval=self.SCRUB_WAIT_MS)
+        self.scrub_busy.timeout.connect(self.scrub_next)
         self.time_label = QLabel("0:00 / 0:00")
         self.volume = QSlider(Qt.Horizontal)
         self.volume.setRange(0, 100)
@@ -695,6 +763,8 @@ class ClipBrowser(QWidget):
         # them, its menu ticks whose (you, unless other players are ticked).
         self.cast_strip = CastStrip()
         self.cast_strip.seek.connect(self.seek)
+        self.cast_strip.scrub_started.connect(self.scrub_start)
+        self.cast_strip.scrub_ended.connect(self.scrub_end)
         self.casts_menu = StayOpenMenu(self)
         self.casts_button = QToolButton()
         self.casts_button.setText("Casts")
@@ -1097,9 +1167,12 @@ class ClipBrowser(QWidget):
             self.clips = []
         elif self.mode == model.SESSIONS:
             status = state.read() or {}
-            self.clips = model.load_sessions(self.cfg.processed_dir, self.cfg.sessions_dir,
-                                             self.cfg.clips_dir, read_sidecar,
-                                             status.get("recording_file"))
+            highlights = [c for c in model.load_clips(self.cfg.clips_dir, read_sidecar,
+                                                      self.cfg.other_clip_dirs) if c.from_session]
+            self.clips = sorted(model.load_sessions(self.cfg.processed_dir, self.cfg.sessions_dir,
+                                                    self.cfg.clips_dir, read_sidecar,
+                                                    status.get("recording_file")) + highlights,
+                                key=lambda c: c.started, reverse=True)
         else:
             self.clips = model.load_clips(self.cfg.clips_dir, read_sidecar, self.cfg.other_clip_dirs)
         self.fill_list(select=selected)
@@ -1383,6 +1456,7 @@ class ClipBrowser(QWidget):
         self.title.setText(f"{clip.dungeon}, pull {clip.pull}" if clip.pull else f"{clip.dungeon}{level}")
         self.title.setToolTip(str(clip.path))
         self.result_chip.setText(clip.result_text)
+        self.result_chip.setVisible(bool(clip.result_text))
         self.result_chip.setStyleSheet(chip_style(clip.status, self.palette()))
         facts = [time.strftime("%a %Y-%m-%d %H:%M", time.localtime(clip.started))]
         if clip.is_raid:
@@ -1407,7 +1481,7 @@ class ClipBrowser(QWidget):
             facts.append(f"{len(d['lusts'])} lust{'s' if len(d['lusts']) != 1 else ''}")
         try:
             size = clip.path.stat().st_size
-            facts.append(f"{size / 1e9:.1f} GB" if size >= 1e9 else f"{size / 1e6:.0f} MB")
+            facts.append(model.size_text(size))
         except OSError:
             pass
         if d.get("chat_hidden"):
@@ -1453,8 +1527,9 @@ class ClipBrowser(QWidget):
         self.keep_button.setToolTip(
             "Keep this full recording forever, whatever \"Keep full recordings\" says"
             if clip.is_session else "Keep this clip forever, whatever \"Keep clips\" says")
-        self.youtube_button.setVisible(not clip.is_session and self.part_on("youtube"))
-        self.hide_chat_button.setVisible(not clip.is_session and self.part_on("hide_chat"))
+        self.youtube_button.setVisible(self.part_on("youtube"))
+        # A copy goes beside the clip, and one in sessions/ would be cut as a recording.
+        self.hide_chat_button.setVisible(clip.result != "uncut" and self.part_on("hide_chat"))
         self.highlight_button.setVisible(self.can_highlight())
         self.hook_button.setVisible(bool(self.cfg and self.cfg.after_clips) and not clip.is_session
                                     and not clip.elsewhere)
@@ -1495,6 +1570,33 @@ class ClipBrowser(QWidget):
         else:
             self.player.play()
 
+    def scrub_start(self):
+        """Dragging the timeline or the casts: paused, so the frame stays put when the pointer
+        does."""
+        self.scrubbing, self.scrub_pending = True, None
+        self.scrub_resume = self.player.playbackState() == QMediaPlayer.PlayingState
+        self.cast_strip.length = self.clip_seconds()
+        if self.scrub_resume:
+            self.player.pause()
+
+    def scrub_end(self):
+        self.scrubbing = False
+        self.scrub_busy.stop()
+        self.scrub_next()   # where the pointer let go
+        if self.scrub_resume:
+            self.player.play()
+        self.scrub_resume = False
+
+    def scrub_frame(self, _frame):
+        if self.scrub_busy.isActive():   # the frame sought to is up: on to the next
+            self.scrub_busy.stop()
+            self.scrub_next()
+
+    def scrub_next(self):
+        if self.scrub_pending is not None:
+            at, self.scrub_pending = self.scrub_pending, None
+            self.seek(at)
+
     def on_state(self, s):
         playing = s == QMediaPlayer.PlayingState
         self.cast_strip.set_playing(playing)
@@ -1521,7 +1623,12 @@ class ClipBrowser(QWidget):
             self.player.play()
 
     def seek(self, seconds: float):
+        if self.scrubbing and self.scrub_busy.isActive():
+            self.scrub_pending = seconds   # after the frame on its way
+            return
         self.player.setPosition(int(seconds * 1000))
+        if self.scrubbing:
+            self.scrub_busy.start()
         if self.current:
             self.video_stack.setCurrentWidget(self.video)   # the frame sought to
         self.timeline.set_position(seconds)
@@ -1866,7 +1973,8 @@ class ClipBrowser(QWidget):
         try:
             job["part"].replace(job["out"])
             if job["clip"].details:
-                write_sidecar(job["out"], hidechat.copied_details(job["clip"].details))
+                write_sidecar(job["out"], model.session_copy_details(job["clip"]) if job["clip"].is_session
+                              else hidechat.copied_details(job["clip"].details))
         except OSError as e:
             QMessageBox.warning(self, APP_TITLE, f"Couldn't make the copy: {e}")
             return
@@ -1878,7 +1986,7 @@ class ClipBrowser(QWidget):
 
     def can_highlight(self) -> bool:
         clip = self.current
-        return bool(clip and self.cfg and not clip.is_session and self.part_on("highlights"))
+        return bool(clip and self.cfg and self.part_on("highlights"))
 
     def clip_seconds(self) -> float:
         return self.timeline.length or self.player.duration() / 1000
@@ -1937,6 +2045,8 @@ class ClipBrowser(QWidget):
         if not clip or not self.timeline.marks or self.highlight_job or not self.cfg:
             return
         start, end = self.timeline.marks
+        base = (model.session_highlight_base(clip.details, start, end, clip.started)
+                if clip.is_session else clip.details)
         out = highlight.output_path(clip.path, self.cfg.clips_dir, start, end)
         if out.exists() and QMessageBox.question(
                 self, APP_TITLE, "This highlight is already saved. Save it again?",
@@ -1950,7 +2060,7 @@ class ClipBrowser(QWidget):
             return
         cmd = highlight.command(clip.path, start, end, part)
         process = QProcess(self)
-        self.highlight_job = {"clip": clip, "out": out, "part": part, "marks": (start, end),
+        self.highlight_job = {"clip": clip, "base": base, "out": out, "part": part, "marks": (start, end),
                               "process": process}
         process.finished.connect(lambda *_: self.highlight_saved(process))
         process.errorOccurred.connect(lambda e: e == QProcess.FailedToStart
@@ -1974,8 +2084,8 @@ class ClipBrowser(QWidget):
         if ok:
             try:
                 job["part"].replace(job["out"])
-                write_sidecar(job["out"], highlight.details(job["clip"].details, job["clip"].path,
-                                                            *job["marks"]))
+                write_sidecar(job["out"], highlight.details(job["base"], job["clip"].path,
+                                                            *job["marks"], job["clip"].is_session))
             except OSError as e:
                 job["part"].unlink(missing_ok=True)
                 QMessageBox.warning(self, APP_TITLE, f"Couldn't save the highlight: {e}")
@@ -2160,19 +2270,24 @@ class ClipCard(QStyledItemDelegate):
         p.setFont(option.font)
         fm = p.fontMetrics()
         y = r.top() + fm.height() + 8
-        chip_w = fm.horizontalAdvance(clip.result_text) + 16
+        # No chip without a result (a highlight): it would be an empty oval.
+        chip_w = fm.horizontalAdvance(clip.result_text) + 16 if clip.result_text else -10
         chip = QRectF(x, y, chip_w, fm.height() + 2)
-        edge = result_color(clip.status, pal)
-        p.setPen(QPen(text if selected else edge, 1))
-        p.setBrush(Qt.NoBrush)
-        p.drawRoundedRect(chip.adjusted(0.5, 0.5, -0.5, -0.5), chip.height() / 2, chip.height() / 2)
+        if clip.result_text:
+            edge = result_color(clip.status, pal)
+            p.setPen(QPen(text if selected else edge, 1))
+            p.setBrush(Qt.NoBrush)
+            p.drawRoundedRect(chip.adjusted(0.5, 0.5, -0.5, -0.5), chip.height() / 2, chip.height() / 2)
+            p.setPen(text)
+            p.drawText(chip, Qt.AlignCenter, clip.result_text)
         p.setPen(text)
-        p.drawText(chip, Qt.AlignCenter, clip.result_text)
         p.drawText(QRectF(chip.right() + 10, y, width, chip.height()), Qt.AlignLeft | Qt.AlignVCenter,
                    clip.length)
         cx = chip.right() + 10 + fm.horizontalAdvance(clip.length) + 14
         # A highlight, or the copy made with Hide chat, beside its clip
-        for shown, icon_name, label in ((clip.highlight, "edit-cut", "Highlight"),
+        # (Not when the chip already says Highlight.)
+        for shown, icon_name, label in ((clip.highlight and clip.result_text != "Highlight",
+                                         "edit-cut", "Highlight"),
                                         (clip.chat_hidden, "view-hidden", "Chat hidden")):
             if not shown:
                 continue
@@ -2326,8 +2441,10 @@ def event_icon(kind: str, palette) -> QIcon:
 
 
 def result_color(result: str, palette) -> QColor:
-    """Completed keys and raid kills good, abandoned keys and wipes a warning, the rest muted."""
+    """Completed keys and raid kills good, abandoned keys and wipes a warning, highlights
+    purple, the rest muted."""
     return (theme.color("good", palette) if result in ("completed", "kill") else
+            theme.color("highlight", palette) if result == "highlight" else
             theme.color("warning", palette) if result in ("abandoned", "wipe", "overtime")
             else theme.muted(palette))
 

@@ -249,6 +249,13 @@ class ClipInfo:
         return bool(self.details.get("highlight"))
 
     @property
+    def from_session(self) -> bool:
+        """A highlight made from a full session (listed under Full sessions). Those made before
+        it was written down are told by the recording's .mkv."""
+        h = self.details.get("highlight") or {}
+        return bool(h) and bool(h.get("session") or str(h.get("of", "")).endswith(".mkv"))
+
+    @property
     def is_raid(self) -> bool:
         """A raid boss pull's clip; its dungeon is the boss."""
         return self.details.get("kind") == "raid"
@@ -290,12 +297,17 @@ class ClipInfo:
 
     @property
     def status(self) -> str:
-        """The result, with "overtime" for a key completed over time (for its colour)."""
+        """The result, with "overtime" for a key completed over time and "highlight" for a
+        highlight with no run (for its colour)."""
+        if self.result_text == "Highlight":
+            return "highlight"
         return "overtime" if self.upgrade == 0 else self.result
 
     @property
     def result_text(self) -> str:
         """The result for people: "Timed +2", "Over time", "Heroic", "LFR Kill", ..."""
+        if self.highlight and not self.result and not self.chip:
+            return "Highlight"   # from a full session, with no run in it
         if self.is_raid and not self.chip:
             return self.label
         if not self.chip and self.upgrade is not None:
@@ -410,8 +422,10 @@ def _read(read_sidecar, path: Path) -> dict:
 
 def in_mode(clip: ClipInfo, mode: str) -> bool:
     """Whether the clip browser lists the clip in mode: raid pulls under Raids, dungeon runs
-    under Keystones."""
-    return mode == SESSIONS or clip.is_raid == (mode == RAIDS)
+    under Keystones, highlights of full sessions with the sessions."""
+    if mode == SESSIONS or clip.from_session:
+        return mode == SESSIONS
+    return clip.is_raid == (mode == RAIDS)
 
 
 def matches(clip: ClipInfo, filter_key: str, search: str) -> bool:
@@ -646,7 +660,11 @@ def youtube_chapters(details: dict) -> list[tuple[float, str]]:
 def youtube_description(clip: ClipInfo) -> str:
     """A description to paste into YouTube's upload page (which takes the title from the file
     name): the run in a sentence, then its chapters."""
-    if clip.is_raid:
+    if not clip.result and not clip.is_raid:
+        return ""   # a clip of something that isn't a run
+    if clip.is_session:
+        about = f"{clip.dungeon}, {clip.length}"
+    elif clip.is_raid:
         about = f"{clip.raid}: {clip.dungeon}, {clip.label}, pull {clip.pull}, {clip.length}"
     else:
         about = f"{clip.dungeon} {clip.label}, {clip.length}"
@@ -670,6 +688,11 @@ OK, INFO, WARNING, ERROR = "ok", "info", "warning", "error"
 class Check:
     level: str                    # OK, INFO, WARNING or ERROR
     text: str
+
+
+def size_text(size: int) -> str:
+    """A file size, e.g. 3.4 GB or 870 MB."""
+    return f"{size / 1e9:.1f} GB" if size >= 1e9 else f"{size / 1e6:.0f} MB"
 
 
 def field_checks(data: dict, free_gb=None) -> dict[str, Check]:
@@ -877,6 +900,29 @@ def session_info(path: Path, details: dict, clips: list[dict], cut: bool = True)
                     sum(r.get("deaths_total", 0) for r in runs) if known else None,
                     sum(r.get("bosses_killed", 0) for r in runs) if known else None,
                     bool(details.get("keep")), merged, chip=chip)
+
+
+def session_highlight_base(details: dict, start: float, end: float, started: float) -> dict:
+    """The details a highlight of a full session is made from: those of the run most inside
+    start..end, with the session's casts. With no run in it, a plain "Highlight" (started:
+    the recording's start)."""
+    def overlap(r):
+        r_start = r.get("run_offset") or 0.0
+        r_end = r_start + (r.get("run_end") or 0.0) - (r.get("run_start") or 0.0)
+        return min(end, r_end) - max(start, r_start)
+    best = max(details.get("runs") or [], key=overlap, default=None)
+    if best is None or overlap(best) <= 0:
+        best = {"dungeon": "Highlight", "label": "", "result": "", "run_start": started + start}
+    return {**best, "casts": details.get("casts") or [], "spells": details.get("spells") or {},
+            "player": details.get("player"), "casters": details.get("casters") or []}
+
+
+def session_copy_details(clip: ClipInfo) -> dict:
+    """The details of a copy of a full session (chat hidden), shaped like a session's."""
+    d = clip.details
+    return {"recording_start": clip.started, "length": d.get("clip_length"), "runs": d.get("runs", []),
+            "keep": False, "chat_hidden": True, "player": d.get("player"),
+            "casters": d.get("casters"), "casts": d.get("casts"), "spells": d.get("spells")}
 
 
 def load_sessions(processed_dir: Path, sessions_dir: Path, clips_dir: Path, read_sidecar,

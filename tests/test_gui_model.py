@@ -458,3 +458,29 @@ def test_every_major_cooldown_has_a_kind_with_a_colour():
     assert set(cooldowns.MAJOR.values()) == set(model.KIND_HUES)
     assert cooldowns.kind(31884) == "damage" and cooldowns.kind(642) == "defensive"
     assert cooldowns.kind(98008) == "healing" and cooldowns.kind(53600) is None
+
+
+def test_a_session_highlight_takes_the_run_it_is_in():
+    runs = [{"dungeon": "A", "run_offset": 0.0, "run_start": 100.0, "run_end": 700.0},
+            {"dungeon": "B", "run_offset": 900.0, "run_start": 1000.0, "run_end": 1600.0}]
+    d = {"runs": runs, "casts": [[1.0, 5]], "spells": {}}
+    assert model.session_highlight_base(d, 950, 980, 0)["dungeon"] == "B"
+    assert model.session_highlight_base(d, 100, 150, 0)["dungeon"] == "A"
+    plain = model.session_highlight_base(d, 800, 850, 5000.0)
+    assert plain["dungeon"] == "Highlight" and plain["run_start"] == 5800.0
+
+
+def test_highlights_are_listed_where_they_were_made():
+    def info(details, highlight):
+        return model.clip_info(Path("h.mp4"), {"run_start": 1.0, **details,
+                                               "highlight": {"start": 1.0, "end": 9.0, **highlight}})
+    key = info({"dungeon": "Ara-Kara", "result": "completed"}, {"of": "a.mp4"})
+    pull = info({"kind": "raid", "dungeon": "Vexie", "raid": "Undermine", "result": "kill"},
+                {"of": "b.mp4"})
+    session = info({"dungeon": "Ara-Kara", "result": "completed"}, {"of": "c.mp4", "session": True})
+    older = info({"dungeon": "Highlight", "result": ""}, {"of": "2026-10-28_08-02-53.mkv"})
+    assert [model.in_mode(c, model.KEYS) for c in (key, pull, session, older)] == [True, False, False, False]
+    assert model.in_mode(pull, model.RAIDS) and not model.in_mode(session, model.RAIDS)
+    assert model.in_mode(session, model.SESSIONS) and model.in_mode(older, model.SESSIONS)
+    assert older.result_text == "Highlight" and key.result_text != "Highlight"
+    assert older.status == "highlight" and key.status == "completed"
