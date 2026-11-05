@@ -1,8 +1,7 @@
 # User guide
 
-Linux WoW Recorder records your World of Warcraft sessions and cuts one clip per dungeon run,
-and one per raid boss pull.
-It runs in the background: start WoW and play, and when you close WoW, the clips are waiting.
+Linux WoW Recorder records your World of Warcraft sessions and cuts one clip per dungeon run
+and per raid boss pull. Start WoW and play; when you close it, the clips are waiting.
 
 - [Which edition](#which-edition)
 - [Privacy](#privacy)
@@ -19,58 +18,47 @@ It runs in the background: start WoW and play, and when you close WoW, the clips
 
 ## Which edition
 
-There's one program with two ways to install it:
-
 | | Command line | Desktop app |
 |---|---|---|
 | Install | `linux-wow-recorder` | `linux-wow-recorder[gui]` |
-| Download | a few hundred KB, nothing else needed | about 400 MB (Qt, with video playback) |
-| Setup | questions in a terminal (`setup`) | a settings window |
-| While playing | nothing to see; Discord messages if you want them | a tray icon: grey waiting, red recording |
-| Clips | a folder of .mp4 files | a clip browser with a player and a timeline |
+| Download | a few hundred KB | about 400 MB (Qt) |
+| Setup | questions in a terminal | a settings window |
+| While playing | nothing to see | a tray icon |
+| Clips | a folder of .mp4 files | a clip browser with a player and timeline |
 
-Both record the same way, with the same background service and the same config file. You can
-start with the command line and add the desktop app later, or the other way round.
+Both record the same way, with the same service and config file. You can switch later.
 
 ## Privacy
 
-Everything stays on your computer: recordings, clips, settings and logs. The app has no
-telemetry or crash reporting, and no account. It connects to the internet only if you ask it to:
-a message to the Discord or Fluxer webhooks you add yourself, which never includes log lines,
-paths or anyone's character name, and, if you tick it at setup or in Settings > About, a daily
-question to GitHub about the newest version, which sends nothing about you. The full details, and how to check them yourself, are
-in the [README](../README.md#privacy).
+Everything stays on your computer. No telemetry, no account. It connects only to webhooks you
+add (messages never include logs, paths or character names) and, if you turn it on, GitHub
+once a day for the newest version number. Details: [README](../README.md#privacy).
 
 ## Before you install
 
 You need:
 
-- **Linux with systemd**: almost every desktop distro.
-- **Python 3.11 or newer**: check with `python3 --version`.
-- **[uv](https://docs.astral.sh/uv/)** or **pipx**, to install the app (not needed for the RPM,
-  the Arch package or the `.deb`).
-- **gpu-screen-recorder**, which does the recording:
+- **Linux with systemd** and **Python 3.11+** (`python3 --version`).
+- **[uv](https://docs.astral.sh/uv/)** or **pipx**, unless you use the RPM, Arch package or
+  `.deb`.
+- **gpu-screen-recorder**:
   - CachyOS / Arch: `sudo pacman -S gpu-screen-recorder`
-  - Nobara: the RPM below brings it in from Nobara's repos
-  - Fedora: not in its repos; use the Flatpak (next line)
-  - anywhere, including Bazzite and SteamOS: `flatpak install flathub com.dec05eba.gpu_screen_recorder`
-  - Ubuntu and Debian: the Flatpak too (they don't have it in their repos). Ubuntu doesn't come
-    with Flatpak or Flathub; add both first:
-    `sudo apt install flatpak` and
+  - Nobara: comes with the RPM
+  - Fedora, Ubuntu, Debian, Bazzite, SteamOS: the Flatpak,
+    `flatpak install flathub com.dec05eba.gpu_screen_recorder`. Ubuntu needs Flatpak and
+    Flathub first: `sudo apt install flatpak`, then
     `flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo`
-- **ffmpeg** (with `ffprobe`), from your distro.
+- **ffmpeg** (with `ffprobe`) from your distro.
 
 And in WoW:
 
-- **Combat logging on in dungeons.** WoW doesn't log by itself. Type `/combatlog` after you
-  zone in, or let an addon do it: Raider.IO's client, an "auto combat log" addon, or for WoW
-  Forever, forever-logs-companion. If keys still go missing from your logs, the app has an
-  optional addon of its own ([The WoW addon](#the-wow-addon)). Without a log, the session is
-  still recorded but can't be cut into clips. If logging starts after the key does (an addon can
-  be late), a completed key is still found: its start is worked out from its in-game time. An
-  abandoned key needs logging on from the start.
-- **Advanced Combat Logging** on (Options > Network). It isn't
-  needed to find runs, but it makes the log more complete.
+- **Combat logging on in dungeons.** Type `/combatlog` after you zone in, or use an addon
+  (Raider.IO's client, an "auto combat log" addon, forever-logs-companion for WoW Forever). If
+  keys still go missing, try [the WoW addon](#the-wow-addon). Without a log the session is
+  recorded but not cut. A completed key is found even if logging started late; an abandoned
+  key needs logging on from the start.
+- **Advanced Combat Logging** on (Options > Network). Not required, but the log is more
+  complete.
 
 ## Installing
 
@@ -80,31 +68,29 @@ And in WoW:
 sudo dnf install ./linux-wow-recorder-1.2.7-1.fc44.noarch.rpm
 ```
 
-dnf installs ffmpeg and Qt from your distro's repos along with it, and on Nobara
-gpu-screen-recorder too. The app appears in the menu as **Linux WoW Recorder**.
+This brings in ffmpeg and Qt, and on Nobara gpu-screen-recorder. Open **Linux WoW Recorder**
+from the menu.
 
-On **plain Fedora**, gpu-screen-recorder isn't in the repos (dnf skips it without an error), so
-install its Flatpak; the settings window finds it by itself:
+**Plain Fedora** has no gpu-screen-recorder (dnf skips it quietly), so install the Flatpak; the
+app finds it:
 
 ```bash
 flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
 flatpak install flathub com.dec05eba.gpu_screen_recorder
 ```
 
-Fedora's own ffmpeg (`ffmpeg-free`) is enough: it has the H.264 support the app needs. On
-**Fedora Atomic** (Silverblue, Kinoite), which is read-only, use the uv steps under
-[Other distros (uv)](#other-distros-uv) instead.
+Fedora's `ffmpeg-free` is enough. **Fedora Atomic** (Silverblue, Kinoite) is read-only: use
+[uv](#other-distros-uv).
 
-To update, install the newer RPM the same way.
-The service and the tray app restart into the new version by themselves within a few minutes, but only when it's safe: the service waits until WoW is closed, the clips are cut and any After clips command has finished, and the tray app waits until its windows are closed. (Updating from 0.5.0 or earlier needs one restart by hand: `systemctl --user restart linux-wow-recorder`, and quit and start the tray app.) The RPM is built for one Fedora release
-(`fc44` is Fedora/Nobara 44); on another release, build it there with
+**To update**, install the newer RPM. The service and tray restart into it by themselves within
+a few minutes, once WoW is closed, clips are cut and the windows are closed. The RPM is built
+for Fedora/Nobara 44 (`fc44`); for another release, build it there with
 `./packaging/build-rpm.sh` (needs `uv` and `rpm-build`).
 
 ### CachyOS or Arch (package)
 
-The package in `packaging/aur/` installs the app system-wide, with every dependency from Arch's
-own repos (gpu-screen-recorder, ffmpeg, PySide6). It'll be on the AUR (`paru -S
-linux-wow-recorder`) once AUR sign-ups reopen; until then, build it from the repo:
+Installs system-wide, with everything from Arch's repos. It'll be on the AUR once sign-ups
+reopen; until then:
 
 ```bash
 sudo pacman -S --needed git base-devel
@@ -113,13 +99,12 @@ cd linux-wow-recorder/packaging/aur
 makepkg -si
 ```
 
-To update, `git pull` and run `makepkg -si` again; the app restarts into it as with the RPM
-above. The uv route below works on Arch too.
+**To update**, `git pull` and `makepkg -si` again. The uv route works on Arch too.
 
 ### Ubuntu or Debian (.deb)
 
-For Ubuntu 25.10 and newer (26.04 is tested) and Debian 13. Download the `.deb` from the
-[Releases](https://github.com/Visner-org/linux-wow-recorder/releases) page, then:
+For Ubuntu 25.10+ (26.04 tested) and Debian 13. Download the `.deb` from
+[Releases](https://github.com/Visner-org/linux-wow-recorder/releases), then:
 
 ```bash
 sudo apt install ./linux-wow-recorder_1.2.7-1_all.deb
@@ -127,40 +112,32 @@ flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/fl
 flatpak install --user flathub com.dec05eba.gpu_screen_recorder
 ```
 
-apt installs ffmpeg, Qt (PySide6) and Flatpak from your distro's repos along with it.
-gpu-screen-recorder isn't in Ubuntu's or Debian's repos, so it comes from Flathub; the settings
-window finds the Flatpak by itself. The app appears in the menu as **Linux WoW Recorder**.
+apt brings in ffmpeg, Qt and Flatpak; gpu-screen-recorder comes from Flathub.
 
-- **To update**, download the newer `.deb` and install it the same way; the app restarts into it
-  as with the RPM above. There's no apt repository yet, so `apt upgrade` doesn't update it.
-  Turn on **Check for new versions once a day** (Settings > About) to hear about new releases.
-- **Ubuntu 24.04** and the distros built on it (Mint 22, Pop!_OS 24.04) don't have the Qt
-  packages it needs, and apt says so. Use uv instead (next section).
-- **Without the desktop app**: the `.deb` always includes it. For the command line only, use uv.
+- **To update**, install the newer `.deb`. There's no apt repository, so `apt upgrade` won't do
+  it; turn on **Check for new versions once a day** (Settings > About) to hear about releases.
+- **Ubuntu 24.04**, Mint 22 and Pop!_OS 24.04 lack the Qt packages: use uv.
+- The `.deb` always includes the desktop app. For command line only, use uv.
 
 ### Other distros (uv)
 
-For Bazzite, Fedora Atomic, SteamOS, Ubuntu 24.04, Mint 22, Pop!_OS, openSUSE and any other
-distro; CachyOS and Arch can use it too.
+For Bazzite, Fedora Atomic, SteamOS, Ubuntu 24.04, Mint, Pop!_OS, openSUSE and the rest. It
+installs into `~/.local`: no root, no reboot. Get uv from your package manager or with
+`curl -LsSf https://astral.sh/uv/install.sh | sh`, then open a new terminal so `~/.local/bin` is
+on your PATH.
 
-These install the app into your home folder (`~/.local`) with [uv](https://docs.astral.sh/uv/),
-so they also work on read-only systems like Bazzite and SteamOS: no root, no reboot. Get uv from
-your package manager (`sudo pacman -S uv` on CachyOS and Arch) or with its install script
-(`curl -LsSf https://astral.sh/uv/install.sh | sh`). After the install script, open a new
-terminal so `~/.local/bin` is on your PATH; otherwise `linux-wow-recorder-gui` isn't found.
-
-First, gpu-screen-recorder and ffmpeg, depending on your distro:
+First, gpu-screen-recorder and ffmpeg:
 
 | Distro | Before installing the app |
 |---|---|
-| Bazzite, Fedora Atomic (Silverblue, Kinoite), Aurora | ffmpeg is built in. `flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo`, then `flatpak install flathub com.dec05eba.gpu_screen_recorder` |
-| SteamOS (Steam Deck, Desktop Mode) | ffmpeg and Flathub are built in. `flatpak install flathub com.dec05eba.gpu_screen_recorder` |
-| openSUSE Tumbleweed | `sudo zypper install python313 ffmpeg gpu-screen-recorder git` (no Flatpak needed) |
-| Ubuntu 24.04, Mint 22, Pop!_OS 24.04 | `sudo apt install python3 ffmpeg flatpak git`, the Flathub `remote-add` line above, then the Flatpak |
+| Bazzite, Fedora Atomic, Aurora | ffmpeg is built in. Add Flathub (`flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo`), then the gpu-screen-recorder Flatpak |
+| SteamOS (Desktop Mode) | ffmpeg and Flathub are built in. Install the Flatpak |
+| openSUSE Tumbleweed | `sudo zypper install python313 ffmpeg gpu-screen-recorder git` |
+| Ubuntu 24.04, Mint 22, Pop!_OS 24.04 | `sudo apt install python3 ffmpeg flatpak git`, add Flathub, then the Flatpak |
 
-**Steam Deck:** "a window or screen you pick" works as is. Recording the whole screen needs
-gpu-screen-recorder's helper, which asks for your password, and the `deck` user has none until
-you set one with `passwd`. Only Desktop Mode is covered here; Game Mode isn't tried.
+**Steam Deck:** use Desktop Mode (Game Mode isn't tried). Recording a picked window works as
+is. Recording the whole screen needs gpu-screen-recorder's helper, which asks for a password:
+set one for `deck` with `passwd`.
 
 With the desktop app:
 
@@ -169,49 +146,36 @@ uv tool install 'linux-wow-recorder[gui] @ git+https://github.com/Visner-org/lin
 linux-wow-recorder-gui
 ```
 
-Command line only:
+Command line only (it then starts at every login, see [Command line](#command-line)):
 
 ```bash
 uv tool install 'linux-wow-recorder @ git+https://github.com/Visner-org/linux-wow-recorder'
 linux-wow-recorder setup
 ```
 
-> **Command line only means it starts at every login.** There's no app to open, so setup ends
-> by offering to install the recorder as a background service that starts every time you log
-> in (see [Command line](#command-line) below).
-
-pipx works the same way: `pipx install 'linux-wow-recorder[gui] @ git+https://github.com/Visner-org/linux-wow-recorder'`.
-
-To update later, run `uv tool upgrade linux-wow-recorder`; the app restarts into it as with the
-RPM above.
+pipx works the same: `pipx install 'linux-wow-recorder[gui] @ git+https://github.com/Visner-org/linux-wow-recorder'`.
+**To update**, `uv tool upgrade linux-wow-recorder`.
 
 ## Setting it up
 
 You'll be asked for two folders:
 
-1. **Your combat log folder**: the `Logs` folder next to WoW's `_retail_` (or `_classic_`)
-   folder, wherever your launcher put WoW. With Lutris, for example:
+1. **The combat log folder**: `Logs` next to WoW's `_retail_` (or `_classic_`) folder. With
+   Lutris, for example:
    `~/Games/battlenet/drive_c/Program Files (x86)/World of Warcraft/_retail_/Logs`.
-2. **An output folder** for recordings and clips. Pick a drive with room: a session takes a few
-   GB per hour.
+2. **An output folder** for recordings and clips, on a drive with room (a few GB per hour).
 
 ### Desktop app
 
-Open **Linux WoW Recorder** from the app menu (or run `linux-wow-recorder-gui`). The first time,
-a short setup opens by itself, in three steps:
+Open **Linux WoW Recorder** (or run `linux-wow-recorder-gui`). The first time, setup has three
+steps:
 
-1. **Folders**: the combat log folder and the output folder (the Browse buttons help). Under
-   each, a line says what it found: the newest combat log, or the free space.
-2. **What to record**: the capture, frame rate and quality, and the sound. "Record" starts on
-   "A window or screen you pick": the test recording opens the screen-share dialog, where you
-   choose the WoW window or its monitor.
-3. **Try it**: **Save and record a 5-second test**. The result shows under the button, and the
-   video is saved as `test-recording.mkv` in the output folder. Watch it to check the picture and
-   sound. **Finish** sets up the recorder service; it records while the app is open.
+1. **Folders.** A line under each says what it found: the newest log, or the free space.
+2. **What to record**: capture, frame rate, quality and sound.
+3. **Try it**: **Save and record a 5-second test**, then watch `test-recording.mkv` in the
+   output folder. **Finish** sets up the recorder; it records while the app is open.
 
-Everything else (clips and storage, Discord messages, the recorder command, logs) is in
-Settings later, on pages down the left. A line under a field says when something's wrong with
-it, and a page with a problem gets a ⚠ beside its name.
+Everything else is in Settings. A ⚠ marks a page with a problem.
 
 ### Command line
 
@@ -219,256 +183,158 @@ it, and a page with a problem gets a ⚠ beside its name.
 linux-wow-recorder setup
 ```
 
-It asks for the two folders, what to record, which sound (only WoW's, the default; all desktop
-sound; or none) and whether to add your microphone, and Discord or
-Fluxer webhooks (optional). Then it offers a 5-second test recording. Everything else is in the
-config file (see the [reference](reference.md#config-file)).
+It asks for the folders, what to record, sound, microphone and webhooks, then offers a test
+recording. Everything else is in the [config file](reference.md#config-file).
 
-> **Its last question starts the recorder at every login.** Without the desktop app, the
-> recorder is a background service (a systemd user service: it runs as you, never as root) that
-> starts every time you log in and records whenever WoW runs, until you remove it with
-> `linux-wow-recorder uninstall-service`. Answer no to start it yourself instead:
-> `linux-wow-recorder run` in a terminal while you play (Ctrl+C stops it and saves the
-> recording).
+> **Its last question starts the recorder at every login**, as a background service (runs as
+> you, never root) that records whenever WoW runs. `linux-wow-recorder uninstall-service`
+> removes it. Or answer no and run `linux-wow-recorder run` while you play (Ctrl+C stops and
+> saves).
 
 ### What to record
 
-- **A window or screen you pick** (`portal`, the default): Wayland's own screen-share dialog. Pick the WoW
-  window to record only WoW: notifications and other windows stay out of the video, and
-  alt-tabbing shows WoW's last frame instead of your desktop. The dialog opens a few seconds
-  after WoW's window shows up, so it lands on top of WoW instead of behind it. A picked screen
-  is remembered. A picked window is remembered on KDE Plasma: the next time you start WoW,
-  recording starts without the dialog. GNOME asks every time you start WoW. Waiting for WoW's
-  window needs `xprop`, which most desktops have; without it the dialog opens right away (on
-  KDE that means it asks every time), and if no window is seen it opens after a minute. It
-  never needs root. Nothing is recorded until you pick:
-  while the dialog waits (it can open behind WoW), the tray and the clips window say so and
-  offer **Record monitor instead**, which records the monitor set under "Monitor instead" for
-  the rest of that session. Picked the wrong window? **Pick another window** (tray menu, or under
-  the clips window's preview) forgets the pick and opens the dialog again.
-- **A monitor** (`DP-1`, `HDMI-A-1`, ...): just that monitor. With more than one screen, this
-  is usually what you want.
-- **Whole screen** (`screen`): the first monitor in `gpu-screen-recorder --list-capture-options`,
-  which goes by how the monitors are plugged in (connector order). That isn't necessarily your
-  main monitor, or the one your desktop's display settings call "1"; the settings window shows
-  which monitor it is. With two or more screens, pick the monitor by name instead. On AMD and Intel under Wayland, it needs gpu-screen-recorder's root helper;
-  the Flatpak asks for your password once.
+- **A window or screen you pick** (`portal`, the default): your desktop's screen-share dialog.
+  Pick the WoW window to record only WoW; alt-tabbing then shows WoW's last frame, not your
+  desktop.
+  - The dialog opens a few seconds after WoW's window appears, so it's on top of WoW. That needs
+    `xprop` (most desktops have it); without it the dialog opens right away. With no window
+    after a minute, it opens anyway.
+  - A picked screen is remembered. A picked window is remembered on KDE Plasma; GNOME asks each
+    time you start WoW.
+  - Nothing is recorded until you pick. Meanwhile the tray and clips window offer **Record
+    monitor instead** (your "Monitor instead" setting, for that session).
+  - Wrong window? **Pick another window** (tray menu, or under the preview) asks again.
+- **A monitor** (`DP-1`, `HDMI-A-1`, ...): just that monitor. Best with more than one screen.
+- **Whole screen** (`screen`): the first monitor by connector order, which may not be your main
+  one; the settings window shows which. On AMD and Intel under Wayland it needs
+  gpu-screen-recorder's helper, which asks for your password once.
 
 ### The WoW addon
 
-**Optional.** Most people don't need it: if your clips come out whole, with their pulls and
-enemy forces, leave it out. Install it only if your logs miss keys or their start: clips that
-never get cut ("No combat log covers this session"), or a key's details saying "combat log
-began 1:04 late".
+**Optional.** Only install it if your logs miss keys or their start: clips never cut ("No combat
+log covers this session"), or details saying "combat log began 1:04 late".
 
-Why that happens: clips come from WoW's combat log, so logging has to be on before a key
-starts. Addons that turn it on (Raider.IO and others) check when you change zones, and that can
-miss a key: zone in before the group is together and the dungeon has no difficulty yet, put
-the key in, and the dungeon becomes Mythic+ with no zone change, so logging starts only when
-you walk into the next area. The kills before that aren't in the log.
+Why it happens: logging addons turn logging on when you change zones. If you zone in before the
+key is in, the dungeon has no difficulty yet; putting the key in makes it Mythic+ with no zone
+change, so logging starts only in the next area.
 
-The app comes with a small addon of its own, **Linux WoW Recorder** in your AddOns list, that
-closes that gap. In a dungeon or raid it turns combat logging (and Advanced Combat Logging) on:
+The app's own small addon, **Linux WoW Recorder**, turns combat logging (and Advanced Combat
+Logging) on in dungeons and raids:
 
-- when the keystone slot opens at the Font of Power, before the key starts
-- when a key starts, for the players who didn't put it in
+- when the keystone slot opens, before the key starts
+- when a key starts, for the others in the group
 - when the dungeon's difficulty changes
-- at each boss pull, and after each loading screen
+- at each boss pull and after each loading screen
 
-That's all it does. It never turns logging off (WoW or your other addons do that), shows
-nothing, saves nothing and reads nothing else. It's happy alongside other logging addons.
+It never turns logging off, shows nothing, saves nothing and reads nothing else. It works
+alongside other logging addons.
 
 Before you install it:
 
-- **It logs more than you may want.** It turns logging on in every dungeon and raid, Normal and
-  LFR too, and leaves it on until you log out or type `/combatlog`. WoW never deletes combat
-  logs, and a night of keys can be a few hundred MB. The same Settings page shows how much room
-  they take, and **Clear old logs...** moves the ones nothing needs to the trash: it keeps the
-  logs a recording still waits to be cut from, and the one WoW is writing.
-- **It changes a WoW setting.** Advanced Combat Logging stays on after you remove the addon;
-  turn it off in Options > Network if you want it off.
-- **It's not from CurseForge or Wago.** Addon managers don't know it and won't update it; the
-  app does. It's two small plain-text files you can read in
+- **It logs more.** Every dungeon and raid, Normal and LFR too, until you log out or type
+  `/combatlog`. WoW never deletes logs; a night of keys can be a few hundred MB. Settings > WoW
+  addon shows their size, and **Clear old logs...** moves unneeded ones to the trash (it keeps
+  ones a recording still needs, and the one being written).
+- **Advanced Combat Logging stays on** after you remove it; turn it off in Options > Network if
+  you like.
+- **It's not on CurseForge or Wago**; the app updates it. It's two small text files in
   `_retail_/Interface/AddOns/LinuxWoWRecorder`.
-- **It's for retail WoW.** In Classic or a private server it shows as out of date.
-- **After a big WoW patch** it shows as out of date until the app's next version.
-- An addon can't show you a key it missed: keys logged before you install it stay as they are.
+- **Retail only.** In Classic it shows as out of date.
+- **After a big WoW patch** it shows as out of date until the app's next version: tick **Load
+  out of date AddOns** meanwhile.
+- It can't recover keys from before you installed it.
 
-**Installing it:** Settings > **WoW addon** > **Install** (it asks first), or
-`linux-wow-recorder install-addon`. It goes into the AddOns folder of the WoW your combat log
-folder belongs to (`_retail_/Interface/AddOns/LinuxWoWRecorder`). Then `/reload` in WoW, or log
-in again. When the app updates, the service updates the addon too. **Removing it:** **Remove**
-on the same page, or untick it in WoW's AddOns list. Uninstalling the app removes it.
-
-After a big WoW patch, WoW may list it as out of date until the app's next version: tick **Load
-out of date AddOns** in the AddOns list meanwhile.
+**Install:** Settings > **WoW addon** > **Install**, or `linux-wow-recorder install-addon`, then
+`/reload` in WoW. It goes into the WoW your combat log folder belongs to. **Remove:** the same
+page, or untick it in WoW's AddOns list. Uninstalling the app removes it too.
 
 ## Everyday use
 
-There's nothing to do: start WoW and play. The service notices WoW within a few seconds,
-however it's installed (Lutris, Heroic, Bottles, Steam, plain Wine, Flatpak), and starts
-recording. When WoW closes, it cuts the clips, which takes a few seconds per run.
+Start WoW and play. The service notices WoW within seconds, however it's launched, and records.
+When WoW closes it cuts the clips, a few seconds per run:
 
-Which runs become clips:
-
-- **Mythic+ keys**, from the start to the end of the key. Abandoned keys count too if they
-  lasted at least 5 minutes.
-- **Dungeons without a key** (Normal, Heroic, Mythic 0, Timewalking, Follower), from entering to
+- **Mythic+ keys**, start to end. Abandoned keys too, if they lasted 5 minutes.
+- **Dungeons without a key** (Normal, Heroic, Mythic 0, Timewalking, Follower), entering to
   leaving, if a boss was pulled.
+- **Raid boss pulls**, pull to kill or wipe.
 
-Clips are named like `2026-10-08 19-03 Kings' Rest +12 Timed (24m52s).mp4`. A completed
-key's length is the in-game timer.
-
-A completed key is **Timed** or **Over time**, by the dungeon's time limit. The combat log
-doesn't have the limits, so the app keeps a list of the current and last season's dungeons and
-updates it each season. A dungeon not on it yet says "Completed". The clip browser also shows the
-keystone upgrade ("Timed +2") and the time left or over.
+Clips are named like `2026-10-08 19-03 Kings' Rest +12 Timed (24m52s).mp4`. A completed key is
+**Timed** or **Over time** by the dungeon's time limit, which the app keeps a list of for the
+current and last season (others say "Completed"). The clip browser also shows the upgrade
+("Timed +2") and the time left or over.
 
 ### The window and the tray icon (desktop app)
 
-Opening the app shows its window, with its icon on the taskbar, and starts the recorder.
-Closing the window doesn't quit: the app stays in the tray (it tells you the first time), and
-keeps recording. Open it from the menu again, or left-click the tray icon, to get the window
-back. To stop, use **Quit and stop recording** in the tray menu.
+Opening the app starts the recorder. Closing the window keeps it in the tray, still recording;
+left-click the icon to get it back. **Quit and stop recording** in the tray menu stops it (it
+asks first while recording; what's recorded is saved).
 
-**Nothing starts at login** unless you choose it, in Settings > Advanced:
+**Nothing starts at login** unless you choose it in Settings > Advanced:
 
-- **Record from every login, without opening this app**: the recorder service starts at login
-  by itself, and keeps recording after the app is closed. It runs as you (a systemd user
-  service in `~/.config/systemd/user/`), never as root, and stops when you log out.
-- **Show the tray icon at login**: the tray icon starts at login (only the icon, not the
-  window), and with it the recorder.
+- **Record from every login, without opening this app**: the service starts at login and keeps
+  recording when the app is closed. Then the tray menu also has **Hide tray icon (keeps
+  recording)**.
+- **Show the tray icon at login**: the icon (not the window) and the recorder start at login.
 
 | Icon | Means |
 |---|---|
 | grey dot | waiting for WoW |
 | red dot | recording |
 | amber dot | cutting clips |
-| badge | something needs attention (hover for what) |
+| badge | something needs attention (hover) |
 | empty ring | the service isn't running |
 
-- **Left-click** opens the clip browser.
-- **Right-click** opens the menu: the status and the last session, then Clips, **Pause
-  recording this session** (while WoW runs: nothing more is recorded until WoW closes, and the
-  next session records as usual; Resume undoes it), **Cut the clips so far** (while WoW runs:
-  cuts what was recorded up to now, for a break, and keeps recording in a new file; inside a key,
-  a dungeon or a boss pull it waits for the end, so the run isn't split in two), **Record monitor instead** (while a window is
-  picked or awaited: records your "Monitor instead" for the rest of this session; **Record the
-  window again** undoes it), **Pick another window** (while recording a picked window: opens the
-  screen-share dialog again), Settings, and a Folders and logs submenu. With update checks on,
-  **Version X is out...** appears when there's a newer version, and opens its release page.
+The tray menu (right-click) has:
 
-You also get a desktop notification when clips are ready or something goes wrong.
+- **Pause recording this session**: nothing more until WoW closes. Resume undoes it.
+- **Cut the clips so far**: for a break; recording goes on in a new file. Inside a key or pull
+  it waits for the end.
+- **Record monitor instead** / **Record the window again**, and **Pick another window**.
+- Settings, Folders and logs, and **Version X is out...** when update checks are on.
 
-**Quit and stop recording** stops both (it asks first while WoW is being recorded; the recording
-so far is saved). When the recorder is set to start at login, the menu also has **Hide tray
-icon (keeps recording)**, and the recorder comes back at the next login.
+You also get desktop notifications when clips are ready or something goes wrong.
 
-On stock GNOME (Fedora Workstation, Debian), tray icons need the
-[AppIndicator and KStatusNotifierItem Support](https://extensions.gnome.org/extension/615/appindicator-support/)
-extension. KDE, COSMIC (Pop!_OS 24.04), Ubuntu's GNOME and most other desktops show them as they
-are. Without a tray, closing the window quits the app (and stops the recorder, unless it starts
-at login).
+Stock GNOME (Fedora Workstation, Debian) needs the
+[AppIndicator](https://extensions.gnome.org/extension/615/appindicator-support/) extension for
+tray icons. Without a tray, closing the window quits the app.
 
 ### The clip browser (desktop app)
 
-- **Recording now**, at the top left while WoW is being recorded: the newest frame of the
-  recording, every 3 seconds, so you can check it records the right screen or window. It's a few
-  seconds behind, because the recording is written to disk in chunks. While the window is minimized or
-  in the background, the preview waits (to save the work of decoding frames nobody sees) and
-  says so; it catches up as soon as you click the window.
-- **Not ready to record yet**, at the top left only while something is missing: a checklist
-  (gpu-screen-recorder, ffmpeg, the combat log folder, combat logging, the output folder, the
-  service), with what to do about each unticked item.
-- **The clips** on the left, as cards (a picture, the dungeon and level, the result, length,
-  deaths and lusts, ★ when kept) or as a table you can sort by any column (the Table button switches, and then Cards switches back).
-  The Showing button steps through All, Completed and Abandoned; or search by dungeon.
-- **Clips you move elsewhere**: add the folder in Settings > Clips and storage > "Also show
-  clips from", and the list shows the clips there too, saying which folder each is in. If you
-  leave a clip's `.json` (and `.jpg`) in `clips/` when you move the video, it keeps its picture,
-  deaths, lusts and bosses, even if the copy was renamed with hyphens for spaces. The app never
-  changes anything in those folders, and Keep and "Keep clips" don't apply there.
-- **Keystones / Raids / Full sessions**, above the list: Keystones lists the clips, one per
-  dungeon run; Raids lists one per raid boss pull ("#3" is the third pull of that boss), filtered
-  with Showing (All, Kills, Wipes) and searched by boss or raid; Full sessions lists the whole recordings they were cut from, one each time you played, with
-  every run in them on the timeline and in the events (each run holding its boss pulls). Full
-  recordings are kept for as long as Settings > Clips and storage > "Keep full recordings" says
-  (3 days unless you change it; Forever keeps them all); ☆ Keep keeps one forever. A recording
-  of the session still going is listed as "Not cut yet" once the recorder has started a new one
-  (after WoW's window closed, for example).
-- **The timeline** under the player shows the run, with a legend:
-  - above the bar, each boss pull from pull to kill (blue) or wipe (grey)
-  - below it, deaths (red ticks) and lusts (yellow brackets as long as the haste: Bloodlust,
-    Heroism, Time Warp, Primal Rage, Fury of the Aspects, Harrier's Cry, drums)
-
-  Hover to see what's there. Click a pull, death or lust to play from a few seconds before it;
-  click anywhere else to go there. Hold the button down and drag to scrub back and forth: the
-  video pauses while you hold it (and stays still when the pointer does), then plays on when
-  you let go if it was playing.
-- **Casts**: a strip under the video shows the spells cast around where the video is,
-  scrolling as it plays. The line is now: casts to its left are done, those to its right are
-  coming up (paler). Each spell keeps its colour through the clip (each player's ten most cast;
-  the rest are grey); a thin bar before a cast shows its cast time. Hover a cast for who cast
-  it, its name and time; click it to play from just before it. Grab the strip and drag it to
-  scrub: pull the casts left to go forward, right to go back. The video pauses while you hold
-  it, then plays on when you let go if it was playing. **Casts** after the time (or C)
-  shows or hides the strip; its arrow has a tick for each player in the clip (yours only at
-  first, "Only you" and "Everyone" at the bottom), and each one ticked gets a lane with their
-  name. **Major cooldowns only** at its top shows just the big spells, coloured by kind: damage
-  red (Bloodlust, Avenging Wrath, Combustion, ...), healing green (Tranquility, Spirit Link
-  Totem, ...), defensive blue (Shield Wall, Ice Block, Pain Suppression, ...), over a wider
-  stretch of time. The players you tick stay ticked in other clips they're in. Casts come from the combat
-  log: yours and your party's or raid's, not other players nearby. Clips cut before 1.2.0
-  don't have them; `linux-wow-recorder add-casts` adds them while the combat logs they were cut
-  from are still there.
-- **The events** below, one row per boss pull ("killed in 1:44 · 41.80% forces · 2 deaths")
-  holding the deaths and lusts during it; wipes and pulls with deaths are opened. Clicking a row plays from a few
-  seconds before it. A key's boss kills show the enemy forces at that moment, counted from the
-  mobs that died in the combat log, so it can be a little off from the game's bar (a mob killed
-  far from you isn't logged). Dungeons outside the current season don't have it, and neither
-  does a key whose combat log began after it did: the details then say "combat log began 1:03
-  late" (the optional [WoW addon](#the-wow-addon) helps if that happens often).
-- **Highlights**: save part of a clip as a clip of its own, to share one boss kill or a wipe.
-  The scissors button beside the title marks 30 seconds from where the video is; drag either
-  end on the timeline, or play to a moment and press I (start here) or O (end here). Right-click
-  a boss pull, death or lust in the events for "Make a highlight of this", which marks the pull
-  from just before it to just after the kill or wipe, or the moments around a death or lust.
-  **Save highlight** puts it in your clips folder in seconds, named after the clip with the times
-  ("... highlight 12m03s-12m49s"), with only the bosses, deaths, lusts and casts inside it. The video
-  isn't re-encoded, so it starts on the nearest keyframe before the start you picked, at most a
-  second or two early. Esc stops. A highlight is a clip like the others: Keep, the trash,
-  YouTube and `after_clips` work on it.
-- **Drawing**: the pencil beside the title (or D) pauses the video and lets you draw on that
-  moment: pen, arrow, box, circle and text (keys 1 to 5), in five colours; Ctrl+Z undoes.
-  **Done**, Esc, playing or seeking goes back to the video and saves the picture beside the
-  clip, named after it with the moment ("... 12m34s.png"); for a clip in a read-only folder,
-  in your clips folder. Nothing drawn, nothing saved. **Copy** also puts it on the clipboard,
-  to paste into Discord. The picture is the video's full size. "Keep clips" deletes the
-  pictures along with their clip; a kept clip's stay.
-- **Keys**: space plays and pauses; the left and right arrows skip 5 seconds; I and O mark a
-  highlight's start and end; C shows or hides your casts; D draws on the moment; F goes full
-  screen and back (Esc leaves it too).
-- **Play and pause**: Play, space, or a click on the video.
-- **Speed**: the button after the time (1x) steps through 2x, 4x, 8x and 16x, then back to
-  1x. It stays for the next clip.
-- **Full screen**: the button at the end of the timeline, F, or a double-click on the video.
-  The video fills the screen with Play and the timeline under it.
-- **Player size**: drag the bar between the timeline and the details to make the video bigger
-  or smaller; it stays that way next time.
-- **Volume**: the slider after the time; the speaker before it mutes and unmutes.
-- **Buttons**: **Play**; beside the title, ☆ Keep (keep it forever), open it in your own video
-  player, show it in the file manager, hide the chat (see [Hiding the chat](#hiding-the-chat)),
-  upload it to YouTube (see
-  [To YouTube](#to-youtube)), run your `after_clips` command on it again (only there
-  when one is set), and the red trash can: move it to the trash (with its details and picture;
-  restore them from the trash to undo).
-- **Several at once**: Ctrl+click picks clips one by one, Shift+click a range. The trash can
-  (or the Delete key) then moves them all to the trash, after one question.
-- **Less on screen**: Settings > Clips and storage > Clips window turns off the Raids view, the
-  Full sessions view, the Highlight button, the Hide chat button and the YouTube button. All are
-  on by default.
-
-New clips show up by themselves.
+- **Recording now**: the newest frame every 3 seconds while WoW records, to check it's the
+  right window. It's a few seconds behind, and waits while the window is in the background.
+- **Not ready to record yet**: a checklist of what's missing, with what to do.
+- **The clips** as cards or a sortable table (the Table / Cards button). **Showing** filters
+  All, Completed or Abandoned; or search by dungeon.
+- **Keystones / Raids / Full sessions**: one clip per run, one per raid boss pull ("#3" is the
+  third pull), or the whole recordings with every run on the timeline. Full recordings are kept
+  3 days (Settings > Clips and storage > "Keep full recordings"); ☆ Keep keeps one forever. A
+  recording still going shows as "Not cut yet".
+- **The timeline**: boss pulls above (kill blue, wipe grey), deaths (red) and lusts (yellow)
+  below. Click to play from there; hold and drag to scrub.
+- **Casts**: a strip of the spells cast, scrolling with the video; drag it to scrub. **Casts**
+  (or C) shows or hides it, and picks whose casts get a lane. **Major cooldowns only** shows the
+  big ones: damage red, healing green, defensive blue. Casts are yours and your group's. Clips
+  from before 1.2.0 can get them with `linux-wow-recorder add-casts` while their logs exist.
+- **The events**: one row per boss pull ("killed in 1:44 · 41.80% forces · 2 deaths") with its
+  deaths and lusts. Click to play from there. Enemy forces are counted from the log, so they
+  can be a little off from the game's bar; a key whose log began late doesn't have them.
+- **Highlights** save part of a clip as its own clip. The scissors button marks 30 seconds;
+  drag the ends, or press I and O. Right-click a pull, death or lust for "Make a highlight of
+  this". **Save highlight** takes seconds; it may start a second or two early (nearest
+  keyframe).
+- **Drawing**: the pencil (or D) pauses and lets you draw: pen, arrow, box, circle, text (1 to
+  5), Ctrl+Z undoes. **Done** saves the picture beside the clip ("... 12m34s.png"); **Copy**
+  puts it on the clipboard. "Keep clips" deletes pictures with their clip.
+- **Keys**: space play/pause, arrows skip 5 s, I/O highlight start/end, C casts, D draw, F full
+  screen.
+- **Player**: click the video to play or pause, double-click for full screen. The speed button
+  steps 1x to 16x. Drag the bar under the timeline to resize the video.
+- **Buttons** beside the title: ☆ Keep (forever), open in your player, show in folder,
+  [hide chat](#hiding-the-chat), [YouTube](#to-youtube), run `after_clips` again, and the trash
+  (with its details and picture; restore from the trash to undo).
+- **Several at once**: Ctrl+click or Shift+click, then the trash or Delete.
+- **Less on screen**: Settings > Clips and storage > Clips window turns off Raids, Full
+  sessions, Highlight, Hide chat and YouTube.
 
 ### The command line
 
@@ -480,37 +346,35 @@ linux-wow-recorder keep <clip>       # keep a clip forever; --undo to let it exp
 linux-wow-recorder logs              # where the logs are, and the last lines
 ```
 
-The full list is in the [reference](reference.md#commands).
+All commands: [reference](reference.md#commands).
 
 ## Discord or Fluxer messages
 
-Add webhook URLs in Settings (**Add webhook**, and **Delete** next to each) or in `setup`, up
-to 25. Every message goes to each one, so you can post to several channels or servers. In
-Discord: Server Settings > Integrations > Webhooks > New Webhook > Copy Webhook URL. In Fluxer:
-the channel's or community's settings > Webhooks. Then choose which messages to send:
+Add up to 25 webhook URLs in Settings or `setup`; every message goes to each. Discord: Server
+Settings > Integrations > Webhooks > New Webhook > Copy Webhook URL. Fluxer: the channel's or
+community's settings > Webhooks. Then choose the messages:
 
 | Message | Sent when | On by default |
 |---|---|---|
 | WoW started | WoW started and recording began | no |
 | Combat logging started | WoW started writing a combat log | no |
 | WoW closed | WoW closed and the recording was saved | no |
-| Clips ready | clips were cut, listing each run with bosses killed, deaths and lusts | yes |
+| Clips ready | clips were cut, with bosses killed, deaths and lusts | yes |
 | No runs | a session had no dungeon runs or raid pulls | no |
-| No combat log | no combat log covers a session (logging was off?) | yes |
-| Recording failed | the recorder didn't start, or stopped mid-session | yes |
-| Low disk space | free space is low, or recording stopped because the drive is nearly full | yes |
+| No combat log | no combat log covers a session | yes |
+| Combat log off | WoW has run 10 minutes with no combat log | yes |
+| Recording failed | the recorder didn't start, or stopped | yes |
+| Low disk space | space is low, or recording stopped for it | yes |
 | Clip failed | a clip couldn't be cut | yes |
 | Hook failed | your `after_clips` command failed | yes |
 | Cleanup | old recordings were deleted | no |
 
-Treat webhook URLs like passwords: anyone who has one can post in that channel. The config
-file is saved readable by you only.
+Treat webhook URLs like passwords: anyone with one can post in that channel.
 
 ## Sending clips somewhere
 
-To copy or upload clips automatically, set **After clips** (`after_clips` in the config) to a
-command. It runs after each session, with the new clips' paths added as arguments. For
-example, `~/bin/upload-clips.sh` with:
+Set **After clips** (`after_clips`) to a command; it runs after each session with the new
+clips' paths as arguments, in the background. Its output goes to the service log. For example:
 
 ```bash
 #!/bin/sh
@@ -520,23 +384,15 @@ for clip in "$@"; do
 done
 ```
 
-The command runs in the background, so a long upload doesn't stop the next session from being
-recorded. Its output goes to the service log. If it fails, you get a message (when
-"Hook failed" is on).
-
 ### To Fireshare
 
-[Fireshare](https://github.com/fireshare-app/fireshare) (1.9 or newer) takes uploads from scripts
-with an upload token: in Fireshare, your account > Upload tokens > create one. The upload is a
-`POST` to `/api/upload/token` with the token as `Authorization: Bearer <token>` and the clip as
-the `file` form field (`title`, `folder` and `game` are optional); Fireshare answers 201 when it
-has the clip, and 409 when it already had it. A script for `after_clips` only needs that:
+[Fireshare](https://github.com/fireshare-app/fireshare) 1.9+ takes uploads with a token (your
+account > Upload tokens):
 
 ```bash
 #!/bin/sh
-# Uploads the new clips to Fireshare, and deletes each video here once Fireshare has it. The
-# .json and .jpg stay, so the clip browser still shows the details if you add the folder
-# Fireshare keeps its videos in to "Also show clips from".
+# Uploads the new clips to Fireshare and deletes each video here once Fireshare has it.
+# The .json and .jpg stay, for "Also show clips from".
 for clip in "$@"; do
     code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $FIRESHARE_TOKEN" \
            -F "file=@$clip" -F "game=World of Warcraft" https://fireshare.example.com/api/upload/token)
@@ -547,184 +403,128 @@ for clip in "$@"; do
 done
 ```
 
-Clips are large (a few GB for a key): if a reverse proxy in front of Fireshare limits upload
-sizes, send them in pieces with `/api/upload/token/chunked` instead (each request: `blob`,
-`chunkPart` from 1, `totalChunks`, a `checkSum` of your choice grouping the pieces, `fileName`,
-`fileSize`; Fireshare answers 202 until the last piece). Keep the token out of the config file
-and out of the script if others can read them: anyone with it can upload as you.
+If a proxy limits upload size, use `/api/upload/token/chunked` (fields `blob`, `chunkPart` from
+1, `totalChunks`, `checkSum`, `fileName`, `fileSize`). Keep the token out of files others can
+read.
 
 ### To YouTube
 
-The clip browser's upload button (beside "show in folder") makes a YouTube upload quick, but
-the app doesn't upload anything itself: your browser does. One click:
+The YouTube button doesn't upload anything; your browser does. It:
 
-1. copies a description: the run in a sentence, then chapters (the start, the run starting
-   and each boss pull, kill or wipe), which YouTube turns into chapter marks on the video
-2. opens YouTube's upload page in your browser
+1. copies a description with chapters (each boss pull, kill or wipe)
+2. opens YouTube's upload page
 3. shows the clip in your file manager
 
-Drag the clip onto the YouTube page and paste the description. YouTube takes the title from
-the file name, for example "2026-10-14 20-05 Temple of Sethraliss +12 Timed (20m58s)".
+Drag the clip onto the page and paste the description. The title comes from the file name.
 
-- Chapters need at least three marks 10 seconds apart, so a raid pull or a run with one boss
-  gets the sentence only.
-- New YouTube accounts can only upload videos up to 15 minutes until they verify a phone
-  number (YouTube Studio > Settings > Channel > Feature eligibility). Most dungeon clips are
-  longer.
-- A clip of 2 to 4 GB takes a while on a slow upload; YouTube keeps processing it after the
-  upload finishes, and HD versions show up last.
-- Choose Private, Unlisted or Public on YouTube's last page. Unlisted is handy for sharing a
-  run with your group.
-- If you also use an `after_clips` command that moves clips off this computer (like
-  `fireshare-upload`), upload from where the clip is now: add that folder to "Also show
-  clips from" and the button finds it there.
+- Chapters need three marks 10 seconds apart, so a single pull gets no chapters.
+- New YouTube accounts are limited to 15 minutes until phone-verified (YouTube Studio >
+  Settings > Channel > Feature eligibility).
+- If your `after_clips` moves clips away, add that folder to "Also show clips from" and the
+  button finds them there.
 
 ### Hiding the chat
 
-To share a clip without your chat (whispers, guild chat), the clip browser's hide button (an
-eye, beside "show in folder") makes a copy with a black box over it. It's only done when you
-ask; normal clips are never changed.
+The eye button makes a copy of a clip with a black box over your chat. Your clips are never
+changed.
 
-1. Pick the clip (pause it on a moment where the chat shows, if you like) and press the button.
-2. Drag a box over your chat on the picture: drag inside the box to move it, its red corner to
-   resize it, or anywhere else to draw a new one. The box is remembered for next time.
-3. **Make copy.** A progress bar shows how far it is; you can keep using the window.
+1. Pick the clip (pause where the chat shows, if you like) and press the button.
+2. Drag a box over the chat; it's remembered for next time.
+3. **Make copy.**
 
-The copy is saved beside the clip as "... (chat hidden).mp4" (in `clips/` if the clip's folder
-is read only) and shows up in the list like any clip, so the YouTube button works on it too.
-A full session gets a copy too once it's been cut, listed under Full sessions.
-
-- The box is in the same spot for the whole clip. If you move your chat frame in WoW, move
-  the box too.
-- The video has to be encoded again, unlike cutting. With an NVIDIA card that takes about a
-  seventh of the clip's length (a 20-minute clip: about 3 minutes); on AMD or Intel graphics
-  (VA-API) or the CPU it's slower.
-- The copy is deleted after "Keep clips" days like other clips (a full session's after "Keep
-  full recordings" days); ☆ Keep it to keep it.
+The copy, "... (chat hidden).mp4", appears in the list like any clip. The box stays in one spot
+for the whole clip. It's re-encoded: with NVIDIA about a seventh of the clip's length, slower on
+AMD, Intel or the CPU. It expires like other clips unless you ☆ Keep it.
 
 ### Keeping clips somewhere else
 
-The app records, cuts and keeps everything on this computer, and it doesn't move or upload
-anything itself: that's your After clips command's job, and getting the files somewhere (another
-drive, a mounted share, a sync folder) is up to you. Once they're there, the clip browser can
-still show them:
+The app never moves or uploads clips itself; that's your After clips command. To still see
+moved clips in the clip browser:
 
-1. **Move the video, leave its details.** Have your command move or delete only the `.mp4`, and
-   leave the clip's `.json` and `.jpg` in `clips/` (a few KB each).
-2. **Add the folder the videos end up in** to Settings > Clips and storage > "Also show clips
-   from". It has to be a folder on this computer: a second drive, or a share you've mounted.
+1. **Move only the `.mp4`**; leave its `.json` and `.jpg` in `clips/` (a few KB).
+2. **Add the folder** to Settings > Clips and storage > "Also show clips from". It must be on
+   this computer: a second drive, or a share you've mounted.
 
-Then the clips there are listed with your local ones (the details line says which folder each
-is in), play from there, and still have their picture, timeline, bosses, deaths and lusts. The
-details are matched by name, ignoring spaces, hyphens and punctuation, so a copy that was renamed
-on the way (Fireshare turns spaces into hyphens) still finds them.
+They're then listed and play with their picture and timeline. Details are matched by name, so a
+copy renamed with hyphens for spaces (Fireshare does this) still finds them.
 
 | What you do | What the clip browser shows |
 |---|---|
-| Move the `.mp4`, leave the `.json` and `.jpg` in `clips/` | everything: picture, timeline, bosses, deaths, lusts |
-| Move the `.json` (and `.jpg`) along with the `.mp4`, keeping the name | everything; the picture only if the `.jpg` went too |
-| Move the `.mp4` and delete its details | the dungeon, level, result and length, read from the name |
-| Copy the clip and let `clips/` expire it ("Keep clips") | the copy, but from its name only once the original expires: cleanup deletes the details with the clip. Move instead of copying to keep them |
-| Nothing in "Also show clips from" | only `clips/` |
+| Move the `.mp4`, leave the `.json` and `.jpg` | everything |
+| Move all three, same name | everything |
+| Move the `.mp4`, delete its details | dungeon, level, result and length, from the name |
+| Copy it and let `clips/` expire it | the copy, from its name only: cleanup deletes the details. Move instead |
 
-Clips in those folders are yours to manage:
-
-- The app never changes or deletes anything there on its own: no pictures are made there, Keep
-  and "Keep clips" don't apply, and only **Move to trash** (which you click) touches them. On a
-  share without a trash, it asks before deleting for good; in a folder that's read only for you
-  (a read-only share, say), it says so and deletes nothing.
-- If the folder isn't there (a drive or share not mounted), its clips just aren't listed, and
-  Settings shows a ⚠ beside it.
-- New clips show up by themselves when the folder is on this computer's own drives. On a network
-  share, changes made by another computer may not show until the list reloads (closing and
-  reopening the window does it).
-- Full sessions stay in the output folder. A full recording's runs come from its own `.json`
-  in `processed/`, so moving its clips doesn't change it.
+- The app never changes anything in those folders: Keep and "Keep clips" don't apply; only
+  **Move to trash** touches them (it asks first where there's no trash).
+- A folder that isn't mounted is skipped, with a ⚠ in Settings.
+- On a network share, changes from another computer show after reopening the window.
 
 ## Disk space and cleanup
 
-The app writes only inside three folders in your output folder:
+The app writes only inside your output folder:
 
 ```
 <output>/sessions/    the recording being made, and recordings not cut yet
 <output>/processed/   full recordings already cut, each with a .json of details
-<output>/clips/       the clips, each with a .json of details and a .jpg picture beside it
+<output>/clips/       the clips, each with a .json of details and a .jpg picture
 ```
 
-- **Full recordings** are deleted 3 days after they're made. You can change this in "Keep full
-  recordings" or `session_retention_days`; 0 means never. One marked ☆ Keep in the clip
-  browser's Full sessions is never deleted. A recording whose clips couldn't be
-  cut stays in `sessions/` instead, and you get a warning (in the log, and in Discord if "clip
-  failed" messages are on).
-- **Clips** are kept until you delete them. To expire them, set "Keep clips" or
-  `clip_retention_days`. A clip you've marked **Keep forever** is never deleted.
-- **Below 20 GB free** (`min_free_gb`) you get a warning. **Below 5 GB** (`stop_below_gb`)
-  recording stops, so the drive never fills up completely; what was recorded so far is kept.
+- **Full recordings** are deleted after 3 days ("Keep full recordings",
+  `session_retention_days`; 0 means never), unless ☆ Kept. One whose clips couldn't be cut
+  stays in `sessions/`, with a warning.
+- **Clips** stay until you delete them, unless you set "Keep clips" (`clip_retention_days`).
+  Kept clips are never deleted.
+- **Below 20 GB free** (`min_free_gb`) you get a warning; **below 5 GB** (`stop_below_gb`)
+  recording stops and what was recorded is kept.
 
 ## WoW versions
 
-- **Retail**: tested. Its PTR and beta are found too.
-- **Classic**: should work for dungeons; not tested yet.
-- **WoW Forever** (from 4 November 2026): its client is found as "Forever" if its game folder
-  is named like the others (`_forever_`). Its beta runs from `_classic_beta_` and is found as
-  "Classic beta". Its dungeons are clipped if they use a difficulty the app knows. If they
-  don't, the service log shows `Not a dungeon this app knows: <name> (difficulty N)`; please
-  report that line so it can be added.
-- **Raids** aren't clipped yet.
+- **Retail**: tested, with its PTR and beta.
+- **Classic**: should work; not tested yet.
+- **WoW Forever** (`_forever_`): found as "Forever"; its beta (`_classic_beta_`) as "Classic
+  beta". If a dungeon isn't clipped, the log says `Not a dungeon this app knows: <name>
+  (difficulty N)`; please report that line.
 
 ## Troubleshooting
 
-Start with `linux-wow-recorder status`, then the log: Show log in the tray menu, or
-`linux-wow-recorder logs`. The log files are in `~/.local/state/linux-wow-recorder/logs/`
-(tray menu: Folders and logs > Open log folder). To track a problem down, tick Detailed logging
-in Settings > Advanced.
+Start with `linux-wow-recorder status`, then the log (Show log in the tray menu, or
+`linux-wow-recorder logs`; files in `~/.local/state/linux-wow-recorder/logs/`). For more detail,
+tick Detailed logging in Settings > Advanced.
 
-To ask someone for help, make a report file (Settings > Advanced > Make a report file, or
-`linux-wow-recorder report`): a text file with your versions, settings and the end of the logs,
-with webhook links, your home folder, user name, computer name and IP addresses replaced. Nothing
-is sent; read it, then share it however you like.
+To ask for help, make a report file (Settings > Advanced > Make a report file, or
+`linux-wow-recorder report`). Your webhook links, home folder, names and IPs are blanked out.
+Nothing is sent: read it, then share it.
 
-**WoW is running but nothing is recorded.**
-Is the service running? `status` shows it, and the tray icon is an empty ring when it isn't.
-If the log says the recorder failed, run `linux-wow-recorder test-recorder` (while WoW is
-closed) to see gpu-screen-recorder's own error.
+**WoW runs but nothing is recorded.** Check the service is running (`status`; an empty ring in
+the tray). Run `linux-wow-recorder test-recorder` with WoW closed to see the recorder's error.
 
-**"No combat log covers this session."**
-Combat logging was off. Type `/combatlog` in the dungeon, or use an auto combat logging addon.
-If that keeps happening, try the app's optional [WoW addon](#the-wow-addon).
-The full recording is still kept in `processed/` for 3 days.
+**"No combat log covers this session."** Logging was off: `/combatlog`, a logging addon, or
+[the WoW addon](#the-wow-addon). The full recording stays in `processed/` for 3 days.
 
-**A session was recorded, but no clips.**
-The log says how many runs it found. Runs shorter than 5 minutes are skipped (except completed
-keys), and so are dungeons without a key where no boss was pulled.
+**Recorded, but no clips.** The log says how many runs it found. Runs under 5 minutes (except
+completed keys) and keyless dungeons with no boss pulled are skipped.
 
-**The tray icon doesn't show.**
-On GNOME, install the AppIndicator extension mentioned above. Elsewhere, check that the desktop
-app is running: run `linux-wow-recorder-gui` in a terminal and read what it prints.
+**No tray icon.** On GNOME, install the AppIndicator extension. Elsewhere, run
+`linux-wow-recorder-gui` in a terminal and read what it prints.
 
-**The settings didn't take effect.**
-Saving in the settings window restarts the service when the config changed: the button says
-**Save and restart service** then. After editing the config file by hand, restart it yourself:
-`systemctl --user restart linux-wow-recorder`.
+**Settings didn't take effect.** **Save and restart service** applies them. After editing the
+config file by hand: `systemctl --user restart linux-wow-recorder`.
 
-**Deaths or lusts look wrong.**
-They come straight from the combat log, and haven't been checked against every class yet
-(Feign Death, for example). Please report it, with the clip's `.json` if you can.
+**Deaths or lusts look wrong.** They come straight from the combat log and aren't checked for
+every class yet. Please report it, with the clip's `.json` if you can.
 
 ## Uninstalling
 
-In the desktop app: **Settings > Advanced > Uninstall...**. Or in a terminal:
+**Settings > Advanced > Uninstall...**, or:
 
 ```bash
 linux-wow-recorder uninstall
 ```
 
-Either one stops the recorder and removes its service, login and menu entries, settings and logs.
-It asks whether to delete your recordings and clips too (no, unless you tick it); if you do, only
-its own `sessions/`, `processed/` and `clips/` folders go, never anything else in your output
-folder, nor clips in your other folders. Installed with uv or pipx, the program is removed too.
-Installed as an RPM or Arch package, it tells you the command that finishes the job, since that
-needs your password:
+It removes the service, login and menu entries, settings and logs. It asks whether to delete
+your recordings and clips too (only its own `sessions/`, `processed/` and `clips/` folders).
+With uv or pipx the program goes too; for a package, finish with:
 
 ```bash
 sudo dnf remove linux-wow-recorder          # RPM
