@@ -553,6 +553,8 @@ class ClipBrowser(QWidget):
         self.mode_buttons = {}
         for mode, text, tip in ((model.KEYS, "Keystones", "A clip for each dungeon run"),
                                 (model.RAIDS, "Raids", "A clip for each raid boss pull"),
+                                (model.MOMENTS, "Moments",
+                                 "Deaths, level-ups and elite kills outside dungeons"),
                                 (model.SESSIONS, "Full sessions",
                                  "The whole recording of each time you played")):
             b = QPushButton(text)
@@ -949,7 +951,7 @@ class ClipBrowser(QWidget):
         self.list_stack.setCurrentIndex(view)
         self.show_view_button()
         mode = self.settings.value("mode")
-        self.mode = mode if mode in (model.RAIDS, model.SESSIONS) else model.KEYS
+        self.mode = mode if mode in (model.RAIDS, model.SESSIONS, model.MOMENTS) else model.KEYS
         self.mode_buttons[self.mode].setChecked(True)
         self.show_mode()
         self.reload()
@@ -1186,10 +1188,13 @@ class ClipBrowser(QWidget):
     def show_parts(self):
         """The views Settings > Clips window has on; Keystones alone needs no button."""
         raids, sessions = self.part_on("raids"), self.part_on("full_sessions")
+        moments = self.part_on("moments")
         self.mode_buttons[model.RAIDS].setVisible(raids)
         self.mode_buttons[model.SESSIONS].setVisible(sessions)
-        self.mode_buttons[model.KEYS].setVisible(raids or sessions)
-        if (self.mode == model.RAIDS and not raids) or (self.mode == model.SESSIONS and not sessions):
+        self.mode_buttons[model.MOMENTS].setVisible(moments)
+        self.mode_buttons[model.KEYS].setVisible(raids or sessions or moments)
+        if ((self.mode == model.RAIDS and not raids) or (self.mode == model.SESSIONS and not sessions)
+                or (self.mode == model.MOMENTS and not moments)):
             self.mode = model.KEYS
             self.mode_buttons[model.KEYS].setChecked(True)
             self.current = None
@@ -1197,7 +1202,7 @@ class ClipBrowser(QWidget):
 
     def fill_list(self, *_args, select=None):
         select = str(select or (self.current.path if self.current else "")) or None
-        key = "all" if self.mode == model.SESSIONS else self.filter_key
+        key = "all" if self.mode in (model.SESSIONS, model.MOMENTS) else self.filter_key
         shown = [c for c in self.clips if model.in_mode(c, self.mode)
                  and model.matches(c, key, self.search.text().strip())]
 
@@ -1304,9 +1309,12 @@ class ClipBrowser(QWidget):
         sessions, raids = self.mode == model.SESSIONS, self.mode == model.RAIDS
         if self.filter_key not in self.filters():   # Kills isn't Completed: back to All
             self.filter_key = "all"
-        self.filter_button.setVisible(not sessions)   # results are per run
+        moments = self.mode == model.MOMENTS
+        self.filter_button.setVisible(not sessions and not moments)   # results are per run
         self.show_filter_button()
-        self.search.setPlaceholderText("Search bosses and raids" if raids else "Search dungeons")
+        self.search.setPlaceholderText("Search bosses and raids" if raids else
+                                       "Search moments and zones" if moments else
+                                       "Search dungeons")
         self.tree.setHeaderLabels(SESSION_COLUMNS if sessions else RAID_COLUMNS if raids
                                   else COLUMNS)
 
@@ -1372,6 +1380,8 @@ class ClipBrowser(QWidget):
                 empty = "Pick a full session from the list." if sessions else "Pick a clip from the list."
             elif raids:
                 empty = "Raid boss clips show up here after your first boss pull."
+            elif self.mode == model.MOMENTS:
+                empty = "Deaths, level-ups and elite kills show up here once WoW closes."
             elif sessions:
                 empty = ("Full recordings show up here once a session has been cut into clips. "
                          "They're kept for as long as Settings > Clips and storage > "
@@ -1459,7 +1469,9 @@ class ClipBrowser(QWidget):
         self.result_chip.setVisible(bool(clip.result_text))
         self.result_chip.setStyleSheet(chip_style(clip.status, self.palette()))
         facts = [time.strftime("%a %Y-%m-%d %H:%M", time.localtime(clip.started))]
-        if clip.is_raid:
+        if clip.is_moment:
+            facts.append(f"clip {clip.length}")
+        elif clip.is_raid:
             facts.append(clip.raid)
             facts.append(f"pull {clip.length}")
         elif clip.highlight:

@@ -119,10 +119,16 @@ class Run:
     kills: list[tuple[float, str, int]] = field(default_factory=list)   # a key's counted mobs:
                                     # (time, GUID, forces)
     log_late: int | None = None     # a key whose combat log began after it did: by this many s
+    moments: list["Moment"] = field(default_factory=list)   # a moment clip's (find_moments);
+                                    # name is then what happened, label the zone
 
     @property
     def is_raid(self) -> bool:
         return bool(self.raid)
+
+    @property
+    def is_moment(self) -> bool:
+        return bool(self.moments)
 
     @property
     def minutes(self) -> float:
@@ -155,11 +161,31 @@ def parse_log_time(stamp: str, now: float | None = None) -> float | None:
     return dt.timestamp()
 
 
+def log_dirs(log_dir: Path) -> list[Path]:
+    """log_dir, and the Logs folders of the other WoW clients beside it (<WoW>/_forever_/Logs
+    next to <WoW>/_retail_/Logs): one WoW runs at a time, so a recording's time says which."""
+    dirs = [log_dir]
+    if log_dir.name == "Logs" and re.fullmatch(r"_\w+_", log_dir.parent.name):
+        dirs += sorted(d for d in log_dir.parent.parent.glob("_*_/Logs")
+                       if d.is_dir() and d != log_dir)
+    return dirs
+
+
+def log_opened(path: Path) -> float | None:
+    """When WoW opened a combat log, from its name (WoWCombatLog-110526_173620.txt)."""
+    m = _LOG_NAME.search(path.name)
+    return datetime.datetime.strptime(m.group(1), "%m%d%y_%H%M%S").timestamp() if m else None
+
+
+# A completed key's END (success 1); the all-zeros END when a keystone goes in doesn't count.
+KEY_DONE = re.compile(rb"  CHALLENGE_MODE_END,\d+,1,")
+
+
 def combat_logs_between(log_dir: Path, start: float, end: float) -> list[Path]:
-    """Combat log files under log_dir (subfolders too, e.g. Raider.IO's archive) that overlap
-    [start, end], oldest first."""
+    """Combat log files under log_dir and the other clients' Logs folders (log_dirs;
+    subfolders too, e.g. Raider.IO's archive) that overlap [start, end], oldest first."""
     found = []
-    for f in log_dir.glob("**/WoWCombatLog-*.txt"):
+    for f in (f for d in log_dirs(log_dir) for f in d.glob("**/WoWCombatLog-*.txt")):
         m = _LOG_NAME.search(f.name)
         if not m:
             continue
@@ -682,3 +708,132 @@ def find_runs(events: Iterable[tuple[float, str, list[str]]], min_run_minutes: i
         # Completed keys always count; anything else only if it's long enough to be a real run.
         return r.result == "completed" or r.minutes >= min_run_minutes
     return [r for r in finder.finish() if keep(r)]
+
+
+# ── Moments: short clips of things outside dungeon runs and raid pulls ──
+
+MOMENT_DEATH, MOMENT_LEVEL, MOMENT_ELITE = "death", "level", "elite"
+# What the WoW addon notes as worth a clip when killed (UnitClassification), and what it's called.
+ELITE_KINDS = {"elite": "Elite", "rareelite": "Rare elite", "rare": "Rare",
+               "worldboss": "World boss"}
+# Unit flags: the unit's affiliation is the last hex digit: 1 the player who logged, 2 party,
+# 4 raid.
+_MINE, _GROUP = 0x1, 0x7
+
+
+@dataclass
+class Moment:
+    kind: str                    # MOMENT_DEATH, MOMENT_LEVEL or MOMENT_ELITE
+    time: float
+    what: str                    # "Death", "Level 12", "Elite: Bristleback Chief"
+    zone: str = ""
+
+
+def _zones(events: Iterable[tuple[float, str, list[str]]]) -> list[tuple[float, str, int]]:
+    """(time, zone name, difficulty ID) of each ZONE_CHANGE."""
+    zones = []
+    for t, event, f in events:
+        if event == "ZONE_CHANGE":
+            try:
+                zones.append((t, f[1], int(f[2])))
+            except (IndexError, ValueError):
+                pass
+    return zones
+
+
+def _zone_at(zones: list[tuple[float, str, int]], t: float) -> tuple[str, int | None]:
+    """The zone's name and difficulty at time t; ("", None) before the first ZONE_CHANGE."""
+    name, diff = "", None
+    for when, zone, d in zones:
+        if when > t:
+            break
+        name, diff = zone, d
+    return name, diff
+
+
+def my_deaths(events: Iterable[tuple[float, str, list[str]]]) -> list[float]:
+    """When the player who logged died: a UNIT_DIED of a Player- unit with mine in its flags (a
+    hunter's Feign Death has unconsciousOnDeath 1)."""
+    found = []
+    for t, event, f in events:
+        if event != "UNIT_DIED" or len(f) < 7 or not f[4].startswith("Player-"):
+            continue
+        try:
+            mine = int(f[6], 16) & _MINE
+        except ValueError:
+            continue
+        if mine and f[8:9] != ["1"]:
+            found.append(t)
+    return found
+
+
+def elite_kills(logs: list[Path], elites: dict[int, str]) -> list[tuple[float, str, str]]:
+    """(time, name, kind) of each mob with an NPC ID in elites (NPC ID -> ELITE_KINDS key) that
+    died after the player or their group hurt it. Others' kills nearby aren't counted."""
+    if not elites or not logs:
+        return []
+    ids = "|".join(str(n) for n in sorted(elites))
+    pattern = f"  ([A-Z_]+_DAMAGE(_LANDED)?|UNIT_DIED|PARTY_KILL),.*-({ids})-[0-9A-Fa-f]+,"
+    hurt: set[str] = set()
+    dead: set[str] = set()
+    found = []
+    for t, event, f in _grep_events(logs, pattern):
+        if len(f) < 7:
+            continue
+        guid = f[4]
+        if not guid.startswith(("Creature-", "Vehicle-")):
+            continue
+        npc = forces.npc_id(guid)
+        if npc not in elites:
+            continue
+        if event in ("UNIT_DIED", "PARTY_KILL"):
+            if event == "PARTY_KILL" or guid in hurt:
+                if guid not in dead:
+                    dead.add(guid)
+                    found.append((t, f[5], elites[npc]))
+            continue
+        try:
+            if int(f[2], 16) & _GROUP:
+                hurt.add(guid)
+        except ValueError:
+            pass
+    return found
+
+
+def find_moments(events: list[tuple[float, str, list[str]]], kinds: Iterable[str],
+                 levels: Iterable[tuple[float, int]] = (),
+                 elites: Iterable[tuple[float, str, str]] = (),
+                 runs: Iterable[tuple[float, float]] = (),
+                 seconds: int = 30) -> list[Run]:
+    """A Run per moment clip: the player's deaths (from events), level-ups (levels: (time,
+    level), from the WoW addon) and elite kills (elites: elite_kills'), each `seconds` either
+    side; those closer together are one clip. Only the kinds asked for; none inside a dungeon run
+    or raid pull (runs: (start, end)), whose clips have them; elite kills only in the open
+    world (difficulty 0), where every mob in a dungeon is elite."""
+    kinds = set(kinds)
+    zones = _zones(events)
+    found: list[Moment] = []
+    if MOMENT_DEATH in kinds:
+        found += [Moment(MOMENT_DEATH, t, "Death") for t in my_deaths(events)]
+    if MOMENT_LEVEL in kinds:
+        found += [Moment(MOMENT_LEVEL, t, f"Level {lvl}") for t, lvl in levels]
+    if MOMENT_ELITE in kinds:
+        for t, name, kind in elites:
+            if _zone_at(zones, t)[1] in (0, None):
+                found.append(Moment(MOMENT_ELITE, t, f"{ELITE_KINDS.get(kind, 'Elite')}: {name}"))
+    spans = list(runs)
+    found = sorted((m for m in found if not any(a <= m.time <= b for a, b in spans)),
+                   key=lambda m: m.time)
+    groups: list[list[Moment]] = []
+    for m in found:
+        m.zone = _zone_at(zones, m.time)[0]
+        if groups and m.time - groups[-1][-1].time <= 2 * seconds:
+            groups[-1].append(m)
+        else:
+            groups.append([m])
+    moments = []
+    for g in groups:
+        what = list(dict.fromkeys(m.what for m in g))   # three deaths in a row: "Death"
+        moments.append(Run(" + ".join(what), g[0].time, g[-1].time, g[0].zone,
+                           result="moment", moments=g))
+    return moments

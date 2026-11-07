@@ -21,3 +21,11 @@ def pytest_configure(config):
     # down, which crashes the interpreter. No test reads Qt's messages.
     if config.pluginmanager.hasplugin("pytest-qt"):
         config.option.qt_log = False
+
+
+@pytest.fixture(autouse=True)
+def _no_wow_running(monkeypatch):
+    """Moment clips wait for WoW to close (clips.cut_moments): a WoW running on this computer
+    mustn't change what the tests do."""
+    from linux_wow_recorder import clips
+    monkeypatch.setattr(clips, "find_wow", lambda: None)

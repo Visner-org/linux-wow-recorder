@@ -37,13 +37,16 @@ def wow_process(args: list[str]) -> tuple[str, str] | None:
         if not m:
             continue
         exe = m.group(1).lower()
+        folder = _GAME_FOLDER.search(arg[:m.end()].rstrip())
+        if exe == "wow" and folder and folder.group(1).lower() != "retail":
+            # Another game run by the same Wow.exe name: WoW Forever's is _forever_/Wow.exe.
+            return folder.group(1).replace("_", " ").title(), f"{m.group(1)}.exe"
         if exe in FLAVORS:
             return FLAVORS[exe], f"{m.group(1)}.exe"
         if any(h in exe for h in _HELPERS):
             continue
         # An unknown name counts only inside a game folder ("_forever_"), so other programs
         # named Wow-something (addon managers and the like) don't start a recording.
-        folder = _GAME_FOLDER.search(arg[:m.end()].rstrip())
         if folder:
             return folder.group(1).replace("_", " ").title(), f"{m.group(1)}.exe"
     return None

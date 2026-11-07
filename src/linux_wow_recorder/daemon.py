@@ -8,13 +8,14 @@ import subprocess
 import sys
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import APP_TITLE, __version__, addon, logs, service, state
 from .clips import (SessionResult, cleanup, free_gb, new_recording_path, process_pending,
                     stale_recordings)
-from .combatlog import combat_logs_between, last_event_time, read_log_events, run_in_progress
+from .combatlog import (KEY_DONE, combat_logs_between, last_event_time, log_opened,
+                        read_log_events, run_in_progress)
 from .config import WOW_SOUND, Config
 from .detect import find_wow, find_wow_process, wow_alive, wow_window
 from .notify import Notifier
@@ -80,6 +81,9 @@ class Session:
     repicked: float = 0.0        # the last "Pick another window" acted on
     cut: float = 0.0             # the last "Cut the clips so far" acted on
     cut_checked: float = 0.0     # when the combat log was last read for it
+    keys_checked: float = 0.0    # when the combat log was last looked at for a completed key
+    key_done: bool = False       # a key was completed: its clip is cut once it's out of it
+    log_read: dict = field(default_factory=dict)   # combat log -> how far it was looked at
     pid: int | None = None       # WoW's process
     lost_at: float = 0.0         # when what was recorded went away; 0 while it's fine
     captures_lost: int = 0
@@ -328,6 +332,7 @@ class Daemon:
         self.check_monitor()
         self.check_repick()
         self.check_cut()
+        self.check_keys_done()
         if self.check_pause() or self.check_pick() or self.check_capture(pid):
             return
         if s.window_wait:
@@ -473,10 +478,64 @@ class Daemon:
         s.cut = asked
         self.status.update(cut_waiting=False)
         log.info("Cutting the clips so far, as asked; recording on in a new file.")
-        if self.recorder.is_running() and not s.picking:
+        self.cut_so_far()
+
+    def cut_so_far(self):
+        """Records on in a new file and cuts the one before it."""
+        if self.recorder.is_running() and not self.session.picking:
             self.recorder.stop()
             self.start_recording()
         self.start_cutting()
+
+    def check_keys_done(self):
+        """With cut_after_runs: once a key is completed and the player is out of it (or still
+        in the dungeon after it), its clip is cut, while WoW runs on. Only what the combat log
+        gained since the last look is read, for a completed key's END; the whole log only then."""
+        s, now = self.session, time.time()
+        if (not self.cfg.cut_after_runs or s.paused or s.picking or not self.recorder.is_running()
+                or now - s.keys_checked < CUT_CHECK_INTERVAL):
+            return
+        s.keys_checked = now
+        logs = combat_logs_between(self.cfg.combat_log_dir, s.start, now)
+        for f in logs:
+            s.key_done |= self.log_news(f)
+        if not s.key_done or run_in_progress(read_log_events(logs)):
+            return
+        s.key_done = False
+        log.info("A key was completed; cutting its clip, recording on in a new file.")
+        self.cut_so_far()
+
+    def log_news(self, f: Path) -> bool:
+        """Whether a combat log gained a completed key's END since it was last looked at. A log
+        opened before the session is read from where it was then."""
+        s = self.session
+        try:
+            size = f.stat().st_size
+        except OSError:
+            return False
+        if f not in s.log_read:
+            s.log_read[f] = 0 if (log_opened(f) or 0) >= s.start - 60 else size
+        start = s.log_read[f]
+        if size <= start:
+            s.log_read[f] = min(start, size)   # a new log under the same name
+            return False
+        found = False
+        try:
+            with open(f, "rb") as fh:
+                fh.seek(start)
+                while chunk := fh.read(min(4 << 20, size - start)):
+                    end = chunk.rfind(b"\n") + 1   # whole lines only
+                    if not end:
+                        break
+                    found = found or bool(KEY_DONE.search(chunk, 0, end))
+                    start += end
+                    if start >= size:
+                        break
+                    fh.seek(start)
+        except OSError:
+            return found
+        s.log_read[f] = start
+        return found
 
     def check_capture(self, pid: int | None) -> bool:
         """Handles the recording losing what it records: WoW crashed and came back within a
@@ -703,7 +762,9 @@ class Daemon:
             log.info(f"{len(clips)} clip(s) saved in {self.cfg.clips_dir}")
             lines = [f"✅ **{len(clips)}** clip(s) saved:"]
             lines += [f"• {run.name} {run.label} ({run.length}){run_summary(run)}"
-                      for run, _ in clips if not run.is_raid]
+                      for run, _ in clips if not run.is_raid and not run.is_moment]
+            lines += [f"• {run.name}{f' ({run.label})' if run.label else ''}"
+                      for run, _ in clips if run.is_moment]
             lines += raid_summary([run for run, _ in clips if run.is_raid])
             self.notifier.send("clips_ready", "\n".join(lines))
         for r in results:

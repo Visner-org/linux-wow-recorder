@@ -62,6 +62,12 @@ if [ "$1" -eq 0 ]; then
 fi
 
 %changelog
+* Fri Nov 06 2026 Linux WoW Recorder - 1.3.0-1
+- A key's clip is cut as soon as it's done, while you play on
+- Rules for which keys get a clip: lowest level, least and most time left
+- Moments: short clips of your deaths, level-ups and elite kills (Moments view)
+- WoW Forever: its combat logs are read and the addon installs there too
+
 * Thu Nov 05 2026 Linux WoW Recorder - 1.2.7-1
 - The screen-share dialog waits for WoW's window; on KDE Plasma the picked window is remembered
 - Drag on the timeline or the casts strip to scrub

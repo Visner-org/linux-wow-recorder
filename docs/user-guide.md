@@ -211,8 +211,9 @@ recording. Everything else is in the [config file](reference.md#config-file).
 
 ### The WoW addon
 
-**Optional.** Only install it if your logs miss keys or their start: clips never cut ("No combat
-log covers this session"), or details saying "combat log began 1:04 late".
+**Optional.** Install it if your logs miss keys or their start (clips never cut, "No combat
+log covers this session", or details saying "combat log began 1:04 late"), or for level-up
+and elite kill [moments](#moments).
 
 Why it happens: logging addons turn logging on when you change zones. If you zone in before the
 key is in, the dungeon has no difficulty yet; putting the key in makes it Mythic+ with no zone
@@ -226,8 +227,10 @@ Logging) on in dungeons and raids:
 - when the dungeon's difficulty changes
 - at each boss pull and after each loading screen
 
-It never turns logging off, shows nothing, saves nothing and reads nothing else. It works
-alongside other logging addons.
+It also notes when you level up, and which mobs are elite or rare (from their nameplates, out
+in the world), in its saved variables. WoW writes them at logout or `/reload`.
+
+It never turns logging off and shows nothing. It works alongside other logging addons.
 
 Before you install it:
 
@@ -238,30 +241,51 @@ Before you install it:
 - **Advanced Combat Logging stays on** after you remove it; turn it off in Options > Network if
   you like.
 - **It's not on CurseForge or Wago**; the app updates it. It's two small text files in
-  `_retail_/Interface/AddOns/LinuxWoWRecorder`.
-- **Retail only.** In Classic it shows as out of date.
+  `_retail_/Interface/AddOns/LinuxWoWRecorder` (and `_forever_`'s).
+- **Retail and WoW Forever.** In Classic it shows as out of date.
 - **After a big WoW patch** it shows as out of date until the app's next version: tick **Load
   out of date AddOns** meanwhile.
 - It can't recover keys from before you installed it.
 
 **Install:** Settings > **WoW addon** > **Install**, or `linux-wow-recorder install-addon`, then
-`/reload` in WoW. It goes into the WoW your combat log folder belongs to. **Remove:** the same
+`/reload` in WoW. It goes into the WoW your combat log folder belongs to, and the other games
+beside it (WoW Forever). **Remove:** the same
 page, or untick it in WoW's AddOns list. Uninstalling the app removes it too.
 
 ## Everyday use
 
 Start WoW and play. The service notices WoW within seconds, however it's launched, and records.
-When WoW closes it cuts the clips, a few seconds per run:
+It cuts a key's clip a minute or two after the key is done, while you play on; the rest when
+WoW closes, a few seconds per run:
 
 - **Mythic+ keys**, start to end. Abandoned keys too, if they lasted 5 minutes.
 - **Dungeons without a key** (Normal, Heroic, Mythic 0, Timewalking, Follower), entering to
   leaving, if a boss was pulled.
 - **Raid boss pulls**, pull to kill or wipe.
 
+Settings > Clips and storage > **Mythic+ keys** picks which keys get a clip: the lowest key
+level, and the least and most time left on the timer (below 0 is over time; abandoned keys
+have no time left, so only the level applies to them).
+
 Clips are named like `2026-10-08 19-03 Kings' Rest +12 Timed (24m52s).mp4`. A completed key is
 **Timed** or **Over time** by the dungeon's time limit, which the app keeps a list of for the
 current and last season (others say "Completed"). The clip browser also shows the upgrade
 ("Timed +2") and the time left or over.
+
+### Moments
+
+Short clips outside dungeons and raid boss pulls, 30 seconds either side (Settings > Clips and
+storage > **Moments**):
+
+- **Your deaths.**
+- **Level-ups** (needs [the addon](#the-wow-addon)).
+- **Elite and rare kills** in the open world, by you or your group (needs the addon; a mob
+  counts once its nameplate was seen).
+
+They're cut when WoW closes, since that's when WoW saves the addon's notes. Moments close
+together are one clip, like `2026-11-06 16-31-29 Death + Level 12 - Mulgore.mp4`. Deaths and
+kills need combat logging on in the open world too, not only in dungeons. The clip browser
+lists them under **Moments**.
 
 ### The window and the tray icon (desktop app)
 
@@ -482,7 +506,8 @@ The app writes only inside your output folder:
 
 - **Retail**: tested, with its PTR and beta.
 - **Classic**: should work; not tested yet.
-- **WoW Forever** (`_forever_`): found as "Forever"; its beta (`_classic_beta_`) as "Classic
+- **WoW Forever** (`_forever_`): found as "Forever"; its combat logs are read from
+  `_forever_/Logs` beside your retail Logs folder. Its beta (`_classic_beta_`) as "Classic
   beta". If a dungeon isn't clipped, the log says `Not a dungeon this app knows: <name>
   (difficulty N)`; please report that line.
 

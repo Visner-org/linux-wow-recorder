@@ -601,3 +601,71 @@ def test_last_event_time_is_the_newest_whole_line(tmp_path):
         f.write("10/26/2026 12:06:00.000+0  SPELL_DAMAGE,x\n")
         f.write("10/26/2026 12:07:00.000+0  SPELL_DA")            # still being written
     assert last_event_time([log]) == parse_log_time("10/26/2026 12:06:00.000+0")
+
+
+# ── Moments ──
+
+from linux_wow_recorder.combatlog import (KEY_DONE, elite_kills, find_moments,  # noqa: E402
+                                          log_dirs, my_deaths)
+
+
+def unit_died(t, guid, flags, unconscious="0"):
+    return (T0 + t, "UNIT_DIED", ["0000000000000000", "nil", "0x80000000", "0x80000000", guid,
+                                  "Name-Realm-US", flags, "0x0", unconscious])
+
+
+def test_only_the_loggers_own_deaths_are_moments():
+    events = [unit_died(10, "Player-1-A", "0x511"), unit_died(20, "Player-1-B", "0x512"),
+              unit_died(30, "Player-1-A", "0x511", "1"),   # Feign Death
+              unit_died(40, "Creature-0-1-1-1-2958-00006E70C1", "0xa48")]
+    assert my_deaths(events) == [T0 + 10]
+
+
+def test_moments_close_together_are_one_clip_and_none_inside_a_run():
+    events = [zone(0, 1, "Mulgore", 0), unit_died(100, "Player-1-A", "0x511"),
+              zone(500, 2290, "Mists of Tirna Scithe", 8), unit_died(600, "Player-1-A", "0x511"),
+              zone(900, 1, "Mulgore", 0), unit_died(2000, "Player-1-A", "0x511")]
+    levels = [(T0 + 130, 12)]
+    elites = [(T0 + 2010, "Bristleback Chief", "elite"),
+              (T0 + 700, "Ingra Maloch", "elite")]   # in a dungeon: every mob there is elite
+    runs = find_moments(events, ["death", "level", "elite"], levels, elites,
+                        runs=[(T0 + 500, T0 + 900)])
+    assert [(r.name, r.label, r.start - T0, r.end - T0) for r in runs] == [
+        ("Death + Level 12", "Mulgore", 100, 130),
+        ("Death + Elite: Bristleback Chief", "Mulgore", 2000, 2010)]
+    assert all(r.is_moment and r.result == "moment" for r in runs)
+    assert find_moments(events, ["level"], levels) [0].name == "Level 12"
+    assert find_moments(events, [], levels, elites) == []
+
+
+def test_an_elite_counts_only_when_the_group_hurt_it(tmp_path):
+    log = tmp_path / "WoWCombatLog-110626_162246.txt"
+    chief, other = "Creature-0-1-1-1-3068-0000000001", "Creature-0-1-1-1-3068-0000000002"
+    wolf = "Creature-0-1-1-1-2958-0000000003"
+    log.write_text(
+        f'11/6/2026 16:30:00.000-8  SWING_DAMAGE,Player-1-A,"Me-Realm-US",0x511,0x0,{chief},'
+        f'"Bristleback Chief",0x10a48,0x0,10,0,-1\n'
+        f'11/6/2026 16:30:05.000-8  UNIT_DIED,0000000000000000,nil,0x80000000,0x80000000,{chief},'
+        f'"Bristleback Chief",0x10a48,0x0,0\n'
+        f'11/6/2026 16:31:00.000-8  SWING_DAMAGE,Player-1-X,"Them-Realm-US",0x548,0x0,{other},'
+        f'"Bristleback Chief",0x10a48,0x0,10,0,-1\n'
+        f'11/6/2026 16:31:05.000-8  UNIT_DIED,0000000000000000,nil,0x80000000,0x80000000,{other},'
+        f'"Bristleback Chief",0x10a48,0x0,0\n'
+        f'11/6/2026 16:32:05.000-8  UNIT_DIED,0000000000000000,nil,0x80000000,0x80000000,{wolf},'
+        f'"Prairie Wolf",0x10a48,0x0,0\n')
+    [(t, name, kind)] = elite_kills([log], {3068: "elite"})
+    assert (name, kind) == ("Bristleback Chief", "elite")
+    assert elite_kills([log], {}) == []
+
+
+def test_logs_of_the_other_wow_clients_are_read_too(tmp_path):
+    retail, forever = tmp_path / "_retail_" / "Logs", tmp_path / "_forever_" / "Logs"
+    retail.mkdir(parents=True)
+    forever.mkdir(parents=True)
+    assert log_dirs(retail) == [retail, forever]
+    assert log_dirs(tmp_path) == [tmp_path]   # not a WoW client's Logs folder
+
+
+def test_a_completed_keys_end_is_spotted_in_raw_log_text():
+    assert KEY_DONE.search(b"11/6/2026 16:30:00.000-8  CHALLENGE_MODE_END,2290,1,12,1650000\n")
+    assert not KEY_DONE.search(b"11/6/2026 16:30:00.000-8  CHALLENGE_MODE_END,2290,0,0,0\n")

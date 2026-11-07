@@ -214,7 +214,7 @@ FILTERS = {"all": "All", "completed": "Completed", "abandoned": "Abandoned"}
 RAID_FILTERS = {"all": "All", "kill": "Kills", "wipe": "Wipes"}   # as many buttons as FILTERS
 # What the clip browser lists: a clip per dungeon run, a clip per raid boss pull, or the full
 # recordings they were cut from.
-KEYS, RAIDS, SESSIONS = "keys", "raids", "sessions"
+KEYS, RAIDS, SESSIONS, MOMENTS = "keys", "raids", "sessions", "moments"
 
 
 @dataclass
@@ -259,6 +259,12 @@ class ClipInfo:
     def is_raid(self) -> bool:
         """A raid boss pull's clip; its dungeon is the boss."""
         return self.details.get("kind") == "raid"
+
+    @property
+    def is_moment(self) -> bool:
+        """A death, level-up or elite kill's clip; its dungeon is what happened, its label the
+        zone."""
+        return self.details.get("kind") == "moment"
 
     @property
     def raid(self) -> str:
@@ -308,7 +314,7 @@ class ClipInfo:
         """The result for people: "Timed +2", "Over time", "Heroic", "LFR Kill", ..."""
         if self.highlight and not self.result and not self.chip:
             return "Highlight"   # from a full session, with no run in it
-        if self.is_raid and not self.chip:
+        if (self.is_raid or self.is_moment) and not self.chip:
             return self.label
         if not self.chip and self.upgrade is not None:
             return f"Timed +{self.upgrade}" if self.upgrade else "Over time"
@@ -334,10 +340,12 @@ def clip_info(path: Path, details: dict) -> ClipInfo | None:
     if details.get("dungeon"):
         # A highlight lists its own length, not its run's.
         length = (details.get("highlight") or {}).get("length") or details.get("run_length", "")
+        moment = details.get("kind") == "moment"
         return ClipInfo(path, details.get("run_start") or path.stat().st_mtime,
                         details["dungeon"], details.get("level"), details.get("label", ""),
                         details.get("result", ""), length,
-                        details.get("deaths_total"), details.get("bosses_killed"),
+                        None if moment else details.get("deaths_total"),
+                        None if moment else details.get("bosses_killed"),
                         bool(details.get("keep")), details)
     m = _CLIP_NAME.match(path.name)
     hyphenated = None if m else _HYPHENATED_NAME.match(path.name)
@@ -421,17 +429,21 @@ def _read(read_sidecar, path: Path) -> dict:
 
 
 def in_mode(clip: ClipInfo, mode: str) -> bool:
-    """Whether the clip browser lists the clip in mode: raid pulls under Raids, dungeon runs
-    under Keystones, highlights of full sessions with the sessions."""
+    """Whether the clip browser lists the clip in mode: raid pulls under Raids, deaths,
+    level-ups and elite kills under Moments, dungeon runs under Keystones, highlights of full
+    sessions with the sessions."""
     if mode == SESSIONS or clip.from_session:
         return mode == SESSIONS
-    return clip.is_raid == (mode == RAIDS)
+    if clip.is_moment:
+        return mode == MOMENTS
+    return mode == (RAIDS if clip.is_raid else KEYS)
 
 
 def matches(clip: ClipInfo, filter_key: str, search: str) -> bool:
     if filter_key != "all" and clip.filter_key != filter_key:
         return False
-    return search.lower() in f"{clip.dungeon} {clip.raid}".lower() if search else True
+    zone = clip.label if clip.is_moment else ""
+    return search.lower() in f"{clip.dungeon} {clip.raid} {zone}".lower() if search else True
 
 
 def mmss(seconds: float) -> str:

@@ -85,6 +85,28 @@ def _spin(value, low, high, suffix="", zero_text="") -> QSpinBox:
     return box
 
 
+def _time_left_box(value) -> QComboBox:
+    """Minutes left on a key's timer: "Any", or -20 to +20 (a value set in the config file
+    outside that is listed too)."""
+    box = QComboBox()
+    box.addItem("Any", "")
+    minutes = list(range(-20, 21))
+    if value not in ("", None):
+        value = int(value) if float(value).is_integer() else float(value)
+        if value not in minutes:
+            minutes = sorted(minutes + [value])
+    for m in minutes:
+        box.addItem(f"{m:+g} min" if m else "0 min", m)
+    box.setCurrentIndex(0 if value in ("", None) else max(0, minutes.index(value) + 1))
+    box.setMaxVisibleItems(15)
+    return box
+
+
+def _time_left(box: QComboBox):
+    value = box.currentData()
+    return "" if value in ("", None) else value
+
+
 def _section(*parts) -> QWidget:
     """A page's column: headings, forms and widgets, top-aligned."""
     w = QWidget()
@@ -563,7 +585,37 @@ class SettingsWindow(QDialog):
         self.raids.setCurrentIndex(max(0, self.raids.findData(c["raids"])))
         form.addRow("Raid boss clips",
                     _field(self.raids, _hint("A clip per boss pull. Pulls under 30 s are skipped.")))
-        return _section(form, _heading("Also show clips from"), self.other_folders_part())
+        self.cut_after_runs = QCheckBox("Cut a key's clip as soon as it's done")
+        self.cut_after_runs.setChecked(bool(c["cut_after_runs"]))
+        form.addRow("", self.cut_after_runs)
+
+        keys = _form()
+        # Keys start at +2: the box's lowest step (1) is "Any" (saved as 0).
+        self.key_min_level = _spin(max(1, int(c["key_min_level"])), 1, 40, "", "Any")
+        self.key_min_level.setPrefix("+")
+        keys.addRow("Lowest key level", self.key_min_level)
+        self.key_min_left = _time_left_box(c["key_min_time_left"])
+        keys.addRow("Least time left", self.key_min_left)
+        self.key_max_left = _time_left_box(c["key_max_time_left"])
+        keys.addRow("Most time left",
+                    _field(self.key_max_left,
+                           _hint("Minutes left on the timer; below 0 is over time.")))
+
+        self.moment_boxes = {}
+        moments = QVBoxLayout()
+        for key, label in config.MOMENTS.items():
+            box = QCheckBox(label)
+            box.setObjectName(f"moment_{key}")
+            box.setChecked(key in c["moments"])
+            self.moment_boxes[key] = box
+            moments.addWidget(box)
+        self.moment_seconds = _spin(c["moment_seconds"], 5, 300, " s")
+        seconds = _form()
+        seconds.addRow("Video before and after", self.moment_seconds)
+        moments.addLayout(seconds)
+        return _section(form, _heading("Mythic+ keys"), keys, _heading("Moments"),
+                        _hint("Short clips outside dungeons, cut when WoW closes."), moments,
+                        _heading("Also show clips from"), self.other_folders_part())
 
     def clips_window_part(self) -> QWidget:
         self.window_parts = {}
@@ -957,6 +1009,12 @@ class SettingsWindow(QDialog):
         c["raids"] = self.raids.currentData()
         c["pad_before"] = self.pad_before.value()
         c["pad_after"] = self.pad_after.value()
+        c["cut_after_runs"] = self.cut_after_runs.isChecked()
+        c["key_min_level"] = 0 if self.key_min_level.value() <= 1 else self.key_min_level.value()
+        c["key_min_time_left"] = _time_left(self.key_min_left)
+        c["key_max_time_left"] = _time_left(self.key_max_left)
+        c["moments"] = [k for k, b in self.moment_boxes.items() if b.isChecked()]
+        c["moment_seconds"] = self.moment_seconds.value()
         c["other_folders"] = [self.other_folders.item(i).text()
                               for i in range(self.other_folders.count())]
         d["discord"]["webhook_urls"] = [e.text().strip() for e in self.webhooks

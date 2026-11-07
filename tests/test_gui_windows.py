@@ -931,7 +931,7 @@ def test_settings_can_hide_parts_of_the_clips_window(qtbot, cfg, fake_recorder, 
     w = settings.SettingsWindow()
     qtbot.addWidget(w)
     qtbot.waitUntil(lambda: w.save_button.text() == "Save", timeout=3000)
-    for key in ("full_sessions", "youtube", "raids", "hide_chat"):
+    for key in ("full_sessions", "youtube", "raids", "moments", "hide_chat"):
         w.window_parts[key].setChecked(False)
     qtbot.waitUntil(lambda: not w.check_timer.isActive(), timeout=2000)
     assert w.save_button.text() == "Save"   # the desktop app's: no restart
@@ -1063,3 +1063,19 @@ def test_the_speed_button_steps_through_the_speeds(qtbot, cfg):
         seen.append((w.speed_button.text(), w.player.playbackRate(), w.cast_strip.rate))
     assert seen == [("2x", 2.0, 2.0), ("4x", 4.0, 4.0), ("8x", 8.0, 8.0), ("16x", 16.0, 16.0),
                     ("1x", 1.0, 1.0)]
+
+
+def test_key_rules_in_settings(qtbot, cfg, fake_recorder):
+    w = settings.SettingsWindow()
+    qtbot.addWidget(w)
+    assert w.key_min_level.text() == "Any" and w.key_min_left.currentText() == "Any"
+    assert w.key_min_level.minimum() == 1   # "Any"; keys start at +2
+    w.key_min_level.setValue(2)
+    assert w.key_min_level.text() == "+2"
+    w.key_min_left.setCurrentIndex(w.key_min_left.findData(-5))
+    assert w.key_min_left.currentText() == "-5 min"
+    assert w.key_max_left.count() == 42   # Any, -20 to +20
+    c = w.collect()["clips"]
+    assert (c["key_min_level"], c["key_min_time_left"], c["key_max_time_left"]) == (2, -5, "")
+    w.key_min_level.setValue(1)
+    assert w.collect()["clips"]["key_min_level"] == 0

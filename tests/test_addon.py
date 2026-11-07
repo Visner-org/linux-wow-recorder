@@ -52,3 +52,39 @@ def test_remove(tmp_path):
     addon.install(logs)
     gone = addon.remove(logs)
     assert gone and not gone.exists() and gone.parent.is_dir()   # AddOns itself stays
+
+
+def test_installed_into_every_wow_client_beside_the_combat_logs(tmp_path):
+    logs = wow(tmp_path)
+    (tmp_path / "_forever_" / "WTF").mkdir(parents=True)
+    assert addon.install(logs) is None
+    for client in ("_retail_", "_forever_"):
+        assert addon.version(tmp_path / client / "Interface" / "AddOns" / addon.NAME)
+    assert addon.remove(logs)
+    assert not (tmp_path / "_forever_" / "Interface" / "AddOns" / addon.NAME).exists()
+
+
+def test_a_new_client_gets_the_addon_once_it_was_chosen(tmp_path):
+    logs = wow(tmp_path)
+    addon.install(logs)
+    (tmp_path / "_forever_" / "WTF").mkdir(parents=True)   # WoW Forever installed later
+    addon.refresh(logs)
+    assert addon.version(tmp_path / "_forever_" / "Interface" / "AddOns" / addon.NAME)
+
+
+def test_reads_level_ups_and_elites_from_wows_saved_variables(tmp_path):
+    logs = wow(tmp_path)
+    (tmp_path / "_forever_" / "WTF").mkdir(parents=True)
+    for client, text in (
+        ("_retail_", 'LinuxWoWRecorderDB = {\n["elites"] = {\n[3068] = "elite",\n'
+                     '[5785] = "rareelite",\n},\n["levels"] = {\n"1762468288:12", -- [1]\n},\n}\n'),
+        ("_forever_", 'LinuxWoWRecorderDB = {\n["levels"] = {\n"1762469000:13", -- [1]\n},\n'
+                      '["elites"] = {\n},\n}\n'),
+    ):
+        saved = tmp_path / client / "WTF" / "Account" / "ACCOUNT" / "SavedVariables"
+        saved.mkdir(parents=True)
+        (saved / f"{addon.NAME}.lua").write_text(text)
+    levels, elites = addon.read_saved(logs)
+    assert levels == [(1762468288.0, 12), (1762469000.0, 13)]
+    assert elites == {3068: "elite", 5785: "rareelite"}
+    assert addon.read_saved(None) == ([], {})

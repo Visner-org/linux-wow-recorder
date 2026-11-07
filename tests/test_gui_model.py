@@ -484,3 +484,15 @@ def test_highlights_are_listed_where_they_were_made():
     assert model.in_mode(session, model.SESSIONS) and model.in_mode(older, model.SESSIONS)
     assert older.result_text == "Highlight" and key.result_text != "Highlight"
     assert older.status == "highlight" and key.status == "completed"
+
+
+def test_each_clip_is_listed_in_one_view_only():
+    def info(details):
+        return model.clip_info(Path("c.mp4"), {"run_start": 1.0, **details})
+    key = info({"dungeon": "Ara-Kara", "result": "completed", "label": "+12 Timed"})
+    pull = info({"kind": "raid", "dungeon": "Vexie", "raid": "Undermine", "result": "kill"})
+    moment = info({"kind": "moment", "dungeon": "Death", "label": "Mulgore", "result": "moment"})
+    views = (model.KEYS, model.RAIDS, model.MOMENTS)   # Full sessions loads its own list
+    assert [[model.in_mode(c, v) for v in views] for c in (key, pull, moment)] == [
+        [True, False, False], [False, True, False], [False, False, True]]
+    assert moment.result_text == "Mulgore" and moment.deaths is None

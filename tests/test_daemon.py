@@ -898,3 +898,48 @@ def test_no_warning_when_a_combat_log_is_being_written(make, tmp_path):
     d.check_session()
     assert "combat_log_off" not in d.notifier.sent
     assert d.notifier.sent.count("combat_log_started") == 1
+
+
+def test_a_completed_keys_clip_is_cut_while_wow_runs_on(make, monkeypatch):
+    d, clock, _ = make()
+    entered, release, calls = blocking_process_pending(monkeypatch)
+    in_key = [True]
+    monkeypatch.setattr(daemon, "run_in_progress", lambda events: in_key[0])
+    d.start_session("Retail", "Wow.exe", pid=100)
+    first = d.recorder.file
+    first.parent.mkdir(parents=True)
+    first.touch()
+    log = d.cfg.combat_log_dir / f"WoWCombatLog-{datetime.datetime.fromtimestamp(clock.now):%m%d%y_%H%M%S}.txt"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text("11/6/2026 16:30:00.000-8  CHALLENGE_MODE_END,2290,0,0,0\n")   # keystone in
+    os.utime(log, (clock.now, clock.now))
+    clock.now += daemon.CUT_CHECK_INTERVAL
+    d.check_session(100)
+    assert d._cutter is None and not d.session.key_done
+    with log.open("a") as f:
+        f.write("11/6/2026 17:00:00.000-8  CHALLENGE_MODE_END,2290,1,12,1650000\n")
+    os.utime(log, (clock.now, clock.now))
+    in_key[0] = True   # still in the dungeon's run, as far as the log says
+    clock.now += daemon.CUT_CHECK_INTERVAL
+    d.check_session(100)
+    assert d._cutter is None and d.session.key_done
+    in_key[0] = False
+    clock.now += daemon.CUT_CHECK_INTERVAL
+    d.check_session(100)
+    assert entered.wait(5)
+    assert d.recorder.starts == 2 and d.recorder.file != first and calls == [d.recorder.file]
+    release.set()
+    wait_for_cutter(d)
+    clock.now += daemon.CUT_CHECK_INTERVAL
+    d.check_session(100)   # the END is read once
+    assert d.recorder.starts == 2 and d._cutter is None
+
+
+def test_keys_arent_cut_mid_session_when_turned_off(make, monkeypatch):
+    d, clock, _ = make()
+    d.cfg.cut_after_runs = False
+    monkeypatch.setattr(daemon, "combat_logs_between",
+                        lambda *a: pytest.fail("the log isn't read"))
+    d.start_session("Retail", "Wow.exe", pid=100)
+    clock.now += daemon.CUT_CHECK_INTERVAL
+    d.check_keys_done()

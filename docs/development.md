@@ -56,6 +56,10 @@ daemon.run() loop, every poll_interval seconds
       recorder.start()                gpu-screen-recorder → <output>/sessions/<time>.mkv
       status.json: recording
   WoW still running → check_session()
+      check_keys_done()               cut_after_runs: every 30 s, reads what the combat logs
+                                      gained for a completed key's END (KEY_DONE); once out of
+                                      the run (run_in_progress), records on in a new file and
+                                      runs the cutter, as "Cut the clips so far" does
       check_pause()                   control.json asks to pause this session: stop the
                                       recorder (status.json: paused), or record again
       check_capture()                 the recorder says its window is gone ("error" from
@@ -78,9 +82,14 @@ daemon.run() loop, every poll_interval seconds
           combatlog.read_log_events()   grep keeps only the needed events
           combatlog.find_runs()         runs, with bosses, deaths and lusts
           combatlog.read_casts()        the group's casts (grep, once per recording)
+          key_wanted()                  the Mythic+ key rules (level, time left)
           cut_clip()                    ffmpeg -ss/-t stream copy → clips/<name>.mp4 + .json
           → processed/ + .json          the recording's details, for Full sessions (stays in
-                                        sessions/ if a cut failed: retried next time)
+                                        sessions/ if a cut failed: retried next time);
+                                        "moments": "pending" while moments are on
+        cut_moments()                 only with nothing recording and WoW closed (the addon's
+                                      saved variables are written at logout): each processed
+                                      recording still pending, see [Moments](#moments)
         report()                      Discord/Fluxer webhooks
         run_hook() in a thread        after_clips
         cleanup()                     retention: processed/ and clips/, never sessions/
@@ -160,6 +169,31 @@ left; read the result before committing it anyway. What they showed:
 - Lust buffs come back without a debuff (an extended lust, an Evoker talent's self-buff), and
   the debuffs come off after a boss wipe; hence lusts are found by their debuff.
 
+### Moments
+
+`combatlog.find_moments` makes a `Run` (with `moments` set; name what happened, label the zone)
+per moment clip, cut `moment_seconds` either side:
+
+- **Deaths**: `UNIT_DIED` of a `Player-` unit whose dest flags have mine (0x1), not
+  unconscious. Other players nearby are 0x518 and the like (seen in WoW Forever's logs).
+- **Level-ups**: not in the combat log (advanced logging's last field is item level for
+  players, the level for NPCs), so the addon saves `time():level` strings on
+  `PLAYER_LEVEL_UP`.
+- **Elite kills**: the log has no classification. The addon saves `[npcID] = "elite"` (also
+  rare, rareelite, worldboss) from nameplates, the target and mouseover, outside instances and
+  never for a secret value. `elite_kills` greps those NPC IDs: a death counts once the group
+  (source flags 0x7) damaged that GUID, or with a `PARTY_KILL`. Only at difficulty 0.
+
+None inside any run or pull (`find_runs` with no minimum, so a key the rules skipped too);
+moments 2 × `moment_seconds` apart or closer are one clip. `addon.read_saved` reads
+`WTF/Account/*/SavedVariables/LinuxWoWRecorder.lua` of every client with a regex, not a Lua
+parser.
+
+**Other clients**: `combatlog.log_dirs` adds `<WoW>/_*_/Logs` beside the configured one
+(`_forever_` next to `_retail_`); one WoW runs at a time, so a recording's time picks the log.
+WoW Forever runs as `_forever_/Wow.exe` (`detect` names it by its folder), writes the same log
+format (version 22, `PROJECT_ID 18`) and loads retail-style addons (`## Interface: 16001`).
+
 ### Adding a dungeon difficulty
 
 When the log enters an instance with a difficulty the app doesn't know, the service logs
@@ -231,11 +265,14 @@ new, add it to `LUST_DEBUFFS`; without it, the lust isn't found at all.
 
 `src/linux_wow_recorder/addon/LinuxWoWRecorder/` is shipped in the package and copied into
 `<WoW>/_retail_/Interface/AddOns/` by `addon.install` (Settings > WoW addon, or
-`install-addon`). It turns combat logging on in dungeons and raids at the moments zone-only
+`install-addon`), and into the other clients beside it (`addon.all_addons_dirs`). It turns
+combat logging on in dungeons and raids at the moments zone-only
 loggers miss (Raider.IO checks on zone changes only, so a dungeon entered before it had a
 difficulty (0 in ZONE_CHANGE) and then keyed had no log for its first 72 s on 10-26). It never
-turns logging off. It's opt-in: only the user installs it (Settings asks first), since it leaves
-logging on and changes a CVar; `refresh` only updates a copy that's already there. Its
+turns logging off, and saves level-ups and elite NPC IDs ([Moments](#moments)). It's opt-in:
+only the user installs it (Settings asks first), since it leaves logging on and changes a CVar;
+`refresh` only updates copies that are there, and adds it to the other clients once it's in the
+combat log folder's. Its
 `## Version:` is what `addon.status` compares: bump it with any change to the addon, and the
 service (`addon.refresh` at start) updates installed copies. Bump `## Interface:` with each WoW patch,
 or WoW lists it as out of date.
@@ -260,7 +297,8 @@ launcher, which names the game in its arguments, are skipped. Add a new client's
 |---|---|
 | `detect.py` | finds a running WoW client in /proc |
 | `recorder.py` | starts and stops gpu-screen-recorder |
-| `combatlog.py` | finds dungeon runs, bosses, deaths and lusts in the combat log (`_RunFinder`: one method per event), and the group's casts (`read_casts`) |
+| `combatlog.py` | finds dungeon runs, bosses, deaths and lusts in the combat log (`_RunFinder`: one method per event), the group's casts (`read_casts`), and moments (`find_moments`) |
+| `addon.py` | installs the WoW addon, reads its saved level-ups and elites |
 | `cooldowns.py` | the major cooldowns, by spell ID and kind (damage, healing, defensive) |
 | `clips.py` | cuts recordings into clips with ffmpeg, writes the `.json` details, retention cleanup |
 | `notify.py` | Discord or Fluxer webhooks (the same JSON) |

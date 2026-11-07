@@ -18,6 +18,8 @@ from linux_wow_recorder.detect import find_wow_process, wow_alive, wow_flavor, w
     # Not known yet: named after the game folder.
     (["C:\\World of Warcraft\\_forever_\\WowForever.exe"], "Forever"),
     (["Z:\\wow\\_forever_beta_\\WowForeverB.exe -launcherlogin"], "Forever Beta"),
+    # WoW Forever runs as Wow.exe in its own folder (seen 11-06).
+    (["C:\\Program Files (x86)\\World of Warcraft\\_forever_\\Wow.exe"], "Forever"),
 ])
 def test_finds_wow(args, flavor):
     assert wow_flavor(args) == flavor

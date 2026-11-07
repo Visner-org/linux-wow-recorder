@@ -126,3 +126,25 @@ def test_values_below_their_minimum_are_config_errors(tmp_path, section, key, va
     data[section][key] = value
     with pytest.raises(config.ConfigError, match=key):
         config.from_dict(data)
+
+
+def test_key_rules_and_moments_round_trip(tmp_path):
+    data = config.load_raw(tmp_path / "missing.toml")
+    cfg = config.from_dict(data)
+    assert cfg.cut_after_runs and cfg.key_min_level == 0
+    assert cfg.key_min_time_left is None and cfg.key_max_time_left is None
+    assert cfg.moments == ["death", "level", "elite"] and cfg.moment_seconds == 30
+    data["clips"].update(key_min_level=10, key_min_time_left=-5, key_max_time_left=2.5,
+                         moments=["death"], cut_after_runs=False)
+    path = tmp_path / "config.toml"
+    config.save(data, path)
+    cfg = config.load(path)
+    assert (cfg.key_min_level, cfg.key_min_time_left, cfg.key_max_time_left) == (10, -5, 2.5)
+    assert cfg.moments == ["death"] and not cfg.cut_after_runs
+
+
+def test_a_moment_kind_the_app_doesnt_know_is_an_error(tmp_path):
+    data = config.load_raw(tmp_path / "missing.toml")
+    data["clips"]["moments"] = ["death", "dance"]
+    with pytest.raises(config.ConfigError, match="dance"):
+        config.from_dict(data)

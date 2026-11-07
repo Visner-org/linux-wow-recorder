@@ -363,3 +363,84 @@ def test_clearable_logs_keep_what_a_recording_or_wow_still_needs(tmp_path, monke
     assert clips.clearable_logs(logs, [rec]) == ([old], 2)
     assert clips.clearable_logs(logs, []) == ([old, waited_for], 1)
     assert clips.clearable_logs(None, []) == ([], 0)
+
+
+def test_key_rules_pick_which_keys_are_clipped(tmp_path):
+    cfg = make_cfg(tmp_path)
+    t = 1_800_000_000.0
+    timed = Run("Ara-Kara", t, t + 1500, "+12 Timed", 1500.0, 12, result="completed",
+                time_limit=1800)   # 5 minutes left
+    over = Run("Ara-Kara", t, t + 2000, "+12 Over time", 2000.0, 12, result="completed",
+               time_limit=1800)    # 3m20s over
+    low = Run("Ara-Kara", t, t + 1500, "+4 Timed", 1500.0, 4, result="completed", time_limit=1800)
+    gone = Run("Ara-Kara", t, t + 600, "+12 Abandoned", None, 12, result="abandoned")
+    visit = Run("Ara-Kara", t, t + 600, "Heroic", result="heroic")
+    assert all(clips.key_wanted(cfg, r) for r in (timed, over, low, gone, visit))
+    cfg.key_min_level = 10
+    assert not clips.key_wanted(cfg, low) and clips.key_wanted(cfg, timed)
+    cfg.key_min_time_left = 0   # timed only
+    assert clips.key_wanted(cfg, timed) and not clips.key_wanted(cfg, over)
+    cfg.key_min_time_left, cfg.key_max_time_left = -5, 2   # close calls
+    assert not clips.key_wanted(cfg, timed) and clips.key_wanted(cfg, over)
+    assert clips.key_wanted(cfg, gone) and clips.key_wanted(cfg, visit)
+
+
+def test_a_moment_clip_is_named_by_its_second_and_zone(tmp_path):
+    cfg = make_cfg(tmp_path)
+    t = datetime.datetime(2026, 11, 6, 16, 31, 29).timestamp()
+    run = Run("Elite: Bristleback Chief", t, t, "Mulgore", result="moment",
+              moments=[object()])
+    assert clip_name(run, t - 600, t + 600) == "2026-11-06 16-31-29 Elite Bristleback Chief - Mulgore.mp4"
+    assert clips.clip_window(cfg, t - 600, t + 600, run) == (570, 630)
+    assert clips.clip_window(cfg, t - 10, t + 600, run) == (0, 40)   # the recording began late
+    assert clips.clip_window(cfg, t + 1, t + 600, run) is None      # not in this recording
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="needs ffmpeg")
+def test_moments_are_cut_once_wow_is_closed(tmp_path, monkeypatch):
+    game = tmp_path / "wow" / "_retail_"
+    (game / "Logs").mkdir(parents=True)
+    saved = game / "WTF" / "Account" / "ACCOUNT" / "SavedVariables"
+    saved.mkdir(parents=True)
+    cfg = make_cfg(tmp_path)
+    cfg.combat_log_dir = game / "Logs"
+    cfg.sessions_dir.mkdir()
+    rec = cfg.sessions_dir / "2026-11-06_16-00-00.mkv"
+    subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc=size=320x180:rate=10",
+                    "-f", "lavfi", "-i", "sine", "-t", "300", "-c:v", "libx264", "-preset",
+                    "ultrafast", "-g", "10", "-b:v", "500k", "-c:a", "aac", str(rec)], check=True)
+    end = 1_800_000_000.0
+    os.utime(rec, (end, end))
+    start = end - 300
+    log = cfg.combat_log_dir / f"WoWCombatLog-{datetime.datetime.fromtimestamp(start - 600):%m%d%y_%H%M%S}.txt"
+    chief = "Creature-0-1-1-1-3068-0000000001"
+    log.write_text(
+        f'{stamp(start + 10)}  ZONE_CHANGE,1,"Mulgore",0\n'
+        f'{stamp(start + 60)}  UNIT_DIED,0000000000000000,nil,0x80000000,0x80000000,Player-1-A,'
+        f'"Me-Realm-US",0x511,0x0,0\n'
+        f'{stamp(start + 200)}  SWING_DAMAGE,Player-1-A,"Me-Realm-US",0x511,0x0,{chief},'
+        f'"Bristleback Chief",0x10a48,0x0,10,0,-1\n'
+        f'{stamp(start + 210)}  UNIT_DIED,0000000000000000,nil,0x80000000,0x80000000,{chief},'
+        f'"Bristleback Chief",0x10a48,0x0,0\n')
+    os.utime(log, (end, end))
+    (saved / "LinuxWoWRecorder.lua").write_text(
+        f'LinuxWoWRecorderDB = {{\n["elites"] = {{\n[3068] = "elite",\n}},\n'
+        f'["levels"] = {{\n"{int(start + 230)}:12", -- [1]\n}},\n}}\n')
+
+    monkeypatch.setattr(clips, "find_wow", lambda: "Retail")   # still playing: moments wait
+    [result] = process_pending(cfg)
+    assert result.clips == []
+    assert read_sidecar(cfg.processed_dir / rec.name)["moments"] == "pending"
+
+    monkeypatch.setattr(clips, "find_wow", lambda: None)
+    [result] = process_pending(cfg)
+    names = sorted(c.name for _, c in result.clips)
+    assert len(names) == 2
+    assert names[0].endswith("Death - Mulgore.mp4")
+    assert names[1].endswith("Elite Bristleback Chief + Level 12 - Mulgore.mp4")
+    details = read_sidecar(cfg.clips_dir / names[1])
+    assert details["kind"] == "moment" and details["zone"] == "Mulgore"
+    assert [m["kind"] for m in details["moments"]] == ["elite", "level"]
+    assert details["moments"][0]["at"] == 30   # moment_seconds into the clip
+    assert "moments" not in read_sidecar(cfg.processed_dir / rec.name)
+    assert process_pending(cfg) == []   # done: not cut again

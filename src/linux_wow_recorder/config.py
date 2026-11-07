@@ -36,10 +36,18 @@ NOTIFY_EVENTS = {
 # [clips] raids: which raid boss pulls get a clip.
 RAID_CHOICES = {"all": "Every pull, kills and wipes", "kills": "Kills only", "off": "None"}
 
+# [clips] moments: the short clips of things outside dungeon runs. key -> what Settings calls it.
+MOMENTS = {
+    "death": "My deaths",
+    "level": "Level-ups (needs the WoW addon)",
+    "elite": "Elite and rare kills in the open world (needs the WoW addon)",
+}
+
 # [clips_window]: what the clips window shows, each on by default. key -> what Settings calls it.
 CLIPS_WINDOW = {
     "raids": "Raids view",
     "full_sessions": "Full sessions view",
+    "moments": "Moments view (deaths, level-ups, elite kills)",
     "hide_chat": "Hide chat button",
     "highlights": "Highlight button (save part of a clip)",
     "youtube": "Upload to YouTube button",
@@ -82,6 +90,8 @@ DEFAULTS = {
         "extra_args": [],
     },
     "clips": {"pad_before": 10, "pad_after": 15, "min_run_minutes": 5, "raids": "all",
+              "cut_after_runs": True, "key_min_level": 0, "key_min_time_left": "",
+              "key_max_time_left": "", "moments": list(MOMENTS), "moment_seconds": 30,
               "other_folders": []},
     "storage": {
         "session_retention_days": 3,
@@ -132,6 +142,13 @@ class Config:
     raids: str = "all"  # raid boss pulls clipped: "all", "kills" or "off"
     check_updates: bool = False   # the tray app asks GitHub once a day for a newer version
     other_clip_dirs: list[Path] = field(default_factory=list)   # the clip browser's, read only
+    cut_after_runs: bool = True   # cut a dungeon run's clip once it ends, while WoW still runs
+    key_min_level: int = 0        # keys below this level aren't clipped
+    # A completed key's time left on its timer, in minutes (negative: over time); None = any.
+    key_min_time_left: float | None = None
+    key_max_time_left: float | None = None
+    moments: list[str] = field(default_factory=lambda: list(MOMENTS))   # MOMENTS keys
+    moment_seconds: int = 30      # video kept either side of a moment
     # What the clips window shows (CLIPS_WINDOW keys); only the desktop app reads it.
     clips_window: dict[str, bool] = field(default_factory=lambda: {k: True for k in CLIPS_WINDOW})
 
@@ -188,6 +205,22 @@ def _raids(value) -> str:
     return value
 
 
+def _minutes(value, name: str) -> float | None:
+    """A time-left limit: minutes (negative is over time), or "" for none."""
+    if value == "" or value is None:
+        return None
+    if isinstance(value, bool):
+        raise ConfigError(f"{name} = {value}; it's minutes, or \"\" for no limit")
+    return float(value)
+
+
+def _moments(value) -> list[str]:
+    found = [str(v).strip().lower() for v in _list(value)]
+    if bad := [v for v in found if v not in MOMENTS]:
+        raise ConfigError(f"moments has {bad[0]!r}; they're {', '.join(MOMENTS)}")
+    return found
+
+
 def _upgrade(data: dict) -> dict:
     """Older configs had one webhook_url; it becomes the first entry of webhook_urls."""
     d = data.get("discord")
@@ -234,6 +267,12 @@ def from_dict(data: dict) -> Config:
             poll_interval=max(1, int(data["daemon"]["poll_interval"])),
             detailed_logging=bool(data["logging"]["detailed"]),
             other_clip_dirs=[Path(f).expanduser() for f in _list(c["other_folders"]) if f.strip()],
+            cut_after_runs=bool(c["cut_after_runs"]),
+            key_min_level=_at_least(int(c["key_min_level"]), 0, "key_min_level"),
+            key_min_time_left=_minutes(c["key_min_time_left"], "key_min_time_left"),
+            key_max_time_left=_minutes(c["key_max_time_left"], "key_max_time_left"),
+            moments=_moments(c["moments"]),
+            moment_seconds=_at_least(int(c["moment_seconds"]), 5, "moment_seconds"),
             clips_window={k: bool(v) for k, v in data["clips_window"].items()},
         )
     except (TypeError, ValueError, AttributeError) as e:   # AttributeError: a list for a string
@@ -339,6 +378,19 @@ min_run_minutes = {_toml(c["min_run_minutes"])}
 # Raid bosses: "all" (a clip per pull, kills and wipes; pulls under 30 s are skipped), "kills"
 # or "off"
 raids = {_toml(c["raids"])}
+# Cut a dungeon run's clip as soon as it ends, not only when WoW closes
+cut_after_runs = {_toml(bool(c["cut_after_runs"]))}
+# Mythic+ keys below this level aren't clipped (0 = all)
+key_min_level = {_toml(c["key_min_level"])}
+# A completed key is clipped only with this much time left on its timer, in minutes; negative
+# is over time (-5 = up to 5 minutes over). "" = no limit
+key_min_time_left = {_toml(c["key_min_time_left"])}
+key_max_time_left = {_toml(c["key_max_time_left"])}
+# Short clips outside dungeons: "death" (yours), "level" (level-ups) and "elite" (elite and
+# rare kills in the open world). The last two need the WoW addon. [] = none
+moments = {_toml(c["moments"])}
+# Seconds of video either side of a moment
+moment_seconds = {_toml(c["moment_seconds"])}
 # Folders on this computer the clip browser also lists clips from, e.g. where you move them to.
 # A clip there finds its details in clips/ when its .json stayed behind. [] = only clips/.
 other_folders = {_toml(c["other_folders"])}

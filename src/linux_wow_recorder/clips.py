@@ -13,9 +13,11 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .combatlog import (Cast, Run, combat_logs_between, count_special_mobs, drop_despawns,
-                        find_runs, read_casts, read_log_events)
+from . import addon
+from .combatlog import (RAIDS_ALL, Cast, Run, combat_logs_between, count_special_mobs, drop_despawns,
+                        elite_kills, find_moments, find_runs, read_casts, read_log_events)
 from .config import STATE_DIR, Config
+from .detect import find_wow
 
 log = logging.getLogger(__name__)
 
@@ -120,9 +122,28 @@ def media_length(path: Path) -> float | None:
 SHORT_CUT_SECONDS = 5
 
 
+def key_wanted(cfg: Config, run: Run) -> bool:
+    """Whether a key passes the settings' rules: its level, and for a completed key whose time
+    limit is known, the time left on its timer (minutes; negative is over time). Runs without a
+    key always pass."""
+    if run.level is None:
+        return True
+    if run.level < cfg.key_min_level:
+        return False
+    if run.result != "completed" or not (run.timer and run.time_limit):
+        return True
+    left = (run.time_limit - run.timer) / 60
+    return not ((cfg.key_min_time_left is not None and left < cfg.key_min_time_left)
+                or (cfg.key_max_time_left is not None and left > cfg.key_max_time_left))
+
+
 def clip_name(run: Run, rec_start: float, rec_end: float) -> str:
     stamp = datetime.datetime.fromtimestamp(run.start).strftime("%Y-%m-%d %H-%M")
     name = re.sub(r"[^\w '+()-]", "", run.name).strip()
+    if run.is_moment:   # seconds too: two can be a minute apart
+        stamp = datetime.datetime.fromtimestamp(run.start).strftime("%Y-%m-%d %H-%M-%S")
+        zone = re.sub(r"[^\w '+()-]", "", run.label).strip()
+        return f"{stamp} {name}{f' - {zone}' if zone else ''}.mp4"
     clip = f"{stamp} {name} {run.label} ({run.length})"
     if run.is_raid:   # the same boss is pulled again and again
         clip = f"{stamp} {name} {run.label} pull {run.pull} ({run.length})"
@@ -137,7 +158,14 @@ def clip_name(run: Run, rec_start: float, rec_end: float) -> str:
 
 def clip_window(cfg: Config, rec_start: float, rec_end: float, run: Run) -> tuple[float, float] | None:
     """Where run's clip starts and stops in the recording, in seconds from its start, or None
-    if less than a minute of the run is in it."""
+    if less than a minute of the run is in it. A moment gets moment_seconds either side, and
+    needs only to be in the recording."""
+    if run.is_moment:
+        if run.end < rec_start or run.start > rec_end:
+            return None
+        offset = max(0.0, run.start - rec_start - cfg.moment_seconds)
+        stop = min(rec_end - rec_start, run.end - rec_start + cfg.moment_seconds)
+        return (offset, stop) if stop - offset >= 5 else None
     offset = max(0.0, run.start - rec_start - cfg.pad_before)
     stop = min(rec_end - rec_start, run.end - rec_start + cfg.pad_after)
     return (offset, stop) if stop - offset >= 60 else None
@@ -167,7 +195,8 @@ def thumbnail_time(details: dict) -> float:
     """Where in the clip its picture is taken: 20 s into the first boss pull, or a minute into
     the run, within the clip."""
     encounters = details.get("encounters") or []
-    at = (encounters[0]["start"] + 20 if encounters
+    at = ((details.get("run_offset") or 0) if details.get("kind") == "moment" else
+          encounters[0]["start"] + 20 if encounters
           else (details.get("run_offset") or 0) + 60)
     length = details.get("clip_length") or 0
     return max(0.0, min(at, length - 1)) if length else at
@@ -287,6 +316,11 @@ def sidecar_for(run: Run, clip_start: float, length: float, recording: Path,
         "keep": False,
         **({"kind": "raid", "raid": run.raid, "difficulty": run.difficulty, "pull": run.pull}
            if run.is_raid else {}),
+        **({"kind": "moment", "zone": run.label,
+            "run_length": f"{int(length) // 60}m{int(length) % 60:02d}s",   # the clip's
+            "moments": [{"kind": m.kind, "what": m.what, "at": at(m.time)}
+                        for m in run.moments if at(m.time) is not None]}
+           if run.is_moment else {}),
         **({"log_late": run.log_late} if run.log_late else {}),
         **(cast_details(casts, clip_start, length) if casts is not None else {}),
     }
@@ -357,7 +391,7 @@ def _move_done(cfg: Config, src: Path, details: dict | None = None):
 
 
 def session_details(rec_start: float, rec_end: float, runs: list[Run], recording: Path,
-                    casts: list[Cast] | None = None) -> dict:
+                    casts: list[Cast] | None = None, moments: bool = False) -> dict:
     """A full recording's details, for the clip browser's Full sessions: its start and length,
     each dungeon run in it shaped like a clip's details, and the player's casts, with times
     from the recording's start."""
@@ -368,6 +402,7 @@ def session_details(rec_start: float, rec_end: float, runs: list[Run], recording
         "length": round(length, 1),
         "runs": [sidecar_for(run, rec_start, length, recording) for run in runs],
         "keep": False,
+        **({"moments": MOMENTS_PENDING} if moments else {}),
         **(cast_details(casts, rec_start, length) if casts is not None else {}),
     }
 
@@ -388,8 +423,10 @@ def process_recording(cfg: Config, src: Path) -> SessionResult:
 
     logs = combat_logs_between(cfg.combat_log_dir, rec_start, rec_end)
     if not logs:
-        # Nothing to cut by; processed anyway, so it isn't retried after every session.
-        _move_done(cfg, src, session_details(rec_start, rec_end, [], src))
+        # Nothing to cut by; processed anyway, so it isn't retried after every session. Its
+        # level-ups can still be cut (cut_moments).
+        _move_done(cfg, src, session_details(rec_start, rec_end, [], src,
+                                             moments="level" in cfg.moments))
         keep = (f"for {cfg.session_retention_days} days" if cfg.session_retention_days
                 else "until you delete it")
         return SessionResult(src, problem="no_combat_log", detail=(
@@ -398,6 +435,11 @@ def process_recording(cfg: Config, src: Path) -> SessionResult:
 
     runs = [r for r in find_runs(read_log_events(logs), cfg.min_run_minutes, cfg.raids)
             if r.end > rec_start and r.start < rec_end]
+    skipped = [r for r in runs if not key_wanted(cfg, r)]
+    for r in skipped:
+        log.info(f"{r.name} {r.label} ({r.length}) doesn't pass the key rules in Settings; "
+                 "not clipped.")
+    runs = [r for r in runs if r not in skipped]
     drop_despawns(runs, logs)
     count_special_mobs(runs, logs)
     casts = read_casts(logs)
@@ -422,7 +464,74 @@ def process_recording(cfg: Config, src: Path) -> SessionResult:
                          "trying again after the next session.")
         return result
 
-    _move_done(cfg, src, session_details(rec_start, rec_end, runs, src, casts))
+    _move_done(cfg, src, session_details(rec_start, rec_end, runs, src, casts,
+                                         moments=bool(cfg.moments)))
+    return result
+
+
+# A full recording's details say this until its moments are cut (cut_moments).
+MOMENTS_PENDING = "pending"
+
+
+def cut_moments(cfg: Config) -> list[SessionResult]:
+    """Cuts the moment clips (deaths, level-ups, elite kills) of the cut recordings that still
+    wait for them. Only once WoW is closed: the addon's level-ups and elites are saved then."""
+    results = []
+    if not cfg.processed_dir.is_dir():
+        return results
+    waiting = []
+    for f in sorted(cfg.processed_dir.glob("*.json")):
+        details = read_sidecar(f)
+        if details.get("moments") == MOMENTS_PENDING:
+            rec = next((v for v in (f.with_suffix(".mkv"), f.with_suffix(".mp4")) if v.exists()),
+                       None)
+            waiting.append((f, details, rec))
+    if not waiting:
+        return results
+    levels, elites = addon.read_saved(cfg.combat_log_dir)
+    for f, details, rec in waiting:
+        if rec is None:   # deleted meanwhile
+            details.pop("moments", None)
+            write_sidecar(f, details)
+            continue
+        try:
+            result = _cut_moments_of(cfg, rec, details, levels, elites)
+        except Exception:
+            log.exception(f"Cutting the moments of {rec.name} failed")
+            result = SessionResult(rec, problem="clip_failed",
+                                   detail=f"Cutting moments from `{rec.name}` failed; see the log.")
+        if not result.problem:
+            details.pop("moments", None)
+            write_sidecar(f, details)
+        if result.clips or result.problem:
+            results.append(result)
+    return results
+
+
+def _cut_moments_of(cfg: Config, rec: Path, details: dict, levels: list[tuple[float, int]],
+                    elites: dict[int, str]) -> SessionResult:
+    rec_start = details["recording_start"]
+    rec_end = rec_start + details["length"]
+    logs = combat_logs_between(cfg.combat_log_dir, rec_start, rec_end)
+    events = list(read_log_events(logs)) if logs else []
+    # Not inside any run or pull, clipped or not (a key the rules skipped, a short run)
+    spans = [(r.start, r.end) for r in find_runs(events, 0, RAIDS_ALL)]
+    moments = find_moments(
+        events, cfg.moments, [lv for lv in levels if rec_start <= lv[0] <= rec_end],
+        elite_kills(logs, elites) if "elite" in cfg.moments else [], spans, cfg.moment_seconds)
+    moments = [m for m in moments if clip_window(cfg, rec_start, rec_end, m)]
+    result = SessionResult(rec)
+    if not moments:
+        return result
+    log.info(f"{rec.name}: {len(moments)} moment clip(s).")
+    casts = read_casts(logs) if logs else None
+    for m in moments:
+        clip = cut_clip(cfg, rec, rec_start, rec_end, m, casts)
+        if clip:
+            result.clips.append((m, clip))
+        else:
+            result.problem = "clip_failed"
+            result.detail = f"A moment from `{rec.name}` couldn't be cut; trying again later."
     return result
 
 
@@ -464,6 +573,8 @@ def _process_all(cfg: Config, stop: threading.Event | None,
             log.exception(f"Processing {src.name} failed")
             results.append(SessionResult(src, problem="clip_failed",
                                          detail=f"Processing `{src.name}` failed; see the log."))
+    if in_use() is None and not (stop is not None and stop.is_set()) and find_wow() is None:
+        results += cut_moments(cfg)
     return results
 
 
