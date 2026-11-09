@@ -62,6 +62,12 @@ if [ "$1" -eq 0 ]; then
 fi
 
 %changelog
+* Mon Nov 09 2026 Linux WoW Recorder - 1.3.2-1
+- A paused clip no longer shows the app as playing sound
+
+* Mon Nov 09 2026 Linux WoW Recorder - 1.3.1-1
+- Elite and rare kill clips start before the fight, so long kills are whole
+
 * Fri Nov 06 2026 Linux WoW Recorder - 1.3.0-1
 - A key's clip is cut as soon as it's done, while you play on
 - Rules for which keys get a clip: lowest level, least and most time left

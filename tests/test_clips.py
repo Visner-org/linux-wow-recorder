@@ -441,6 +441,6 @@ def test_moments_are_cut_once_wow_is_closed(tmp_path, monkeypatch):
     details = read_sidecar(cfg.clips_dir / names[1])
     assert details["kind"] == "moment" and details["zone"] == "Mulgore"
     assert [m["kind"] for m in details["moments"]] == ["elite", "level"]
-    assert details["moments"][0]["at"] == 30   # moment_seconds into the clip
+    assert details["moments"][0]["at"] == 40   # the fight began 10 s earlier, moment_seconds into the clip
     assert "moments" not in read_sidecar(cfg.processed_dir / rec.name)
     assert process_pending(cfg) == []   # done: not cut again

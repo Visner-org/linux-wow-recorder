@@ -179,7 +179,7 @@ per moment clip, cut `moment_seconds` either side:
 - **Level-ups**: not in the combat log (advanced logging's last field is item level for
   players, the level for NPCs), so the addon saves `time():level` strings on
   `PLAYER_LEVEL_UP`.
-- **Elite kills**: the log has no classification. The addon saves `[npcID] = "elite"` (also
+- **Elite kills** (the clip starts `moment_seconds` before the first group hit): the log has no classification. The addon saves `[npcID] = "elite"` (also
   rare, rareelite, worldboss) from nameplates, the target and mouseover, outside instances and
   never for a secret value. `elite_kills` greps those NPC IDs: a death counts once the group
   (source flags 0x7) damaged that GUID, or with a `PARTY_KILL`. Only at difficulty 0.

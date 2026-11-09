@@ -727,6 +727,7 @@ class Moment:
     time: float
     what: str                    # "Death", "Level 12", "Elite: Bristleback Chief"
     zone: str = ""
+    start: float | None = None   # when the fight began, for an elite kill
 
 
 def _zones(events: Iterable[tuple[float, str, list[str]]]) -> list[tuple[float, str, int]]:
@@ -767,14 +768,14 @@ def my_deaths(events: Iterable[tuple[float, str, list[str]]]) -> list[float]:
     return found
 
 
-def elite_kills(logs: list[Path], elites: dict[int, str]) -> list[tuple[float, str, str]]:
-    """(time, name, kind) of each mob with an NPC ID in elites (NPC ID -> ELITE_KINDS key) that
+def elite_kills(logs: list[Path], elites: dict[int, str]) -> list[tuple[float, str, str, float]]:
+    """(time, name, kind, fight start: the group's first hit) of each mob with an NPC ID in elites (NPC ID -> ELITE_KINDS key) that
     died after the player or their group hurt it. Others' kills nearby aren't counted."""
     if not elites or not logs:
         return []
     ids = "|".join(str(n) for n in sorted(elites))
     pattern = f"  ([A-Z_]+_DAMAGE(_LANDED)?|UNIT_DIED|PARTY_KILL),.*-({ids})-[0-9A-Fa-f]+,"
-    hurt: set[str] = set()
+    hurt: dict[str, float] = {}
     dead: set[str] = set()
     found = []
     for t, event, f in _grep_events(logs, pattern):
@@ -790,11 +791,11 @@ def elite_kills(logs: list[Path], elites: dict[int, str]) -> list[tuple[float, s
             if event == "PARTY_KILL" or guid in hurt:
                 if guid not in dead:
                     dead.add(guid)
-                    found.append((t, f[5], elites[npc]))
+                    found.append((t, f[5], elites[npc], hurt.get(guid, t)))
             continue
         try:
             if int(f[2], 16) & _GROUP:
-                hurt.add(guid)
+                hurt.setdefault(guid, t)
         except ValueError:
             pass
     return found
@@ -802,7 +803,7 @@ def elite_kills(logs: list[Path], elites: dict[int, str]) -> list[tuple[float, s
 
 def find_moments(events: list[tuple[float, str, list[str]]], kinds: Iterable[str],
                  levels: Iterable[tuple[float, int]] = (),
-                 elites: Iterable[tuple[float, str, str]] = (),
+                 elites: Iterable[tuple[float, str, str, float]] = (),
                  runs: Iterable[tuple[float, float]] = (),
                  seconds: int = 30) -> list[Run]:
     """A Run per moment clip: the player's deaths (from events), level-ups (levels: (time,
@@ -818,9 +819,10 @@ def find_moments(events: list[tuple[float, str, list[str]]], kinds: Iterable[str
     if MOMENT_LEVEL in kinds:
         found += [Moment(MOMENT_LEVEL, t, f"Level {lvl}") for t, lvl in levels]
     if MOMENT_ELITE in kinds:
-        for t, name, kind in elites:
+        for t, name, kind, began in elites:
             if _zone_at(zones, t)[1] in (0, None):
-                found.append(Moment(MOMENT_ELITE, t, f"{ELITE_KINDS.get(kind, 'Elite')}: {name}"))
+                found.append(Moment(MOMENT_ELITE, t, f"{ELITE_KINDS.get(kind, 'Elite')}: {name}",
+                                    start=min(began, t)))
     spans = list(runs)
     found = sorted((m for m in found if not any(a <= m.time <= b for a, b in spans)),
                    key=lambda m: m.time)
@@ -834,6 +836,6 @@ def find_moments(events: list[tuple[float, str, list[str]]], kinds: Iterable[str
     moments = []
     for g in groups:
         what = list(dict.fromkeys(m.what for m in g))   # three deaths in a row: "Death"
-        moments.append(Run(" + ".join(what), g[0].time, g[-1].time, g[0].zone,
+        moments.append(Run(" + ".join(what), min(m.start or m.time for m in g), g[-1].time, g[0].zone,
                            result="moment", moments=g))
     return moments

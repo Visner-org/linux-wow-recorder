@@ -596,7 +596,7 @@ class ClipBrowser(QWidget):
         self.tree.header().setSectionResizeMode(1, QHeaderView.Stretch)
         self.tree.header().setStretchLastSection(False)
         self.tree.currentItemChanged.connect(lambda item, _: self.select(item.data(0, Qt.UserRole) if item else None))
-        self.tree.itemActivated.connect(lambda *_: self.player.play())
+        self.tree.itemActivated.connect(lambda *_: self.play())
         self.tree.itemPressed.connect(lambda item: self.seen(item.data(0, Qt.UserRole)))
         self.tree.setSelectionMode(QAbstractItemView.ExtendedSelection)   # Shift and Ctrl
 
@@ -617,7 +617,7 @@ class ClipBrowser(QWidget):
         self.cards.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.cards.setResizeMode(QListWidget.Adjust)
         self.cards.currentItemChanged.connect(lambda item, _: self.select(item.data(Qt.UserRole) if item else None))
-        self.cards.itemActivated.connect(lambda *_: self.player.play())
+        self.cards.itemActivated.connect(lambda *_: self.play())
         self.cards.itemPressed.connect(lambda item: self.seen(item.data(Qt.UserRole)))
         self.cards.setSelectionMode(QAbstractItemView.ExtendedSelection)
         for view in (self.cards, self.tree):
@@ -1576,11 +1576,15 @@ class ClipBrowser(QWidget):
 
     # ── Player ──
 
+    def play(self):
+        self.player.setAudioOutput(self.audio)   # taken off while paused (see on_state)
+        self.player.play()
+
     def toggle_play(self):
         if self.player.playbackState() == QMediaPlayer.PlayingState:
             self.player.pause()
         else:
-            self.player.play()
+            self.play()
 
     def scrub_start(self):
         """Dragging the timeline or the casts: paused, so the frame stays put when the pointer
@@ -1596,7 +1600,7 @@ class ClipBrowser(QWidget):
         self.scrub_busy.stop()
         self.scrub_next()   # where the pointer let go
         if self.scrub_resume:
-            self.player.play()
+            self.play()
         self.scrub_resume = False
 
     def scrub_frame(self, _frame):
@@ -1611,6 +1615,10 @@ class ClipBrowser(QWidget):
 
     def on_state(self, s):
         playing = s == QMediaPlayer.PlayingState
+        if not playing:
+            # Qt keeps a paused clip's audio stream open, so the desktop lists the app as
+            # playing sound; without an output there is no stream.
+            self.player.setAudioOutput(None)
         self.cast_strip.set_playing(playing)
         if playing and self.current:
             self.video_stack.setCurrentWidget(self.video)
@@ -1632,7 +1640,7 @@ class ClipBrowser(QWidget):
         at = item.data(0, Qt.UserRole)
         if at is not None:
             self.seek(model.seek_target(at))   # a few seconds of lead-up
-            self.player.play()
+            self.play()
 
     def seek(self, seconds: float):
         if self.scrubbing and self.scrub_busy.isActive():

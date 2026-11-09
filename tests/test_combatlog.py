@@ -626,13 +626,13 @@ def test_moments_close_together_are_one_clip_and_none_inside_a_run():
               zone(500, 2290, "Mists of Tirna Scithe", 8), unit_died(600, "Player-1-A", "0x511"),
               zone(900, 1, "Mulgore", 0), unit_died(2000, "Player-1-A", "0x511")]
     levels = [(T0 + 130, 12)]
-    elites = [(T0 + 2010, "Bristleback Chief", "elite"),
-              (T0 + 700, "Ingra Maloch", "elite")]   # in a dungeon: every mob there is elite
+    elites = [(T0 + 2010, "Bristleback Chief", "elite", T0 + 1960),   # a 50 s fight
+              (T0 + 700, "Ingra Maloch", "elite", T0 + 690)]   # in a dungeon: every mob there is elite
     runs = find_moments(events, ["death", "level", "elite"], levels, elites,
                         runs=[(T0 + 500, T0 + 900)])
     assert [(r.name, r.label, r.start - T0, r.end - T0) for r in runs] == [
         ("Death + Level 12", "Mulgore", 100, 130),
-        ("Death + Elite: Bristleback Chief", "Mulgore", 2000, 2010)]
+        ("Death + Elite: Bristleback Chief", "Mulgore", 1960, 2010)]
     assert all(r.is_moment and r.result == "moment" for r in runs)
     assert find_moments(events, ["level"], levels) [0].name == "Level 12"
     assert find_moments(events, [], levels, elites) == []
@@ -653,8 +653,8 @@ def test_an_elite_counts_only_when_the_group_hurt_it(tmp_path):
         f'"Bristleback Chief",0x10a48,0x0,0\n'
         f'11/6/2026 16:32:05.000-8  UNIT_DIED,0000000000000000,nil,0x80000000,0x80000000,{wolf},'
         f'"Prairie Wolf",0x10a48,0x0,0\n')
-    [(t, name, kind)] = elite_kills([log], {3068: "elite"})
-    assert (name, kind) == ("Bristleback Chief", "elite")
+    [(t, name, kind, began)] = elite_kills([log], {3068: "elite"})
+    assert (name, kind) == ("Bristleback Chief", "elite") and t - began == 5   # the fight began at its first hit
     assert elite_kills([log], {}) == []
 
 
