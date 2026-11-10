@@ -55,7 +55,9 @@ def set_config(**sections):
     config.save(data)
 
 
-def test_status_says_ok_or_what_is_wrong(run, cfg):
+def test_status_says_ok_or_what_is_wrong(run, cfg, monkeypatch):
+    # ffmpeg and co. count as installed: their absence is a problem status reports too
+    monkeypatch.setattr(config.shutil, "which", lambda name: f"/usr/bin/{name}")
     code, out = run("status")
     assert code == 0 and out.rstrip().endswith("OK")
     assert "Webhooks : off" in out and "Daemon   : not running" in out
