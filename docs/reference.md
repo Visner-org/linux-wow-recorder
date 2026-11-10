@@ -42,7 +42,9 @@
 `~/.config/linux-wow-recorder/config.toml` (or under `$XDG_CONFIG_HOME`). `setup` and the
 settings window write it, keeping a comment above each setting; you can also edit it by hand.
 After a hand edit, run `systemctl --user restart linux-wow-recorder`. Settings missing from the
-file take their defaults, and unknown ones are ignored.
+file take their defaults, and unknown ones are ignored. A value of the wrong kind (text where a
+number goes) stops the service with a "Bad value in the config" line in its log; the settings
+window shows that setting's default, and saving writes it.
 
 ### `[paths]`
 
@@ -71,6 +73,12 @@ file take their defaults, and unknown ones are ignored.
 | `pad_after` | `15` | seconds of video kept after a run |
 | `min_run_minutes` | `5` | shorter runs are skipped, except completed keys |
 | `raids` | `"all"` | raid boss pulls: `"all"` (a clip per pull, kills and wipes; pulls under 30 s that aren't kills are skipped), `"kills"`, or `"off"` |
+| `cut_after_runs` | `true` | cut a completed key's clip a minute or two after it ends, while WoW still runs; `false` cuts everything when WoW closes |
+| `key_min_level` | `0` | Mythic+ keys below this level get no clip; 0 = all |
+| `key_min_time_left` | `""` | a completed key gets a clip only with at least this many minutes left on its timer; negative is over time (`-5` = up to 5 minutes over). `""` = no limit. Abandoned keys have no time left, so only the level applies to them |
+| `key_max_time_left` | `""` | the same, for the most time left |
+| `moments` | `["death", "level", "elite"]` | short clips outside dungeons and raid pulls: `"death"` (yours), `"level"` (level-ups) and `"elite"` (elite and rare kills in the open world). The last two need the WoW addon. `[]` = none |
+| `moment_seconds` | `30` | seconds of video kept either side of a moment; at least 5 |
 | `other_folders` | `[]` | folders on this computer the clip browser also lists clips from (only the desktop app reads it). A clip there whose `.json` stayed in `clips/` is matched to it by name, ignoring spaces, hyphens and punctuation, so a renamed copy still finds its details |
 
 ### `[storage]`
@@ -86,7 +94,7 @@ file take their defaults, and unknown ones are ignored.
 
 | Key | Default | |
 |---|---|---|
-| `webhook_urls` | `[]` | Discord or Fluxer webhook URLs, at most 25; every message goes to each one. `[]` = no messages. An older config's single `webhook_url` is read as the first entry |
+| `webhook_urls` | `[]` | Discord or Fluxer webhook URLs, at most 25; every message goes to each one. They must start with `https://`. `[]` = no messages. An older config's single `webhook_url` is read as the first entry |
 
 `[discord.notify]`, one true/false per message:
 
@@ -242,6 +250,8 @@ over two recordings gets one clip from each, each with its own part).
 | `level` | the keystone level, or `null` without a key |
 | `result` | `"completed"`, `"abandoned"`, or the difficulty in lower case; a raid pull's `"kill"` or `"wipe"` |
 | `kind`, `raid`, `difficulty`, `pull` | a raid pull's only: `"raid"`, the raid's name, its difficulty (`"LFR"`, `"Normal"`, `"Heroic"`, `"Mythic"`, ...), and the pull's number on that boss and difficulty in the recording, from 1 |
+| `kind`, `zone`, `moments` | a moment clip's only: `"moment"`, the zone it happened in, and each moment as `{"kind", "what", "at"}`: `"death"`, `"level"` or `"elite"`; what happened (`"Death"`, `"Level 12"`, `"Elite: Bristleback Chief"`); and when. `dungeon` is what happened (`"Death + Level 12"`), `label` the zone, `result` `"moment"`, and `run_length` the clip's length |
+| `highlight`, `chat_hidden` | a copy's only: a highlight has `{"of", "start", "end", "length"}` (the clip it was cut from, where, and how long; `"session": true` if from a full recording); `chat_hidden` is `true` for a copy with the chat blacked out |
 | `run_start`, `run_end` | when the run started and ended |
 | `run_length` | the in-game timer for a completed key, the run's length otherwise |
 | `timer` | a completed key's in-game time in seconds, death penalties included; `null` otherwise |
@@ -266,7 +276,8 @@ back on the clip's name for those.
 Each full recording in `processed/` gets a `.json` of the same name when it's cut, for the clip
 browser's **Full sessions**. Times in it are **seconds from the recording's start**, except
 `recording_start` (a Unix time); `runs` holds each dungeon run and raid pull in the recording, shaped like a
-clip's details above, including runs too short to get a clip. `keep` works as it does for clips:
+clip's details above, including runs too short to get a clip. `"moments": "pending"` is there
+until its moment clips are cut (once WoW is closed). `keep` works as it does for clips:
 a kept recording is never deleted, whatever `session_retention_days` says. Recordings cut by
 0.5.0 or earlier have no `.json`; the clip browser finds their runs from the clips cut from them
 (while those clips exist).
@@ -293,6 +304,7 @@ is missing, its `pid` isn't running, or `state` is `"stopped"`, the service isn'
   "state": "recording",
   "flavor": "Retail",
   "session_start": 1791694600.0,
+  "wow_pid": 4321,
   "recording_file": "/media/games/wow-recordings/sessions/2026-10-10_19-03-12.mkv",
   "free_gb": 412.3,
   "problem": null,
@@ -314,7 +326,8 @@ is missing, its `pid` isn't running, or `state` is `"stopped"`, the service isn'
 | `processing` | cutting clips after a session (while WoW isn't running) |
 | `stopped` | the service has exited |
 
-`problem` is a sentence while something is wrong, `null` otherwise. `capture` is what this
+`problem` is a sentence while something is wrong, `null` otherwise. `wow_pid` is WoW's process
+while it runs. `capture` is what this
 session records (`-w`), and `monitor_switch` is true once it was switched to the monitor. `cut_waiting` is
 true while a cut asked for (`cut-now`) waits for a key, dungeon run or boss pull to end. `last_session` is the last
 time recordings were cut: when, the new clips, and any problems (as Discord message text).

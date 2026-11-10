@@ -124,7 +124,8 @@ def test_only_notify_and_updates_talk_to_the_network():
     for the newest version (updates.py). The desktop app's QtNetwork use is
     QLocalServer/QLocalSocket, a Unix socket on this computer."""
     src = Path(__file__).parents[1] / "src/linux_wow_recorder"
-    network = {"urllib", "http", "requests", "httpx", "aiohttp", "ftplib", "smtplib", "telnetlib"}
+    network = {"urllib", "http", "requests", "httpx", "aiohttp", "ftplib", "smtplib", "telnetlib",
+               "ssl", "asyncio", "socketserver", "xmlrpc", "imaplib", "poplib", "websockets"}
     for path in src.rglob("*.py"):
         tree = ast.parse(path.read_text())
         modules = {a.name.split(".")[0] for n in ast.walk(tree) if isinstance(n, ast.Import)
@@ -133,6 +134,13 @@ def test_only_notify_and_updates_talk_to_the_network():
                     if isinstance(n, ast.ImportFrom)}
         if path.name not in ("notify.py", "updates.py"):
             assert not modules & network, path
+            # socket itself: only for this computer's name, which logs.py blanks out
+            assert not any(isinstance(n, ast.ImportFrom) and n.module == "socket"
+                           for n in ast.walk(tree)), path
+            if "socket" in modules:
+                used = {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)
+                        and isinstance(n.value, ast.Name) and n.value.id == "socket"}
+                assert used <= {"gethostname"}, path
         qt_net = {a.name for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)
                   and (n.module or "").endswith("QtNetwork") for a in n.names}
         assert qt_net <= {"QLocalServer", "QLocalSocket"}, path

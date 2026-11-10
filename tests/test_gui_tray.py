@@ -175,3 +175,8 @@ def test_nothing_starts_before_setup(tmp_path, monkeypatch, qapp_or_skip, unit):
     monkeypatch.setattr(tray.Tray, "show_settings", lambda self: None)
     tray.Tray(qapp_or_skip)
     assert started == []
+
+
+def test_the_one_app_socket_is_in_the_users_own_folder():
+    from linux_wow_recorder import state
+    assert tray.SERVER_NAME == str(state.STATUS_FILE.parent / "gui.sock")

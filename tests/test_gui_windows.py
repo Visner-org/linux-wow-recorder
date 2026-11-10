@@ -337,6 +337,75 @@ def test_saving_restarts_the_service_only_when_the_config_changed(qtbot, cfg, fa
     assert config.load().other_clip_dirs == [cfg.output_dir]   # saved all the same
 
 
+def test_saving_after_the_test_recording_still_restarts_the_service(qtbot, cfg, fake_recorder,
+                                                                     monkeypatch):
+    monkeypatch.setattr(service, "state", lambda: "active")
+    restarts = []
+    monkeypatch.setattr(service, "install",
+                        lambda at_login=True, restart=True: restarts.append(restart))
+    monkeypatch.setattr(settings.desktop, "install_autostart", lambda: None)
+    monkeypatch.setattr(settings.desktop, "remove_autostart", lambda: None)
+    started = []
+    monkeypatch.setattr(settings.QProcess, "start", lambda self, *a: started.append(a))
+    w = settings.SettingsWindow()
+    qtbot.addWidget(w)
+    w.pad_after.setValue(w.pad_after.value() + 5)
+    w.test_recorder()                                   # saves the file; the service runs on
+    assert started and config.load().pad_after == w.pad_after.value()
+    w.test_process = None
+    assert w.needs_restart()                            # the service hasn't read it yet
+    w.update_buttons()
+    assert w.save_button.text() == "Save and restart service"
+    w.save()
+    assert restarts == [True]
+
+
+def test_settings_opens_on_a_config_with_values_it_cant_read(qtbot, cfg, fake_recorder,
+                                                            monkeypatch):
+    data = config.load_raw()
+    data["recorder"]["fps"] = "sixty"                   # as a hand edit could leave it
+    config.CONFIG_FILE.write_text(config.render(data))
+    warned = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: warned.append(a[2]))
+    w = settings.SettingsWindow()
+    qtbot.addWidget(w)
+    assert len(warned) == 1 and "defaults" in warned[0]
+    assert w.collect()["recorder"]["fps"] == config.DEFAULTS["recorder"]["fps"]
+    assert w.needs_restart()                            # saving puts the good value in the file
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="needs ffmpeg")
+def test_a_drawing_on_a_clip_in_another_folder_is_saved_in_clips(qtbot, cfg, tmp_path):
+    moved = tmp_path / "server"
+    moved.mkdir()
+    made = make_clip(cfg, "a.mp4", dungeon="Ara-Kara", level=2, result="completed",
+                     label="+2 Completed", clip_length=2.0)
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "color=black:size=320x180:rate=10",
+                    "-t", "2", "-pix_fmt", "yuv420p", "-f", "mp4", str(made)], check=True)
+    clip = made.rename(moved / "a.mp4")                 # moved, its .json left in clips/
+    data = config.load_raw()
+    data["clips"]["other_folders"] = [str(moved)]
+    config.save(data)
+    w = browser.ClipBrowser()
+    qtbot.addWidget(w)
+    w.resize(1200, 800)
+    w.show()
+    assert w.current.elsewhere
+    w.draw_button.click()
+    qtbot.waitUntil(lambda: w.video_stack.currentWidget() is w.draw_page, timeout=60_000)
+    canvas = w.draw_page.canvas
+    pic = canvas.picture()
+    a = QPoint(int(pic.x() + pic.width() / 4), int(pic.y() + pic.height() / 2))
+    b = QPoint(int(pic.x() + pic.width() * 3 / 4), int(pic.y() + pic.height() / 2))
+    qtbot.mousePress(canvas, Qt.LeftButton, pos=a)
+    qtbot.mouseMove(canvas, b)
+    qtbot.mouseRelease(canvas, Qt.LeftButton, pos=b)
+    assert canvas.marks
+    w.escape()
+    assert [p.name for p in cfg.clips_dir.glob("*.png")] == [f"{clip.stem} 0m01s.png"]
+    assert list(moved.iterdir()) == [clip]              # nothing written there
+
+
 def test_switching_to_a_picked_window_asks_again(qtbot, cfg, fake_recorder, monkeypatch):
     data = config.load_raw()
     data["recorder"]["capture"] = "DP-2"

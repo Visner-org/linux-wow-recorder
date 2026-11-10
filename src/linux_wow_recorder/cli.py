@@ -66,6 +66,9 @@ def ask_webhooks(current: list[str]) -> list[str]:
         url = ask(f"Add webhook {len(urls) + 1} URL (Enter to finish)")
         if not url:
             break
+        if not url.lower().startswith("https://"):
+            print("   A webhook URL starts with https://.")
+            continue
         if url not in urls:
             urls.append(url)
     else:
@@ -326,6 +329,9 @@ def cmd_test_recorder(args) -> int:
         # Two recorders would fight over the encoder (or the screen-share dialog), and share
         # the recorder's state file. Paused or not, the service's session is WoW's.
         print("WoW is running; test the recorder once it's closed.")
+        return 1
+    if cfg.output_dir is None:
+        print(f"No output folder is set; run `{APP_NAME} setup` first.")
         return 1
     out = cfg.output_dir / "test-recording.mkv"
     out.unlink(missing_ok=True)

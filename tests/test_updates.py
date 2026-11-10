@@ -40,3 +40,23 @@ def test_latest_version_when_github_cant_be_asked(monkeypatch):
     monkeypatch.setattr(updates.urllib.request, "urlopen",
                         lambda request, timeout: io.BytesIO(b'{"tag_name": "nightly"}'))
     assert updates.latest_version() is None
+
+
+def test_a_check_always_finishes(monkeypatch):
+    import http.client
+    import time
+
+    def cut_off(request, timeout):
+        raise http.client.IncompleteRead(b"")
+    monkeypatch.setattr(updates.urllib.request, "urlopen", cut_off)
+    assert updates.latest_version() is None            # an answer cut off mid-way
+
+    def broken():
+        raise RuntimeError("unexpected")
+    monkeypatch.setattr(updates, "latest_version", broken)
+    monkeypatch.setattr(updates.threading, "excepthook", lambda args: None)
+    check = updates.Check()
+    deadline = time.monotonic() + 5
+    while not check.done and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert check.done and check.version is None

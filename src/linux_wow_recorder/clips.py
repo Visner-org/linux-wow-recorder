@@ -77,13 +77,24 @@ def clearable_logs(log_dir: Path | None, pending: list[Path]) -> tuple[list[Path
     needed: set[Path] = set()
     for rec in pending:
         try:
-            # A recording that can't be read keeps every log up to its last write.
-            start, end = recording_span(rec) or (0.0, rec.stat().st_mtime)
+            written = rec.stat().st_mtime
         except OSError:
             continue   # cut and moved meanwhile
+        try:
+            start, end = recording_span(rec) or (0.0, written)
+        except (OSError, subprocess.SubprocessError):
+            # It can't be read (no ffprobe, a drive that stopped answering): like one ffprobe
+            # can't make sense of, it keeps every log up to its last write.
+            start, end = 0.0, written
         needed.update(combat_logs_between(log_dir, start, end))
     now = time.time()
-    keep = {f for f in logs if f in needed or now - f.stat().st_mtime < LOG_IN_USE}
+
+    def in_use(f: Path) -> bool:
+        try:
+            return now - f.stat().st_mtime < LOG_IN_USE
+        except OSError:
+            return True   # gone meanwhile: nothing to clear
+    keep = {f for f in logs if f in needed or in_use(f)}
     return [f for f in logs if f not in keep], len(keep)
 
 
@@ -137,12 +148,23 @@ def key_wanted(cfg: Config, run: Run) -> bool:
                 or (cfg.key_max_time_left is not None and left > cfg.key_max_time_left))
 
 
+# A file name holds 255 bytes: the names in it are cut to these, which leaves room for the
+# time, the length and what copies add (" (chat hidden)", " highlight 0m45s-1m15s", ".part").
+NAME_BYTES, ZONE_BYTES = 120, 50
+
+
+def _name_part(text: str, limit: int) -> str:
+    """text as part of a file name: no characters a file name can't have, at most limit bytes."""
+    text = re.sub(r"[^\w '+()-]", "", text).strip()
+    return text.encode()[:limit].decode(errors="ignore").strip()
+
+
 def clip_name(run: Run, rec_start: float, rec_end: float) -> str:
     stamp = datetime.datetime.fromtimestamp(run.start).strftime("%Y-%m-%d %H-%M")
-    name = re.sub(r"[^\w '+()-]", "", run.name).strip()
+    name = _name_part(run.name, NAME_BYTES)
     if run.is_moment:   # seconds too: two can be a minute apart
         stamp = datetime.datetime.fromtimestamp(run.start).strftime("%Y-%m-%d %H-%M-%S")
-        zone = re.sub(r"[^\w '+()-]", "", run.label).strip()
+        zone = _name_part(run.label, ZONE_BYTES)
         return f"{stamp} {name}{f' - {zone}' if zone else ''}.mp4"
     clip = f"{stamp} {name} {run.label} ({run.length})"
     if run.is_raid:   # the same boss is pulled again and again

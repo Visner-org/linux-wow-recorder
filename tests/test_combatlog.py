@@ -191,6 +191,7 @@ def test_short_runs_are_dropped():
 def test_parse_log_time():
     assert parse_log_time("10/8/2026 19:03:12.345-7") == 1791511392.345
     assert parse_log_time("not a time") is None
+    assert parse_log_time("10/8/2026 19:03:12.345-99") is None   # no such time zone: a bad line
 
 
 def test_read_log_events(tmp_path):
@@ -588,6 +589,10 @@ def test_read_casts_keeps_the_groups(tmp_path):
         Cast(t + 7, 2825, "Bloodlust", "Shammy-Realm-US"),
         Cast(t + 20, 133, "Fireball", "Me-Realm-US", mine=True),
     ]
+    # WoW is still writing the last line: it ends after the spell's ID, with no name yet
+    with log.open("a") as f:
+        f.write(cast_line(21, "SPELL_CAST_SUCCESS", 133, "Fireball").partition(',"Fireball"')[0])
+    assert len(read_casts([log])) == 4
 
 
 def test_last_event_time_is_the_newest_whole_line(tmp_path):
@@ -669,3 +674,18 @@ def test_logs_of_the_other_wow_clients_are_read_too(tmp_path):
 def test_a_completed_keys_end_is_spotted_in_raw_log_text():
     assert KEY_DONE.search(b"11/6/2026 16:30:00.000-8  CHALLENGE_MODE_END,2290,1,12,1650000\n")
     assert not KEY_DONE.search(b"11/6/2026 16:30:00.000-8  CHALLENGE_MODE_END,2290,0,0,0\n")
+
+
+def test_a_string_of_kills_names_a_few_and_counts_the_rest():
+    elites = [(T0 + 100 + 40 * i, f"Mob {i}", "elite", T0 + 95 + 40 * i) for i in range(6)]
+    [m] = find_moments([], ["elite"], elites=elites)
+    assert m.name == "Elite: Mob 0 + Elite: Mob 1 + Elite: Mob 2 + 3 more"
+    assert len(m.moments) == 6                          # the clip's details still have them all
+    [m] = find_moments([], ["elite"], elites=elites[:4])
+    assert m.name.count(" + ") == 3 and "more" not in m.name   # four fit: no "1 more"
+
+
+def test_a_garbled_guid_is_no_npc():
+    from linux_wow_recorder import forces
+    assert forces.npc_id("Creature-0-3767-2290-17123-164567-00004A2F1D") == 164567
+    assert forces.npc_id("Creature-0-3767-2290-17123-16x-00") is None

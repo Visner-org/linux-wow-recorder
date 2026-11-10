@@ -32,15 +32,24 @@ def _retry_after(e: urllib.error.HTTPError) -> float | None:
 def post(url: str, message: str, label: str = "Webhook") -> bool:
     """Posts one message to one webhook. True if it was accepted. Rate limited, it's sent
     once more after the wait the webhook asks for."""
-    content = f"🎥 **{APP_TITLE}**\n{message}"
+    if not url.lower().startswith("https://"):   # the URL is a secret: never sent in the clear
+        log.warning(f"{label} message not sent: its URL doesn't start with https://.")
+        return False
+    # Names from the game go into messages: an "@" in one must never ping anybody. A
+    # zero-width space after it works on Discord and Fluxer alike.
+    content = f"🎥 **{APP_TITLE}**\n{message}".replace("@", "@\u200b")
     if len(content) > 2000:   # Discord's limit
         content = content[:1990] + "\n…"
-    req = urllib.request.Request(
-        url, data=json.dumps({"content": content}).encode(), method="POST",
-        # Discord refuses urllib's default User-Agent.
-        headers={"Content-Type": "application/json",
-                 "User-Agent": f"linux-wow-recorder/{__version__}"},
-    )
+    try:
+        req = urllib.request.Request(
+            url, data=json.dumps({"content": content}).encode(), method="POST",
+            # Discord refuses urllib's default User-Agent.
+            headers={"Content-Type": "application/json",
+                     "User-Agent": f"linux-wow-recorder/{__version__}"},
+        )
+    except ValueError:   # its text has the URL, which is a secret
+        log.warning(f"{label} message failed: its URL isn't a web address (https://...).")
+        return False
     for attempt in (1, 2):
         try:
             with urllib.request.urlopen(req, timeout=10):
@@ -52,8 +61,11 @@ def post(url: str, message: str, label: str = "Webhook") -> bool:
                 return False
             log.info(f"{label} is rate limited; sending again in {wait:.0f} s.")
             time.sleep(wait)
-        except Exception as e:
+        except urllib.error.URLError as e:
             log.warning(f"{label} message failed: {e}")
+            return False
+        except Exception as e:   # the name only: a bad URL's error has the URL in it
+            log.warning(f"{label} message failed: {type(e).__name__}")
             return False
     return False
 
@@ -98,6 +110,8 @@ class Notifier:
             message = self._queue.get()
             try:
                 self._post_all(message)
+            except Exception:   # never the end of the thread: the next message still goes out
+                log.warning("A webhook message failed.")
             finally:
                 self._queue.task_done()
 

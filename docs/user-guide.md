@@ -65,7 +65,7 @@ And in WoW:
 ### Nobara or Fedora (RPM)
 
 ```bash
-sudo dnf install ./linux-wow-recorder-1.2.7-1.fc44.noarch.rpm
+sudo dnf install ./linux-wow-recorder-1.3.3-4.fc44.noarch.rpm
 ```
 
 This brings in ffmpeg and Qt, and on Nobara gpu-screen-recorder. Open **Linux WoW Recorder**
@@ -107,7 +107,7 @@ For Ubuntu 25.10+ (26.04 tested) and Debian 13. Download the `.deb` from
 [Releases](https://github.com/Visner-org/linux-wow-recorder/releases), then:
 
 ```bash
-sudo apt install ./linux-wow-recorder_1.2.7-1_all.deb
+sudo apt install ./linux-wow-recorder_1.3.3-4_all.deb
 flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
 flatpak install --user flathub com.dec05eba.gpu_screen_recorder
 ```
@@ -348,7 +348,8 @@ tray icons. Without a tray, closing the window quits the app.
   keyframe).
 - **Drawing**: the pencil (or D) pauses and lets you draw: pen, arrow, box, circle, text (1 to
   5), Ctrl+Z undoes. **Done** saves the picture beside the clip ("... 12m34s.png"); **Copy**
-  puts it on the clipboard. "Keep clips" deletes pictures with their clip.
+  puts it on the clipboard. "Keep clips" deletes pictures with their clip. For a clip in
+  another folder, the picture goes to your clips folder.
 - **Keys**: space play/pause, arrows skip 5 s, I/O highlight start/end, C casts, D draw, F full
   screen.
 - **Player**: click the video to play or pause, double-click for full screen. The speed button
@@ -393,7 +394,8 @@ community's settings > Webhooks. Then choose the messages:
 | Hook failed | your `after_clips` command failed | yes |
 | Cleanup | old recordings were deleted | no |
 
-Treat webhook URLs like passwords: anyone with one can post in that channel.
+Treat webhook URLs like passwords: anyone with one can post in that channel. They must start
+with `https://`; messages never ping anyone, even if a name in them has an @.
 
 ## Sending clips somewhere
 
@@ -456,7 +458,8 @@ changed.
 2. Drag a box over the chat; it's remembered for next time.
 3. **Make copy.**
 
-The copy, "... (chat hidden).mp4", appears in the list like any clip. The box stays in one spot
+The copy, "... (chat hidden).mp4", appears in the list like any clip (for a clip in another
+folder, it's made in your clips folder). The box stays in one spot
 for the whole clip. It's re-encoded: with NVIDIA about a seventh of the clip's length, slower on
 AMD, Intel or the CPU. It expires like other clips unless you ☆ Keep it.
 

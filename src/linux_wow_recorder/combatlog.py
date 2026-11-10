@@ -149,14 +149,14 @@ def parse_log_time(stamp: str, now: float | None = None) -> float | None:
     if not m:
         return None
     mo, d, y, h, mi, s, ms, off = m.groups()
-    tz = datetime.timezone(datetime.timedelta(hours=float(off))) if off else None
-    now_dt = datetime.datetime.fromtimestamp(time.time() if now is None else now, tz)
     try:
+        tz = datetime.timezone(datetime.timedelta(hours=float(off))) if off else None
+        now_dt = datetime.datetime.fromtimestamp(time.time() if now is None else now, tz)
         dt = datetime.datetime(int(y) if y else now_dt.year, int(mo), int(d), int(h), int(mi),
                                int(s), int(ms.ljust(6, "0")[:6]), tzinfo=tz)
         if not y and dt > now_dt + datetime.timedelta(days=1):
             dt = dt.replace(year=dt.year - 1)   # a log from December read in January
-    except ValueError:   # Feb 29 in the wrong year, or garbage
+    except ValueError:   # Feb 29 in the wrong year, an offset no time zone has, or garbage
         return None
     return dt.timestamp()
 
@@ -238,8 +238,9 @@ def _grep_events(logs: list[Path], pattern: str, wanted: Callable[[str], bool] |
             t = parse_log_time(stamp)
             if t is None:
                 continue
-            fields = next(csv.reader([payload]))
-            yield t, fields[0], fields[1:]
+            fields = next(csv.reader([payload]), None)
+            if fields:
+                yield t, fields[0], fields[1:]
 
 
 @dataclass
@@ -574,7 +575,10 @@ def count_special_mobs(runs: list[Run], logs: list[Path]):
 
     def wanted(payload: str) -> bool:
         # Most damage lines are on mobs already counted; those are only read for SPAWNS.
-        guid = payload.split(",", 6)[5]
+        parts = payload.split(",", 6)
+        if len(parts) < 6:
+            return False   # the log's last line, still being written
+        guid = parts[5]
         npc = forces.npc_id(guid)
         return npc in npcs and (guid not in counted or npc in placed)
     killed: dict[str, float] = {}   # GUID -> when it took its first killing blow
@@ -625,8 +629,9 @@ def read_casts(logs: list[Path]) -> list[Cast]:
     started: dict[tuple[str, int], float] = {}
     casts = []
     for t, event, f in _grep_events(logs, _CAST_GREP):
-        try:
+        try:   # a line cut short (the log's last, still being written) is skipped
             key = (f[0], int(f[8]))
+            name, mine = f[9], int(f[2], 16) & 1 == 1
         except (IndexError, ValueError):
             continue
         if event == "SPELL_CAST_START":
@@ -635,7 +640,7 @@ def read_casts(logs: list[Path]) -> list[Cast]:
         began = started.pop(key, None)
         cast = round(t - began, 1) if began is not None and 0 < t - began <= MAX_CAST_SECONDS \
             else None
-        casts.append(Cast(t, key[1], f[9], f[1], cast or None, int(f[2], 16) & 1 == 1))
+        casts.append(Cast(t, key[1], name, f[1], cast or None, mine))
     return sorted(casts, key=lambda c: c.time)
 
 
@@ -716,6 +721,8 @@ MOMENT_DEATH, MOMENT_LEVEL, MOMENT_ELITE = "death", "level", "elite"
 # What the WoW addon notes as worth a clip when killed (UnitClassification), and what it's called.
 ELITE_KINDS = {"elite": "Elite", "rareelite": "Rare elite", "rare": "Rare",
                "worldboss": "World boss"}
+# How many things a moment clip is named after, before "+ N more".
+MOMENT_NAMES = 3
 # Unit flags: the unit's affiliation is the last hex digit: 1 the player who logged, 2 party,
 # 4 raid.
 _MINE, _GROUP = 0x1, 0x7
@@ -836,6 +843,8 @@ def find_moments(events: list[tuple[float, str, list[str]]], kinds: Iterable[str
     moments = []
     for g in groups:
         what = list(dict.fromkeys(m.what for m in g))   # three deaths in a row: "Death"
+        if len(what) > MOMENT_NAMES + 1:   # a string of kills: the name stays a file name's length
+            what = what[:MOMENT_NAMES] + [f"{len(what) - MOMENT_NAMES} more"]
         moments.append(Run(" + ".join(what), min(m.start or m.time for m in g), g[-1].time, g[0].zone,
                            result="moment", moments=g))
     return moments

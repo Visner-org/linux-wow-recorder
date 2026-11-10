@@ -1,6 +1,7 @@
 """The TOML config file: defaults, loading, checking and writing it."""
 
 import json
+import math
 import os
 import shlex
 import shutil
@@ -275,7 +276,8 @@ def from_dict(data: dict) -> Config:
             moment_seconds=_at_least(int(c["moment_seconds"]), 5, "moment_seconds"),
             clips_window={k: bool(v) for k, v in data["clips_window"].items()},
         )
-    except (TypeError, ValueError, AttributeError) as e:   # AttributeError: a list for a string
+    # AttributeError: a list for a string; OverflowError: inf for a whole number
+    except (TypeError, ValueError, AttributeError, OverflowError) as e:
         raise ConfigError(f"Bad value in the config: {e}") from e
 
 
@@ -285,8 +287,51 @@ def load_raw(path: Path = CONFIG_FILE) -> dict:
         return _merge(DEFAULTS, {})
     try:
         return _merge(DEFAULTS, _upgrade(tomllib.loads(path.read_text())))
-    except tomllib.TOMLDecodeError as e:
+    except (tomllib.TOMLDecodeError, UnicodeDecodeError) as e:   # the last: not a text file
         raise ConfigError(f"{path}: {e}") from e
+
+
+# Settings that are a number or "" (none), where the default's "" doesn't say so.
+_NUMBER_OR_EMPTY = ("key_min_time_left", "key_max_time_left")
+
+
+def _number(value) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def _fits(key: str, value, default) -> bool:
+    """Whether value is the kind of thing default is: what the settings window can show."""
+    if isinstance(default, bool):
+        return isinstance(value, bool)
+    if isinstance(default, (int, float)):
+        return _number(value)
+    if isinstance(default, list):
+        return isinstance(value, list) and all(isinstance(v, str) for v in value)
+    return isinstance(value, str) or (key in _NUMBER_OR_EMPTY and _number(value))
+
+
+def readable(data: dict, defaults: dict | None = None, section: str = "") -> tuple[dict, list[str]]:
+    """data (shaped like DEFAULTS) with the default in place of every value of the wrong kind
+    (text for a number, inf, a number for a folder), and those values' names: "recorder.fps".
+    For the settings window, which shows a hand-edited file's good values and lets the rest be
+    set again."""
+    defaults = DEFAULTS if defaults is None else defaults
+    out, bad = {}, []
+    for key, default in defaults.items():
+        value = data.get(key, default)
+        name = f"{section}.{key}" if section else key
+        if isinstance(default, dict):
+            out[key], more = readable(value if isinstance(value, dict) else {}, default, name)
+            bad += more
+            continue
+        if isinstance(default, list) and isinstance(value, str):
+            value = [value]   # `audio = "default_output"`, as from_dict takes it
+        if _fits(key, value, default):
+            out[key] = value
+        else:
+            out[key] = default
+            bad.append(name)
+    return out, bad
 
 
 def load(path: Path = CONFIG_FILE) -> Config:

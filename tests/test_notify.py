@@ -68,3 +68,46 @@ def test_a_rate_limited_message_is_sent_once_more(monkeypatch):
     tries.clear()
     monkeypatch.setattr(notify.urllib.request, "urlopen", always_429)
     assert not notify.post("https://a/1", "hi") and len(tries) == 2   # once more, no more
+
+
+def test_a_url_that_isnt_one_fails_its_message_only(tmp_path, monkeypatch, caplog):
+    data = config.load_raw(tmp_path / "missing.toml")
+    data["discord"]["webhook_urls"] = ["discord.example/api/webhooks/1/SECRET"]   # no https://
+    cfg = config.from_dict(data)
+    assert notify.post(cfg.webhook_urls[0], "hi") is False
+    assert "SECRET" not in caplog.text                 # the URL stays out of the log
+    assert notify.Notifier(cfg).send("clips_ready", "hi") == [1]
+
+    posted = []
+
+    def post(url, message, label=""):
+        posted.append(message)
+        if message == "one":
+            raise RuntimeError("unexpected")
+        return True
+    monkeypatch.setattr(notify, "post", post)
+    n = notify.Notifier(cfg, background=True)
+    n.send("clips_ready", "one")
+    n.send("clips_ready", "two")                       # the thread outlived the first
+    n.flush(timeout=5)
+    assert posted == ["one", "two"]
+
+
+def test_only_https_and_no_pings(monkeypatch):
+    import json
+    sent = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def urlopen(req, timeout):
+        sent.append(json.loads(req.data)["content"])
+        return Response()
+    monkeypatch.setattr(notify.urllib.request, "urlopen", urlopen)
+    assert notify.post("http://a/1", "hi") is False and sent == []   # never in the clear
+    assert notify.post("https://a/1", "Killed @everyone the Boss")
+    assert "@everyone" not in sent[0] and "@\u200beveryone the Boss" in sent[0]

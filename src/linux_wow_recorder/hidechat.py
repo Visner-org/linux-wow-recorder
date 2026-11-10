@@ -15,10 +15,10 @@ SUFFIX = " (chat hidden)"
 FALLBACK_BITRATE = 20_000_000
 
 
-def output_path(clip: Path, clips_dir: Path) -> Path:
-    """Where the copy goes: beside the clip, or in clips_dir when the clip's folder is read
-    only (another folder)."""
-    folder = clip.parent if os.access(clip.parent, os.W_OK) else clips_dir
+def output_path(clip: Path, clips_dir: Path, elsewhere: bool = False) -> Path:
+    """Where the copy goes: beside the clip, or in clips_dir when the clip is in another folder
+    (elsewhere: the app writes only in its own) or its folder can't be written to."""
+    folder = clip.parent if not elsewhere and os.access(clip.parent, os.W_OK) else clips_dir
     return folder / f"{clip.stem}{SUFFIX}.mp4"
 
 

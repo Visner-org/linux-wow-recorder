@@ -6,6 +6,7 @@ version, settings, paths or anything else from this computer (GitHub asks for a 
 the app's name). GitHub sees the IP address, as with any web page.
 """
 
+import http.client
 import json
 import re
 import threading
@@ -37,7 +38,7 @@ def latest_version(timeout: float = 15) -> str | None:
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             data = json.load(response)
-    except (OSError, ValueError):
+    except (OSError, ValueError, http.client.HTTPException):   # the last: an answer cut off
         return None
     tag = data.get("tag_name") if isinstance(data, dict) else None
     return tag.lstrip("v") if isinstance(tag, str) and version_tuple(tag) else None
@@ -53,5 +54,7 @@ class Check:
         threading.Thread(target=self._run, name="update-check", daemon=True).start()
 
     def _run(self):
-        self.version = latest_version()
-        self.done = True
+        try:
+            self.version = latest_version()
+        finally:
+            self.done = True   # whatever went wrong: nobody waits on this for good

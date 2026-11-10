@@ -68,8 +68,9 @@ def draw_icon(kind: str, ink: QColor | None = None) -> QIcon:
 
 
 ICON_FILE = Path(__file__).with_name("icon.svg")
-# Another launch of the app connects here to bring the window up (one app per user).
-SERVER_NAME = f"{APP_NAME}-{os.getuid()}"
+# Another launch of the app connects here to bring the window up (one app per user). In the
+# user's own runtime folder, not the shared temp folder, where another user could take the name.
+SERVER_NAME = str(state.STATUS_FILE.parent / "gui.sock")
 
 
 def app_icon() -> QIcon:
@@ -612,6 +613,7 @@ def run(start_hidden: bool = False) -> int:
         return 0
     QLocalServer.removeServer(SERVER_NAME)   # left over if the last run crashed
     server = QLocalServer()
+    server.setSocketOptions(QLocalServer.UserAccessOption)   # this user only
     server.listen(SERVER_NAME)
 
     if start_hidden:

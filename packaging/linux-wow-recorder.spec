@@ -5,7 +5,7 @@
 
 Name:           linux-wow-recorder
 Version:        %{app_version}
-Release:        1%{?dist}
+Release:        4%{?dist}
 Summary:        Records World of Warcraft sessions and cuts one clip per dungeon run
 License:        GPL-3.0-or-later
 BuildArch:      noarch
@@ -62,6 +62,24 @@ if [ "$1" -eq 0 ]; then
 fi
 
 %changelog
+* Tue Nov 10 2026 Linux WoW Recorder - 1.3.3-4
+- setup asks again for a webhook link that doesn't start with https://
+- test-recorder says so when no output folder is set
+
+* Tue Nov 10 2026 Linux WoW Recorder - 1.3.3-3
+- Settings opens even when the config file has a value it can't read
+- Drawings and chat-hidden copies of clips in other folders go to the clips folder
+- Webhook links must start with https://, and messages never ping anyone
+
+* Mon Nov 09 2026 Linux WoW Recorder - 1.3.3-2
+- Clear old logs keeps the logs of a recording it can't read
+- One bad line in the combat log no longer stops a recording's clips
+
+* Mon Nov 09 2026 Linux WoW Recorder - 1.3.3-1
+- Saving after the 5-second test restarts the service with the new settings
+- A wrong webhook link no longer stops the other messages
+- Fixes for cutting clips while WoW runs, long moment clip names and the update check
+
 * Mon Nov 09 2026 Linux WoW Recorder - 1.3.2-1
 - A paused clip no longer shows the app as playing sound
 

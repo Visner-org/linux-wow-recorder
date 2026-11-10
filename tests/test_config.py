@@ -148,3 +148,28 @@ def test_a_moment_kind_the_app_doesnt_know_is_an_error(tmp_path):
     data["clips"]["moments"] = ["death", "dance"]
     with pytest.raises(config.ConfigError, match="dance"):
         config.from_dict(data)
+
+
+def test_values_of_the_wrong_kind_are_a_config_error_or_their_default(tmp_path):
+    data = config.load_raw(tmp_path / "missing.toml")
+    assert config.readable(data) == (data, [])
+    data["recorder"]["fps"] = float("inf")
+    with pytest.raises(config.ConfigError):
+        config.from_dict(data)
+    data["clips"]["pad_after"] = "abc"
+    data["paths"]["output_dir"] = 5
+    data["recorder"]["audio"] = "default_output"       # one name for a list: taken as it is
+    data["clips"]["key_min_time_left"] = -5            # a number where the default is ""
+    data["discord"] = "nope"                           # a value for a whole section
+    good, bad = config.readable(data)
+    assert bad == ["paths.output_dir", "recorder.fps", "clips.pad_after"]
+    assert good["recorder"]["fps"] == config.DEFAULTS["recorder"]["fps"]
+    assert good["recorder"]["audio"] == ["default_output"]
+    assert good["clips"]["key_min_time_left"] == -5
+    assert good["discord"] == config.DEFAULTS["discord"]
+    config.from_dict(good)
+
+    path = tmp_path / "config.toml"
+    path.write_bytes(b"[recorder]\nfps = 60 # \xff\xfe\n")   # not text
+    with pytest.raises(config.ConfigError):
+        config.load_raw(path)

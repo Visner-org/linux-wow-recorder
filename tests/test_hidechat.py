@@ -22,6 +22,8 @@ def test_the_copy_goes_beside_the_clip_or_in_clips_when_it_cant(tmp_path):
     clip.parent.mkdir()
     clips = tmp_path / "clips"
     assert hidechat.output_path(clip, clips) == clip.parent / "Run +10 Completed (20m00s) (chat hidden).mp4"
+    # a clip in another folder: the app writes only in its own
+    assert hidechat.output_path(clip, clips, elsewhere=True).parent == clips
     os.chmod(clip.parent, 0o555)
     try:
         if not os.access(clip.parent, os.W_OK):   # root can write anyway

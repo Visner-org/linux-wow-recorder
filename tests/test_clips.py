@@ -364,6 +364,17 @@ def test_clearable_logs_keep_what_a_recording_or_wow_still_needs(tmp_path, monke
     assert clips.clearable_logs(logs, []) == ([old, waited_for], 1)
     assert clips.clearable_logs(None, []) == ([], 0)
 
+    # A recording that can't be read (no ffprobe, a drive that hangs) keeps every log before it.
+    def no_ffprobe(p):
+        raise FileNotFoundError("ffprobe")
+
+    def hangs(p):
+        raise subprocess.TimeoutExpired("ffprobe", 120)
+    for unreadable in (no_ffprobe, hangs):
+        monkeypatch.setattr(clips, "recording_span", unreadable)
+        assert clips.clearable_logs(logs, [rec]) == ([], 3)
+    assert clips.clearable_logs(logs, [tmp_path / "moved.mkv"]) == ([old, waited_for], 1)
+
 
 def test_key_rules_pick_which_keys_are_clipped(tmp_path):
     cfg = make_cfg(tmp_path)
@@ -394,6 +405,11 @@ def test_a_moment_clip_is_named_by_its_second_and_zone(tmp_path):
     assert clips.clip_window(cfg, t - 600, t + 600, run) == (570, 630)
     assert clips.clip_window(cfg, t - 10, t + 600, run) == (0, 40)   # the recording began late
     assert clips.clip_window(cfg, t + 1, t + 600, run) is None      # not in this recording
+    # a string of kills: the name stays well inside a file name's 255 bytes
+    run.name = " + ".join(f"Élite: Some Long Elite Mob Name {i}" for i in range(9))
+    run.label = "A Very Long Zone Name " * 5
+    name = clip_name(run, t - 600, t + 600)
+    assert len(name.encode()) <= 200 and name.endswith(".mp4")
 
 
 @pytest.mark.skipif(not shutil.which("ffmpeg"), reason="needs ffmpeg")

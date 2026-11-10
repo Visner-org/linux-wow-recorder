@@ -4,7 +4,7 @@
 uv sync --extra gui        # the venv, with the desktop app's Qt
 uv run pytest              # the tests (the ones needing ffmpeg/ffprobe are skipped without)
 uv run --extra gui --group gui-test pytest   # also the window tests (pytest-qt), offscreen
-uv run ruff check src tests
+uv run ruff check src tests tools
 uv run linux-wow-recorder status
 uv run linux-wow-recorder-gui
 ```
@@ -14,7 +14,7 @@ so tests never read or write the real config, state, logs or autostart file. The
 (`tests/test_gui_windows.py`) are skipped without pytest-qt, which won't load without Qt; that's
 why it's a group of its own and not in `dev`.
 
-CI (`.github/workflows/ci.yml`) runs ruff, the core tests on Python 3.11 to 3.13 without Qt,
+CI (`.github/workflows/ci.yml`) runs ruff, the core tests on Python 3.11 to 3.14 without Qt,
 and the window tests offscreen on Ubuntu 24.04 (Qt needs `libegl1 libgl1 libxkbcommon0
 libfontconfig1 libdbus-1-3 libglib2.0-0t64 libpulse0` there).
 
@@ -22,7 +22,7 @@ libfontconfig1 libdbus-1-3 libglib2.0-0t64 libpulse0` there).
 
 - **One computer.** The app assumes it runs on a single computer, and everything it does stays
   on that computer. It doesn't upload, sync, copy to other machines, mount or connect drives, or
-  talk to servers (the webhook messages aside). Anything beyond that is the user's own business,
+  talk to servers (the webhook messages and the optional update check aside). Anything beyond that is the user's own business,
   and `after_clips` is the one place for it: the app runs that command and goes no further. A
   folder setting is a local path; how files get there (a mounted share, a sync tool) isn't the
   app's concern.
@@ -31,7 +31,8 @@ libfontconfig1 libdbus-1-3 libglib2.0-0t64 libpulse0` there).
   command line only installs a few hundred KB.
 - **The service is the only thing that records.** The desktop app is a client: it reads the
   status file, the config and the clips folder, and controls the service through systemd.
-  Closing it never stops a recording.
+  Closing its window never stops a recording; quitting it stops the service, unless the service
+  is set to start at login.
 - **The recorder is a separate program.** gpu-screen-recorder runs as its own process (in its own
   process group), and SIGINT makes it finish the file. libobs isn't embedded.
 - **Nothing is guessed from the system except the WoW process.** The user points the app at the
@@ -40,9 +41,10 @@ libfontconfig1 libdbus-1-3 libglib2.0-0t64 libpulse0` there).
   folders, and the service and .desktop files. The clip browser's delete moves the clip and its
   `.json` to the desktop's trash (`QFile.moveToTrash`) and deletes for good only when there's
   no trash and the user agrees. The `other_folders` it lists clips from are read only: no
-  pictures made there, no Keep, no retention; only that delete, when the user asks for it.
+  pictures or copies made there (a drawing or a chat-hidden copy of such a clip goes to
+  `clips/`), no Keep, no retention; only that delete, when the user asks for it.
 - **Clips are never re-encoded.** ffmpeg stream-copies, so cutting takes seconds and loses
-  nothing.
+  nothing. Only a Hide chat copy is, when the user asks for one.
 
 ## How a session goes
 
@@ -301,7 +303,14 @@ launcher, which names the game in its arguments, are skipped. Add a new client's
 | `addon.py` | installs the WoW addon, reads its saved level-ups and elites |
 | `cooldowns.py` | the major cooldowns, by spell ID and kind (damage, healing, defensive) |
 | `clips.py` | cuts recordings into clips with ffmpeg, writes the `.json` details, retention cleanup |
+| `keytimers.py` | each season dungeon's time limit, for Timed or Over time |
+| `forces.py` | each season dungeon's enemy forces, per NPC |
+| `highlight.py` | saves part of a clip as a clip of its own |
+| `hidechat.py` | makes a copy of a clip with a black box over the chat |
+| `live.py` | the newest frame of a recording still being written, for the preview |
 | `notify.py` | Discord or Fluxer webhooks (the same JSON) |
+| `updates.py` | the optional daily check for a new release on GitHub |
+| `uninstall.py` | the clean uninstall |
 | `logs.py` | log files, kept on this computer and cleaned; the report file ([Logging](#logging)) |
 | `daemon.py` | the main loop |
 | `state.py` | `status.json`, and `control.json` (pause requests to the service) |
@@ -313,6 +322,9 @@ launcher, which names the game in its arguments, are skipped. Add a new client's
 | `gui/tray.py` | the tray icon (drawn in code) and its menu |
 | `gui/settings.py` | the settings window |
 | `gui/browser.py` | the clip browser: cards or table, player, timeline, events by boss |
+| `gui/draw.py` | drawing on a paused frame |
+| `gui/hidechat.py` | the Hide chat dialog: drag a box over the chat |
+| `gui/overlay.py` | the big "THIS ONE" shown on a monitor picked in Settings |
 | `gui/theme.py` | colours for light and dark themes (timeline marks, status text) |
 | `gui/desktop.py` | the autostart and app menu `.desktop` files |
 
@@ -386,7 +398,7 @@ launcher, which names the game in its arguments, are skipped. Add a new client's
   timeline serve both; a recording without a `.json` (cut by 0.5.0 or earlier) gets its runs
   from its clips' details, moved by `shift_run`.
 - **Settings window**: pages in a sidebar (Folders and capture, Sound, Clips and storage,
-  Notifications, Advanced, About: the version, links and the GPL from the
+  Notifications, WoW addon, Advanced, About: the version, links and the GPL from the
   installed package's `licenses/LICENSE`, via `model.license_text`); with no config file, the same pieces are a three-step setup
   (folders, what to record, a 5-second test). Each field has a check line under it
   (`model.field_checks`), and a page with a problem gets a ⚠ in the sidebar; an empty needed
@@ -403,7 +415,8 @@ launcher, which names the game in its arguments, are skipped. Add a new client's
 Rules, for every change:
 
 1. **Logs never leave the computer.** No code that writes or reads logs uses the network
-   (`logs.py` has a test for that). The only network traffic is the user's own webhooks.
+   (`logs.py` has a test for that). The only network traffic is the user's own webhooks and,
+   if turned on, the daily question to GitHub for the newest version number.
 2. **Webhook messages carry no log lines, error output or file paths**: they say what happened and
    point to the log on this computer (`daemon.SEE_LOG`). A test checks every `notifier.send` in
    `daemon.py`.
@@ -416,26 +429,27 @@ Rules, for every change:
 6. **Plain text**, so the user can read exactly what a report contains.
 
 `logs.setup(name)` is called once per process: `recorder` for `run` (the service), `app` for the
-desktop app and the other commands. Uncaught errors in any thread are logged with their
+desktop app and `cli` for the other commands. Uncaught errors in any thread are logged with their
 traceback; `faulthandler` writes hard crashes to `crash.log`.
 
 ## Version numbers
 
-`0.MINOR.PATCH` until the first stable release, then `MAJOR.MINOR.PATCH`
-([semantic versioning](https://semver.org)). The version lives in `src/linux_wow_recorder/__init__.py`.
+`MAJOR.MINOR.PATCH`, in `src/linux_wow_recorder/__init__.py`.
 
-- **PATCH** (0.2.0 → 0.2.1): bug fixes only; nothing changes for someone who doesn't hit the bug.
-- **MINOR** (0.2.x → 0.3.0): new features, changed defaults, or new config settings. Older config
-  files keep working. The numbers aren't decimals: after 0.9.0 comes 0.10.0, so 1.0 never has to
-  come early.
-- **MAJOR** (1.0.0): the first release meant for anyone, after it has run for a while without
-  problems. After 1.0, a change that breaks an existing config file or command means 2.0.
+- **A feature, even a small one**: the last number goes up (1.3.0 → 1.3.1). The numbers aren't
+  decimals: after 1.3.9 comes 1.3.10.
+- **Fixes to a version that isn't on GitHub yet**: the version stays and the RPM's `Release`
+  goes up (1.3.3-1 → 1.3.3-2; the `.deb`'s revision likewise:
+  `DEB_REVISION=2 ./packaging/build-deb.sh`), so a package manager takes it as newer. A
+  packaging-only change does the same.
+- **Never two different builds under one number.**
+- The middle number is for a bigger step (1.2 → 1.3); a change that breaks an existing config
+  file or command means 2.0.
 
-Each release gets an entry in the `%changelog` of `packaging/linux-wow-recorder.spec`, and the RPM's
-`Release` stays 1 unless only the packaging changed (likewise the `.deb`'s revision:
-`DEB_REVISION=2 ./packaging/build-deb.sh`). Build both (`build-rpm.sh`, then `build-deb.sh`,
-which rebuilds the same wheel) and attach the RPM, the `.deb` and the wheel to the release. After the GitHub release (tag `0.5.0`, no
-`v`), set `pkgver` in `packaging/aur/PKGBUILD` (and `pkgrel=1`), then in that folder
+Each build gets an entry in the `%changelog` of `packaging/linux-wow-recorder.spec`. Build both
+packages (`build-rpm.sh`, then `build-deb.sh`, which rebuilds the same wheel) and attach the
+RPM, the `.deb` and the wheel to the release. After the GitHub release (tag `1.3.0`, no `v`), set
+`pkgver` in `packaging/aur/PKGBUILD` (and `pkgrel=1`), then in that folder
 `updpkgsums && makepkg --printsrcinfo > .SRCINFO`; on an Arch-less machine, run both in an
 `archlinux` container.
 
@@ -464,8 +478,6 @@ them has a graphics card, so nothing was recorded; recording is only proven on N
 - A native openSUSE package (its package names differ from Fedora's, so it'd be its own spec).
 - On COSMIC the app draws with Qt's own light style, not COSMIC's colours.
 
-- Timed vs depleted for keys: the log only says completed. It needs each dungeon's time limit,
-  which changes every season.
 - Choosing the encoder GPU on machines with two GPUs.
 - Checked against real logs: Classic, WoW Forever, dungeons without a key (Mythic 0, Heroic),
   raids. Retail Mythic+ was checked on a month of logs (130 keys): deaths, lusts, wipes and

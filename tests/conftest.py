@@ -2,7 +2,9 @@
 paths are worked out at import time from these variables, so the tests never touch the real
 ones. Windows open offscreen, so the GUI tests need no display."""
 
+import atexit
 import os
+import shutil
 import tempfile
 
 import pytest
@@ -12,6 +14,7 @@ for _name in ("XDG_CONFIG_HOME", "XDG_STATE_HOME", "XDG_DATA_HOME", "XDG_RUNTIME
     os.environ[_name] = os.path.join(_root, _name.lower())
     os.makedirs(os.environ[_name], mode=0o700)
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+atexit.register(shutil.rmtree, _root, ignore_errors=True)   # nothing left in the temp folder
 
 
 @pytest.hookimpl(tryfirst=True)

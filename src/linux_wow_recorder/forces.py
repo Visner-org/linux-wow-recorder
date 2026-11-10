@@ -196,7 +196,10 @@ def npc_id(guid: str) -> int | None:
     parts = guid.split("-")
     if parts[0] not in ("Creature", "Vehicle") or len(parts) < 7:
         return None
-    return int(parts[5])
+    try:
+        return int(parts[5])
+    except ValueError:   # a GUID cut short or garbled
+        return None
 
 
 def forces(challenge: int | None, npc: int | None) -> int:

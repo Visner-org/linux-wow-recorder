@@ -160,10 +160,18 @@ class SettingsWindow(QDialog):
             self.data = config.load_raw(CONFIG_FILE.with_name("missing.toml"))
         self.first_run = not CONFIG_FILE.exists()
         self.wizard = self.first_run
+        # What's in the file now, and what the running service read from it: saving restarts
+        # the service only if that changed. They differ after the 5-second test, which saves.
+        # As the file has it, bad values included, so saving writes the good ones over them.
+        self.saved_data = copy.deepcopy(self.data) if not self.first_run else None
+        # A file edited by hand can have text where a number goes: the defaults stand in.
+        self.data, unreadable = config.readable(self.data)
+        if unreadable:
+            QMessageBox.warning(self, APP_TITLE, "Some settings in the config file couldn't be "
+                                "read; their defaults are shown.")
         if self.first_run and (found := find_recorder_command()):
             self.data["recorder"]["command"] = found
-        # What's in the file now: saving restarts the service only if this changed.
-        self.saved_data = copy.deepcopy(self.data) if not self.first_run else None
+        self.service_data = copy.deepcopy(self.saved_data)
         self.service_now = service.state()   # runs systemctl: once here, again after saving
         self.test_process = None
         self.capture_lister: QProcess | None = None
@@ -1064,9 +1072,9 @@ class SettingsWindow(QDialog):
 
     def service_changed(self, data: dict | None = None) -> bool:
         """changed(), leaving out the settings only the desktop app reads."""
-        if self.saved_data is None:
+        if self.service_data is None:
             return True
-        a, b = copy.deepcopy(data or self.collect()), copy.deepcopy(self.saved_data)
+        a, b = copy.deepcopy(data or self.collect()), copy.deepcopy(self.service_data)
         for section, key in APP_ONLY:
             a[section].pop(key, None)
             b[section].pop(key, None)
@@ -1127,6 +1135,8 @@ class SettingsWindow(QDialog):
                 self.saved_data is None or self.saved_data["recorder"]["capture"] != "portal"):
             recorder.forget_pick()   # an old pick would be reused without asking
         self.saved_data = copy.deepcopy(self.data)
+        if restart:
+            self.service_data = copy.deepcopy(self.data)
         try:
             # (Re)writes the unit, starts it at login or not, and restarts it with the new config.
             service.install(at_login=self.service_at_login.isChecked(), restart=restart)

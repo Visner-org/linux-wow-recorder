@@ -1850,10 +1850,17 @@ class ClipBrowser(QWidget):
 
     def save_drawing(self, clip: model.ClipInfo) -> Path | None:
         """Saves the drawing, if anything was drawn, beside the clip ("<clip> 12m34s.png"), or in
-        the clips folder if the clip's folder is read-only, and says so."""
+        the clips folder if the clip is in another folder (the app writes only in its own) or
+        its folder is read-only, and says so."""
         if not self.draw_page.canvas.marks:
             return None
-        folders = [clip.path.parent, *([self.cfg.clips_dir] if self.cfg else [])]
+        folders = [*([] if clip.elsewhere else [clip.path.parent]),
+                   *([self.cfg.clips_dir] if self.cfg else [])]
+        if self.cfg:   # an other folder's clip may be the first thing saved here
+            try:
+                self.cfg.clips_dir.mkdir(parents=True, exist_ok=True)
+            except OSError:
+                pass
         folder = next((f for f in folders if os.access(f, os.W_OK)), None)
         m, s = divmod(int(self.draw_at), 60)
         name = f"{clip.path.stem} {m}m{s:02d}s"
@@ -1924,7 +1931,7 @@ class ClipBrowser(QWidget):
         if dialog.exec() != HideChatDialog.Accepted:
             return
         self.settings.setValue("hide_chat_box", hidechat.box_text(dialog.box))
-        out = hidechat.output_path(clip.path, self.cfg.clips_dir)
+        out = hidechat.output_path(clip.path, self.cfg.clips_dir, clip.elsewhere)
         part = out.with_name(out.name + ".part")
         try:
             out.parent.mkdir(parents=True, exist_ok=True)
