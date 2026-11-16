@@ -102,7 +102,7 @@ def test_process_cuts_only_with_wow_closed(run, cfg, monkeypatch):
 
 
 def test_add_casts_says_what_it_did(run, cfg, monkeypatch):
-    assert run("add-casts") == (0, "Added your casts to 0 clip(s).\n")
+    assert run("add-casts") == (0, "Updated 0 clip(s).\n")
     monkeypatch.setattr(cli, "add_casts", lambda cfg: (2, 1))
     code, out = run("add-casts")
     assert code == 0 and "2 clip(s)" in out and "1 clip(s) have no combat log" in out

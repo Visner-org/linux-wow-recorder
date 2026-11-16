@@ -18,7 +18,9 @@ DETAILS = {
     "lusts": [{"name": "Bloodlust", "caster": "S", "at": 101.0}],
     "player": "Me-Realm-US", "casters": ["Me-Realm-US"],
     "casts": [[100.0, 1, 0], [130.0, 2, 0, 1.5], [500.0, 1, 0]],
-    "spells": {"1": "Judgment", "2": "Flash of Light"},
+    "spells": {"1": "Judgment", "2": "Flash of Light", "3": "Web Bolt", "4": "Slam"},
+    "enemies": ["Avanoxx", "Spider"],
+    "enemy_casts": [[110.0, 3, 1, 1.0, "kicked", "Me-Realm-US"], [700.0, 4, 0]],
 }
 
 
@@ -34,7 +36,12 @@ def test_a_highlight_keeps_only_what_happens_inside_it():
     assert "run_offset" not in d and "thumbnail" not in d and d["keep"] is False
     assert d["highlight"] == {"of": "a.mp4", "start": 120.0, "end": 460.0, "length": "5m40s"}
     assert d["label"] == "+10 Completed" and d["run_length"] == "24m00s"   # still the run's
-    assert d["casts"] == [[10.0, 2, 0, 1.5]] and d["spells"] == {"2": "Flash of Light"}
+    assert d["casts"] == [[10.0, 2, 0, 1.5]]
+    assert d["enemy_casts"] == []   # the kicked cast began before the highlight
+    assert d["spells"] == {"2": "Flash of Light"} and d["enemies"] == ["Avanoxx", "Spider"]
+    d = highlight.details(DETAILS, Path("a.mp4"), 100.0, 460.0)
+    assert d["enemy_casts"] == [[10.0, 3, 1, 1.0, "kicked", "Me-Realm-US"]]
+    assert d["spells"] == {"1": "Judgment", "2": "Flash of Light", "3": "Web Bolt"}
     assert d["casters"] == ["Me-Realm-US"]
 
 
@@ -60,3 +67,12 @@ def test_the_command_copies_the_stretch(tmp_path):
                     "-t", "10", "-g", "10", "-pix_fmt", "yuv420p", "-f", "mp4", str(clip)], check=True)
     subprocess.run(highlight.command(clip, 3.0, 7.0, part), check=True)
     assert 3.5 <= media_length(part) <= 5.5   # from the keyframe at or before 3 s
+
+
+def test_a_highlight_keeps_its_dispels_and_a_deaths_hits():
+    base = {**DETAILS, "dispels": [[125.0, "H", 2, "A"], [600.0, "H", 4, "B"]],
+            "deaths": [{"name": "A", "at": 150.0, "hits": [{"at": -0.5, "spell": "Slam", "amount": 9}]}]}
+    d = highlight.details(base, Path("a.mp4"), 120.0, 460.0)
+    assert d["dispels"] == [[5.0, "H", 2, "A"]] and "2" in d["spells"]
+    assert d["deaths"] == [{"name": "A", "at": 30.0, "hits": [{"at": -0.5, "spell": "Slam", "amount": 9}]}]
+    assert "dispels" not in highlight.details(DETAILS, Path("a.mp4"), 120.0, 460.0)   # add-casts can

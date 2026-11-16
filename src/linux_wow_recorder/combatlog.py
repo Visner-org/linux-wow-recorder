@@ -1,5 +1,6 @@
 """Dungeon runs and raid boss pulls from WoW's combat log."""
 
+import bisect
 import csv
 import datetime
 import logging
@@ -86,9 +87,23 @@ class Encounter:
 
 
 @dataclass
+class Hit:
+    """Damage a player took (read_hits)."""
+    time: float
+    target: str                  # who was hit, as logged: "Name-Realm-Region"
+    source: str                  # who did it: a mob's name; "" for falling, lava and the like
+    spell: str                   # the spell's name; "Melee"; "Falling", "Lava", ...
+    amount: int
+    overkill: int = 0            # above 0: the hit that killed
+    mine: bool = False           # the target is the player who logged
+    killing: bool = False        # the one a death is put down to (Death.hits)
+
+
+@dataclass
 class Death:
     name: str                    # as logged: "Name-Realm-Region"
     time: float
+    hits: list[Hit] = field(default_factory=list)   # the last hits before it (add_death_hits)
 
 
 @dataclass
@@ -216,16 +231,55 @@ def last_event_time(logs: list[Path]) -> float | None:
     return None
 
 
+# The newest COMBAT_LOG_VERSION the app was checked against (retail 12.1 and WoW Forever).
+LOG_VERSION = 22
+
+
+def log_header(path: Path) -> tuple[int | None, bool | None]:
+    """(the log's version, whether Advanced Combat Logging was on), from its first line:
+    "COMBAT_LOG_VERSION,22,ADVANCED_LOG_ENABLED,1,BUILD_VERSION,12.1.5,PROJECT_ID,1". None for
+    what it doesn't say."""
+    try:
+        with open(path, "rb") as f:
+            line = f.readline(400).decode(errors="replace")
+    except OSError:
+        return None, None
+    parts = line.partition("  ")[2].strip().split(",")
+    if not parts or parts[0] != "COMBAT_LOG_VERSION":
+        return None, None
+    pairs = dict(zip(parts[::2], parts[1::2], strict=False))
+    version = pairs.get("COMBAT_LOG_VERSION", "")
+    advanced = pairs.get("ADVANCED_LOG_ENABLED")
+    return (int(version) if version.isdigit() else None,
+            None if advanced not in ("0", "1") else advanced == "1")
+
+
+def log_notes(logs: list[Path]) -> dict:
+    """What a clip's details say about its combat logs when something's off: "log_basic" when
+    Advanced Combat Logging was off, "log_version" when the log's version is newer than the app
+    knows (a new WoW patch: fields may have moved)."""
+    notes: dict = {}
+    for f in logs:
+        version, advanced = log_header(f)
+        if advanced is False:
+            notes["log_basic"] = True
+        if version is not None and version > LOG_VERSION:
+            notes["log_version"] = version
+    return notes
+
+
 def read_log_events(logs: list[Path]) -> Iterator[tuple[float, str, list[str]]]:
     """Yields (time, event, fields) for the events find_runs needs. grep does the filtering:
     the logs reach 1 GB, and grep reads one in about half a second."""
     return _grep_events(logs, _GREP)
 
 
-def _grep_events(logs: list[Path], pattern: str, wanted: Callable[[str], bool] | None = None
+def _grep_events(logs: list[Path], pattern: str, wanted: Callable[[str], bool] | None = None,
+                 when: Callable[[float], bool] | None = None
                  ) -> Iterator[tuple[float, str, list[str]]]:
     """(time, event, fields) of the lines grep -E finds with pattern (and wanted lets through,
-    given the line after its time: the CSV parsing is the slow part)."""
+    given the line after its time, and when, given its time: the CSV parsing is the slow
+    part)."""
     for f in logs:
         result = subprocess.run(["grep", "-aE", "-e", pattern, str(f)],
                                 capture_output=True, timeout=300)
@@ -236,7 +290,7 @@ def _grep_events(logs: list[Path], pattern: str, wanted: Callable[[str], bool] |
             if wanted and not wanted(payload):
                 continue
             t = parse_log_time(stamp)
-            if t is None:
+            if t is None or (when and not when(t)):
                 continue
             fields = next(csv.reader([payload]), None)
             if fields:
@@ -611,6 +665,22 @@ _CAST_GREP = r'  SPELL_CAST_(START|SUCCESS),Player-[^,]*,"[^"]*",0x[0-9a-fA-F]*[
 # A START this long or less before a SUCCESS of the same spell is that cast's start (a hard cast).
 MAX_CAST_SECONDS = 10
 
+# Enemies: Creature- or Vehicle- units whose flags say hostile (0x40) and controlled by the game
+# (0x200): 0xa48, 0x10a48 (someone's target), 0x2248 (a mob's summon). Hostile alone isn't enough:
+# an outsider player's pet is hostile too (0x2148). grep keeps hostile NPCs (the flags' last-but-one
+# digit 4, the one before it with 0x2); Python checks the bits. Kicks are every SPELL_INTERRUPT:
+# players' and pets' (a Felhunter's Spell Lock).
+_HOSTILE_NPC = 0x240
+_ENEMY_GREP = (r'  SPELL_CAST_(START|SUCCESS),(Creature|Vehicle)-[^,]*,"[^"]*",'
+               r'0x[0-9a-fA-F]*[2367abefABEF]4[0-9a-fA-F],|  SPELL_INTERRUPT,')
+# An enemy's START this long or less before its SUCCESS or a kick is that cast's start; a START
+# with neither by then, or followed by another START from the same mob, was stopped (a stun, the
+# mob died or lost sight of its target: the log doesn't say which).
+MAX_ENEMY_CAST_SECONDS = 30
+KICKED, STOPPED = "kicked", "stopped"
+# Dispels, purges and Spellsteals by the group (pets too: their flags say whose they are).
+_DISPEL_GREP = r'  SPELL_(DISPEL|STOLEN),[^,]*,"[^"]*",0x[0-9a-fA-F]*[1-7],'
+
 
 @dataclass
 class Cast:
@@ -620,28 +690,208 @@ class Cast:
     player: str                  # who cast it: "Name-Realm-Region"
     cast: float | None = None    # a hard cast's cast time, s; None for an instant or a channel
     mine: bool = False           # cast by the player who logged (the one recording)
+    result: str = ""             # "" (it went off), or STOPPED: begun at time and never finished
 
 
-def read_casts(logs: list[Path]) -> list[Cast]:
-    """The spells the player who logged and their group cast (each SPELL_CAST_SUCCESS), in time
-    order. Cast times come from the START before it; an interrupted cast has no SUCCESS and
-    isn't listed."""
-    started: dict[tuple[str, int], float] = {}
-    casts = []
-    for t, event, f in _grep_events(logs, _CAST_GREP):
+@dataclass
+class Dispel:
+    time: float
+    player: str                  # who dispelled: a player ("Name-Realm-Region") or a pet's name
+    spell: int                   # what was taken off: its spell ID
+    name: str                    # and name
+    target: str                  # whom it was on
+
+
+@dataclass
+class EnemyCast:
+    time: float                  # when it began: its START, or an instant's SUCCESS
+    spell: int                   # spell ID
+    name: str                    # the spell's
+    mob: str                     # the mob's name
+    cast: float | None = None    # s from its START to its SUCCESS or the kick; None if not known
+    result: str = ""             # "" (it went off), KICKED or STOPPED
+    kicker: str = ""             # who kicked it: a player ("Name-Realm-Region") or a pet's name
+
+
+def _is_enemy(guid: str, flags: str) -> bool:
+    try:
+        return guid.startswith(("Creature-", "Vehicle-")) and \
+            int(flags, 16) & _HOSTILE_NPC == _HOSTILE_NPC
+    except ValueError:
+        return False
+
+
+def read_casts(logs: list[Path]) -> list[Cast | EnemyCast | Dispel]:
+    """The spells the player who logged and their group cast (each SPELL_CAST_SUCCESS: a Cast),
+    the enemies' casts (EnemyCast) and the group's dispels (Dispel), in time order. A group
+    member's cast time comes from the START before it; a START with no SUCCESS before their next
+    START (or within MAX_CAST_SECONDS) is a cast they stopped, listed from when it began. An
+    enemy's cast is listed from its START, whether it went off, was kicked or was stopped."""
+    started: dict[str, Cast] = {}        # each player's hard cast under way, by their GUID
+    finished: set[int] = set()           # the spells seen going off after their START
+    pending: dict[str, EnemyCast] = {}   # each mob's cast under way, by its GUID
+    channels: dict[str, EnemyCast] = {}  # each mob's last cast without a START: maybe a channel
+    casts: list[Cast | EnemyCast | Dispel] = []
+
+    def end_pending(guid: str):
+        """Lists a mob's cast under way, if any, as stopped."""
+        c = pending.pop(guid, None)
+        if c:
+            c.result = STOPPED
+            casts.append(c)
+
+    def end_started(guid: str):
+        """Lists a player's cast under way, if any, as stopped."""
+        c = started.pop(guid, None)
+        if c:
+            c.result = STOPPED
+            casts.append(c)
+
+    for t, event, f in _grep_events(logs, f"{_CAST_GREP}|{_ENEMY_GREP}|{_DISPEL_GREP}"):
         try:   # a line cut short (the log's last, still being written) is skipped
-            key = (f[0], int(f[8]))
-            name, mine = f[9], int(f[2], 16) & 1 == 1
+            guid, spell, name = f[0], int(f[8]), f[9]
+            if event in ("SPELL_INTERRUPT", "SPELL_DISPEL", "SPELL_STOLEN"):
+                kicked, kicked_name = int(f[11]), f[12]
         except (IndexError, ValueError):
             continue
-        if event == "SPELL_CAST_START":
-            started[key] = t
+        if event in ("SPELL_DISPEL", "SPELL_STOLEN"):
+            casts.append(Dispel(t, f[1], kicked, kicked_name, f[5]))
             continue
-        began = started.pop(key, None)
-        cast = round(t - began, 1) if began is not None and 0 < t - began <= MAX_CAST_SECONDS \
-            else None
-        casts.append(Cast(t, key[1], name, f[1], cast or None, mine))
+        if event == "SPELL_INTERRUPT":
+            if not _is_enemy(f[4], f[6]):
+                continue
+            c = pending.get(f[4])
+            channel = channels.pop(f[4], None)
+            if c and c.spell == kicked and t - c.time <= MAX_ENEMY_CAST_SECONDS:
+                del pending[f[4]]
+                c.cast = round(t - c.time, 1)
+            elif channel and channel.spell == kicked and t - channel.time <= MAX_ENEMY_CAST_SECONDS:
+                # A channel: its SUCCESS came as it began, and it's already listed
+                channel.cast, channel.result, channel.kicker = round(t - channel.time, 1), KICKED, f[1]
+                continue
+            else:   # its START was before the log, or not seen
+                end_pending(f[4])
+                c = EnemyCast(t, kicked, kicked_name, f[5])
+            c.result, c.kicker = KICKED, f[1]
+            casts.append(c)
+            continue
+        if guid.startswith("Player-"):
+            try:
+                mine = int(f[2], 16) & 1 == 1
+            except ValueError:
+                continue
+            begun = started.get(guid)
+            if begun and t - begun.time > MAX_CAST_SECONDS:
+                end_started(guid)
+                begun = None
+            if event == "SPELL_CAST_START":
+                end_started(guid)   # a new cast: the one before it never went off
+                started[guid] = Cast(t, spell, name, f[1], mine=mine)
+                continue
+            cast = None
+            if begun and begun.spell == spell:   # else an instant: a cast under way goes on
+                del started[guid]
+                finished.add(spell)
+                cast = round(t - begun.time, 1) or None
+            casts.append(Cast(t, spell, name, f[1], cast, mine))
+            continue
+        if not _is_enemy(guid, f[2]):
+            continue
+        c = pending.get(guid)
+        if c and t - c.time > MAX_ENEMY_CAST_SECONDS:
+            end_pending(guid)
+            c = None
+        if event == "SPELL_CAST_START":
+            end_pending(guid)
+            channels.pop(guid, None)   # a channel ends when the mob casts something else
+            pending[guid] = EnemyCast(t, spell, name, f[1])
+        elif c and c.spell == spell:
+            del pending[guid]
+            c.cast = round(t - c.time, 1)
+            casts.append(c)
+        else:   # an instant, or a channel (they have no START); a cast under way goes on
+            channels[guid] = EnemyCast(t, spell, name, f[1])
+            casts.append(channels[guid])
+    for guid in list(pending):
+        end_pending(guid)
+    # A player's START that never has a SUCCESS in the whole log isn't a cast that can go off
+    # (picking something up, "Destroy"): not one they stopped. Nor one still under way at the end.
+    casts = [c for c in casts
+             if not (isinstance(c, Cast) and c.result and c.spell not in finished)]
     return sorted(casts, key=lambda c: c.time)
+
+
+# ── What killed a player ──
+
+# Damage on a player of the group (dest flags' last digit: mine, party or raid): the hits before
+# a death. In real +10s: about 4000 lines a key.
+_HIT_GREP = (r'  (SPELL|SPELL_PERIODIC|RANGE|SWING|ENVIRONMENTAL)_DAMAGE,[^,]*,("[^"]*"|nil),'
+             r'[^,]*,[^,]*,Player-[^,]*,"[^"]*",0x[0-9a-fA-F]*[1-7],')
+# A death's details keep the hits this long before it, the last few of them.
+RECAP_SECONDS = 10
+RECAP_HITS = 5
+# The killing blow is logged a few ms before the death; allow for one logged just after.
+_AFTER_DEATH = 0.5
+
+
+def _hit(t: float, event: str, f: list[str]) -> Hit | None:
+    """A damage line as a Hit. Every damage line ends with amount, base amount, overkill, school,
+    resisted, blocked, absorbed, critical, glancing, crushing, and for spells since 12.0 "ST" or
+    "AOE"; that end is the same with and without advanced logging."""
+    tail = f[:-1] if f[-1] in ("ST", "AOE") else f
+    if len(tail) < 18:   # a melee hit without advanced logging: 8 fields and those 10
+        return None
+    try:
+        amount, overkill = int(tail[-10]), int(tail[-8])
+        mine = int(f[6], 16) & 1 == 1
+    except ValueError:
+        return None
+    spell = ("Melee" if event == "SWING_DAMAGE"
+             else tail[-11] if event == "ENVIRONMENTAL_DAMAGE" else f[9])
+    return Hit(t, f[5], "" if f[1] == "nil" else f[1], spell, amount, max(0, overkill), mine)
+
+
+def read_hits(logs: list[Path], near: Iterable[float] | None = None) -> list[Hit]:
+    """The damage the group's players took, in time order; with near (times of deaths), only in
+    the RECAP_SECONDS before each of them."""
+    when = None
+    if near is not None:
+        times = sorted(near)
+        if not times:
+            return []
+
+        def when(t: float) -> bool:
+            i = bisect.bisect_left(times, t - _AFTER_DEATH)
+            return i < len(times) and times[i] - t <= RECAP_SECONDS
+    hits = []
+    for t, event, f in _grep_events(logs, _HIT_GREP, when=when):
+        hit = _hit(t, event, f)
+        if hit:
+            hits.append(hit)
+    return sorted(hits, key=lambda h: h.time)
+
+
+def hits_before(hits: list[Hit], t: float, name: str | None = None) -> list[Hit]:
+    """Copies of the last RECAP_HITS hits (read_hits') on a player in the RECAP_SECONDS before
+    their death at t, oldest first, the killing one marked: the last with overkill, or else the
+    last. name: the player's, as logged; None for the player who logged."""
+    mine = [Hit(**{**h.__dict__, "killing": False}) for h in hits
+            if t - RECAP_SECONDS <= h.time <= t + _AFTER_DEATH
+            and (h.mine if name is None else h.target == name)]
+    mine = mine[-RECAP_HITS:]
+    if mine:
+        next((h for h in reversed(mine) if h.overkill), mine[-1]).killing = True
+    return mine
+
+
+def add_death_hits(runs: list[Run], logs: list[Path]):
+    """Gives each death in the runs the hits before it (Death.hits): what killed the player."""
+    deaths = [d for r in runs for d in r.deaths]
+    if not deaths or not logs:
+        return
+    hits = read_hits(logs, [d.time for d in deaths])
+    for d in deaths:
+        d.hits = hits_before(hits, d.time, d.name)
 
 
 def _damaged_unit(event: str, f: list[str]) -> tuple[str, float, float, int] | None:
@@ -735,6 +985,7 @@ class Moment:
     what: str                    # "Death", "Level 12", "Elite: Bristleback Chief"
     zone: str = ""
     start: float | None = None   # when the fight began, for an elite kill
+    who: str = ""                # a death's player, as logged
 
 
 def _zones(events: Iterable[tuple[float, str, list[str]]]) -> list[tuple[float, str, int]]:
@@ -762,6 +1013,11 @@ def _zone_at(zones: list[tuple[float, str, int]], t: float) -> tuple[str, int | 
 def my_deaths(events: Iterable[tuple[float, str, list[str]]]) -> list[float]:
     """When the player who logged died: a UNIT_DIED of a Player- unit with mine in its flags (a
     hunter's Feign Death has unconsciousOnDeath 1)."""
+    return [t for t, _ in _my_deaths(events)]
+
+
+def _my_deaths(events: Iterable[tuple[float, str, list[str]]]) -> list[tuple[float, str]]:
+    """my_deaths, each with the player's name as logged."""
     found = []
     for t, event, f in events:
         if event != "UNIT_DIED" or len(f) < 7 or not f[4].startswith("Player-"):
@@ -771,7 +1027,7 @@ def my_deaths(events: Iterable[tuple[float, str, list[str]]]) -> list[float]:
         except ValueError:
             continue
         if mine and f[8:9] != ["1"]:
-            found.append(t)
+            found.append((t, f[5]))
     return found
 
 
@@ -822,7 +1078,7 @@ def find_moments(events: list[tuple[float, str, list[str]]], kinds: Iterable[str
     zones = _zones(events)
     found: list[Moment] = []
     if MOMENT_DEATH in kinds:
-        found += [Moment(MOMENT_DEATH, t, "Death") for t in my_deaths(events)]
+        found += [Moment(MOMENT_DEATH, t, "Death", who=who) for t, who in _my_deaths(events)]
     if MOMENT_LEVEL in kinds:
         found += [Moment(MOMENT_LEVEL, t, f"Level {lvl}") for t, lvl in levels]
     if MOMENT_ELITE in kinds:
@@ -846,5 +1102,6 @@ def find_moments(events: list[tuple[float, str, list[str]]], kinds: Iterable[str
         if len(what) > MOMENT_NAMES + 1:   # a string of kills: the name stays a file name's length
             what = what[:MOMENT_NAMES] + [f"{len(what) - MOMENT_NAMES} more"]
         moments.append(Run(" + ".join(what), min(m.start or m.time for m in g), g[-1].time, g[0].zone,
+                           deaths=[Death(m.who, m.time) for m in g if m.kind == MOMENT_DEATH],
                            result="moment", moments=g))
     return moments

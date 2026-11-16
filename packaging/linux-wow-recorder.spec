@@ -5,7 +5,7 @@
 
 Name:           linux-wow-recorder
 Version:        %{app_version}
-Release:        4%{?dist}
+Release:        1%{?dist}
 Summary:        Records World of Warcraft sessions and cuts one clip per dungeon run
 License:        GPL-3.0-or-later
 BuildArch:      noarch
@@ -62,6 +62,27 @@ if [ "$1" -eq 0 ]; then
 fi
 
 %changelog
+* Wed Nov 11 2026 Linux WoW Recorder - 1.3.5-1
+- Deaths say what killed, with the last hits before them
+- A Kicks tab: who kicked and dispelled, and the kickable casts that went off
+- Coming up: the enemies' next casts, with a countdown
+- A key's boss kills are compared with your best run of that dungeon
+- A note when Advanced Combat Logging is off or the combat log's version is new
+- Casts you stopped are marked; right-click an enemy's cast to hide that spell
+
+* Wed Nov 11 2026 Linux WoW Recorder - 1.3.4-3
+- add-casts reaches copies and highlights made from older recordings
+- Your own casts keep two rows beside the enemies' lane
+
+* Wed Nov 11 2026 Linux WoW Recorder - 1.3.4-2
+- The play button and scrub bar sit right under the video, the casts below them
+- The scrub bar stands out on dark and light themes
+
+* Wed Nov 11 2026 Linux WoW Recorder - 1.3.4-1
+- Enemies' casts in their own lane under the group's, with kicked casts marked
+- Pick which enemies show, and hide their spammed spells
+- add-casts adds enemies' casts to older clips
+
 * Tue Nov 10 2026 Linux WoW Recorder - 1.3.3-4
 - setup asks again for a webhook link that doesn't start with https://
 - test-recorder says so when no output folder is set

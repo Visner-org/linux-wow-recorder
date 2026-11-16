@@ -148,7 +148,36 @@ next time.
   player who logged, 0x512 a party member, 0x514 raid; outsiders, 0x548 and the like, are
   left out); pets aren't `Player-`. A `SPELL_CAST_START` of the same spell up to 10 s before
   gives a hard cast's cast time. About 5000 casts in a 20-minute key, ~90 KB in the clip's
-  `.json` (the casts list is written on one line; `write_sidecar`).
+  `.json` (the casts list is written on one line; `write_sidecar`). A player casts one thing
+  at a time: a START with no SUCCESS of that spell before their next START, or within 10 s, is
+  a cast they stopped (in a real +10 log, 439 of 5200 hard casts: moving, mostly). A spell
+  that never goes off after a START in the whole log isn't a cast ("Destroy", picking things
+  up) and isn't listed.
+- **Dispels** (the same grep): `SPELL_DISPEL` and `SPELL_STOLEN` whose source has mine, party
+  or raid in its flags (pets too).
+- **Enemies' casts** (the same grep): `SPELL_CAST_START`/`SUCCESS` of `Creature-` and `Vehicle-`
+  units whose flags have hostile (0x40) and NPC-controlled (0x200): 0xa48, 0x10a48 (someone's
+  target), 0x2248 (a mob's summon). Hostile alone isn't enough: an outsider player's pet is
+  0x2148. A mob casts one thing at a time, so its START waits, by GUID, for a SUCCESS of the same
+  spell, a `SPELL_INTERRUPT` on it (kicked, by whom), or another START (stopped); after 30 s it's
+  stopped. A SUCCESS without a START is an instant or a channel; a kick of that spell soon after
+  is a channel cut short (Mending Void). Listed from when they began.
+  In real +10s (11-05): 450 to 1800 casts a key, 30 to 73 kicks, ~15 KB in the `.json`; a few
+  mobs cast hundreds of instants (Ravenous Descendant: 700 each of two spells).
+
+- **What killed a player** (`read_hits`, a grep of its own): the damage lines whose dest is a
+  `Player-` of the group, about 4000 a key. Every damage line ends with amount, base amount,
+  overkill, school, resisted, blocked, absorbed, critical, glancing, crushing (and "ST" or "AOE"
+  for spells since 12.0), with and without advanced logging, so they're read from the end;
+  `ENVIRONMENTAL_DAMAGE` has its kind ("Falling") before the amount and no source. A death
+  keeps the last 5 hits of the 10 s before it; the killing one is the last with overkill (it's
+  logged a few ms before `UNIT_DIED`), or else the last. With deaths given, only the lines
+  around them are parsed (a raid night has a million such lines).
+- **The log's first line** (`log_header`): `COMBAT_LOG_VERSION,22,ADVANCED_LOG_ENABLED,1,...`.
+  A version above `LOG_VERSION` (the newest one checked against real logs) or advanced logging
+  off goes into the clip's details (`log_notes`) and the clips window's checklist, as
+  something to look at, not an error. When a patch raises the version: check a real log's
+  fields against the readers here, then raise `LOG_VERSION`.
 
 grep does the filtering, because logs reach 1 GB. The lust part of the pattern matches only the
 listed spell IDs, so the busy `SPELL_AURA_APPLIED` lines cost nothing: about 0.6 s for 540 MB.
@@ -158,8 +187,9 @@ clients, older logs). Without an offset, it's local time.
 
 ### Real combat logs in the tests
 
-`tests/fixtures/logs/` holds three real retail sessions (September and October 2026, 25 keys),
-cut down to the lines the app reads and with every player's and pet's name and GUID replaced.
+`tests/fixtures/logs/` holds three real retail sessions (September and October 2026, 25 keys)
+and one key with the enemies' casts and kicks (November 2026, `--enemies --key 3`), cut down to
+the lines the app reads and with every player's and pet's name and GUID replaced.
 `tests/fixtures/sanitize.py` makes them from a log and fails if an original name or GUID is
 left; read the result before committing it anyway. What they showed:
 
@@ -177,7 +207,8 @@ left; read the result before committing it anyway. What they showed:
 per moment clip, cut `moment_seconds` either side:
 
 - **Deaths**: `UNIT_DIED` of a `Player-` unit whose dest flags have mine (0x1), not
-  unconscious. Other players nearby are 0x518 and the like (seen in WoW Forever's logs).
+  unconscious. Other players nearby are 0x518 and the like (seen in WoW Forever's logs). The
+  moment's run keeps them as its deaths, so its clip says what killed.
 - **Level-ups**: not in the combat log (advanced logging's last field is item level for
   players, the level for NPCs), so the addon saves `time():level` strings on
   `PLAYER_LEVEL_UP`.
@@ -299,7 +330,7 @@ launcher, which names the game in its arguments, are skipped. Add a new client's
 |---|---|
 | `detect.py` | finds a running WoW client in /proc |
 | `recorder.py` | starts and stops gpu-screen-recorder |
-| `combatlog.py` | finds dungeon runs, bosses, deaths and lusts in the combat log (`_RunFinder`: one method per event), the group's casts (`read_casts`), and moments (`find_moments`) |
+| `combatlog.py` | finds dungeon runs, bosses, deaths and lusts in the combat log (`_RunFinder`: one method per event), the group's and the enemies' casts and dispels (`read_casts`), the hits before a death (`read_hits`), and moments (`find_moments`) |
 | `addon.py` | installs the WoW addon, reads its saved level-ups and elites |
 | `cooldowns.py` | the major cooldowns, by spell ID and kind (damage, healing, defensive) |
 | `clips.py` | cuts recordings into clips with ffmpeg, writes the `.json` details, retention cleanup |
@@ -393,7 +424,10 @@ launcher, which names the game in its arguments, are skipped. Add a new client's
 - **Clip browser**: cards (painted by `ClipCard`) or the table, remembered in `gui.ini` in the
   config folder. Missing pictures (clips cut before they existed) are made one at a time with
   `QProcess`. The timeline and the event list are worked out in `model.py` (`boss_spans`,
-  `lust_spans`, `event_rows`), so they're tested without a display.
+  `lust_spans`, `event_rows`), so they're tested without a display; so are the Kicks tab
+  (`kick_rows`), the run a key is compared with (`best_run`: the fastest completed clip of the
+  dungeon at its level or higher), the enemies' casts made together (`group_enemy_casts`) and
+  the Coming up list (`upcoming`, drawn by `ComingUp` from what the cast strip shows).
   Full sessions (`model.load_sessions`) are `ClipInfo`s too, so the cards, table, player and
   timeline serve both; a recording without a `.json` (cut by 0.5.0 or earlier) gets its runs
   from its clips' details, moved by `shift_run`.

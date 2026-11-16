@@ -7,9 +7,8 @@ boss pull, using WoW's combat log. Each clip comes with its boss pulls, deaths a
 
 ![The clip browser: Mythic+ clips with their results, and a run's timeline of boss pulls, deaths and lusts](docs/screenshot.png)
 
-**New in 1.3:** Moments (short clips of your deaths, level-ups and elite kills), rules for
-which Mythic+ keys get a clip, and a key's clip a minute or two after it ends. Older changes:
-[Releases](../../releases).
+**New in 1.3.5:** the enemies' casts and who kicked them, what killed you, a Kicks tab, the
+enemies' next casts, and your best run of each dungeon. Older changes: [Releases](../../releases).
 
 **Docs:** [user guide](docs/user-guide.md) · [reference](docs/reference.md) ·
 [development](docs/development.md)
@@ -23,9 +22,9 @@ which Mythic+ keys get a clip, and a key's clip a minute or two after it ends. O
   Full recordings are deleted after 3 days.
 - **Only WoW's sound** by default, so Discord and music stay out.
 - **Only WoW's window** if you like, so notifications stay out.
-- **Clip browser** with a timeline of pulls, deaths, lusts and casts; highlights, drawing on a
-  frame, **Hide chat** (a copy with your chat blacked out) and a YouTube description with
-  chapters.
+- **Clip browser** with a timeline of pulls, deaths, lusts and casts, the enemies' casts too,
+  and what killed whom; highlights, drawing on a frame, **Hide chat** (a copy with your chat
+  blacked out) and a YouTube description with chapters.
 - **Discord or Fluxer messages** (optional) when clips are ready or something goes wrong.
 - Retail, Classic, PTR and beta. Runs as you, never as root.
 
@@ -59,7 +58,7 @@ recorded on a real PC yet. If you try one, please say how it went in an issue.
 **Nobara, Fedora 44:** download the `.rpm` from [Releases](../../releases), then
 
 ```bash
-sudo dnf install ./linux-wow-recorder-1.3.3-4.fc44.noarch.rpm
+sudo dnf install ./linux-wow-recorder-1.3.5-1.fc44.noarch.rpm
 ```
 
 On plain Fedora, also install the gpu-screen-recorder Flatpak (below).
@@ -67,7 +66,7 @@ On plain Fedora, also install the gpu-screen-recorder Flatpak (below).
 **Ubuntu 25.10+, Debian 13:** download the `.deb` from [Releases](../../releases), then
 
 ```bash
-sudo apt install ./linux-wow-recorder_1.3.3-4_all.deb
+sudo apt install ./linux-wow-recorder_1.3.5-1_all.deb
 flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
 flatpak install --user flathub com.dec05eba.gpu_screen_recorder
 ```

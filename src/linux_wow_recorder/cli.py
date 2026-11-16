@@ -252,14 +252,15 @@ def cmd_process(args) -> int:
 
 
 def cmd_add_casts(args) -> int:
-    """Adds your spell casts to the clips cut before the app read them."""
+    """Adds to the clips cut by older versions what the app reads now: casts, kicks, dispels
+    and what killed each player."""
     cfg = _load()
     done = add_casts(cfg)
     if done is None:
         print("Clips are being cut; try again once that's done.")
         return 1
     added, missing = done
-    print(f"Added your casts to {added} clip(s).")
+    print(f"Updated {added} clip(s).")
     if missing:
         print(f"{missing} clip(s) have no combat log left to read them from.")
     return 0
@@ -444,7 +445,7 @@ def main():
         ("run", cmd_run, "watch for WoW and record (what the service runs)"),
         ("status", cmd_status, "show the config and check it"),
         ("process", cmd_process, "cut the recordings waiting in sessions/ now"),
-        ("add-casts", cmd_add_casts, "add your spell casts to clips cut by older versions"),
+        ("add-casts", cmd_add_casts, "add casts, kicks and what killed whom to clips cut by older versions"),
         ("test-recorder", cmd_test_recorder, "record 5 seconds to check the recorder"),
         ("pause", cmd_pause, "stop recording for the rest of this WoW session"),
         ("resume", cmd_pause, "record again after pause"),

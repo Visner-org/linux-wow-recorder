@@ -8,7 +8,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .. import cooldowns, keytimers, state
+from .. import combatlog, cooldowns, keytimers, state
 
 # Icon names; tray.py draws one for each.
 IDLE, RECORDING, PROCESSING, ATTENTION, OFF = "idle", "recording", "processing", "attention", "off"
@@ -162,6 +162,13 @@ def newest_combat_log(folder: Path, max_depth: int = HINT_MAX_DEPTH,
                       max_folders: int = HINT_MAX_FOLDERS) -> tuple[tuple[float, str] | None, bool]:
     """((mtime, name) of the newest combat log under folder, or None), and whether the search
     stopped early because the folder has too many subfolders."""
+    newest, stopped = _newest_log(folder, max_depth, max_folders)
+    return (newest[:2] if newest else None), stopped
+
+
+def _newest_log(folder: Path, max_depth: int = HINT_MAX_DEPTH, max_folders: int = HINT_MAX_FOLDERS
+                ) -> tuple[tuple[float, str, str] | None, bool]:
+    """newest_combat_log, with the log's path after its name."""
     newest, seen, todo = None, 0, [(folder, 0)]
     while todo:
         if seen >= max_folders:
@@ -180,7 +187,7 @@ def newest_combat_log(folder: Path, max_depth: int = HINT_MAX_DEPTH,
                 elif e.name.startswith("WoWCombatLog-") and e.name.endswith(".txt"):
                     mtime = e.stat().st_mtime
                     if newest is None or mtime > newest[0]:
-                        newest = (mtime, e.name)
+                        newest = (mtime, e.name, e.path)
             except OSError:
                 continue
     return newest, False
@@ -476,7 +483,8 @@ def markers(details: dict) -> list[Marker]:
         else:
             found.append(Marker(e["start"], "pull", f"{e['name']} pulled"))
     for d in details.get("deaths", []):
-        found.append(Marker(d["at"], "death", f"{short_name(d['name'])} died"))
+        by = killed_by(d)
+        found.append(Marker(d["at"], "death", f"{short_name(d['name'])} died" + (f": {by}" if by else "")))
     for l in details.get("lusts", []):
         who = f" ({short_name(l['caster'])})" if l.get("caster") else ""
         found.append(Marker(l["at"], "lust", f"{l['name']}{who}"))
@@ -488,6 +496,7 @@ def markers(details: dict) -> list[Marker]:
 # ── The clip's timeline and event list ──
 
 LEAD_IN = 3        # seconds of lead-up when jumping to an event
+DEATH_LEAD_IN = 6  # and to a death: what led to it
 LUST_SECONDS = 40  # how long a lust's haste lasts: drawn as a bracket that long
 
 
@@ -527,6 +536,7 @@ class CastMark:
     name: str
     who: str = ""                 # the caster: "Name-Realm-Region"
     cast: float | None = None     # a hard cast's cast time, s
+    result: str = ""              # "" (it went off), or "stopped": begun at `at`, never finished
 
 
 def casters(details: dict) -> list[str]:
@@ -543,9 +553,10 @@ def casts(details: dict) -> list[CastMark]:
         try:
             at, spell, who = float(c[0]), int(c[1]), names[int(c[2])]
             cast = float(c[3]) if len(c) > 3 and c[3] else None
+            result = str(c[4]) if len(c) > 4 else ""
         except (TypeError, ValueError, IndexError):
             continue
-        found.append(CastMark(at, spell, spells.get(str(spell), f"Spell {spell}"), who, cast))
+        found.append(CastMark(at, spell, spells.get(str(spell), f"Spell {spell}"), who, cast, result))
     return sorted(found, key=lambda c: c.at)
 
 
@@ -573,15 +584,168 @@ KIND_HUES = {cooldowns.OFFENSIVE: 0, cooldowns.HEALING: 120, cooldowns.DEFENSIVE
 def cast_text(cast: CastMark) -> str:
     """For a tooltip: "1:23  Mage: Combustion (damage cooldown)", "... (cast 3.5 s)"."""
     notes = [f"cast {cast.cast:.1f} s"] if cast.cast else []
+    if cast.result:
+        notes.append("didn't finish")
     if cooldowns.kind(cast.spell):
         notes.append(f"{cooldowns.kind(cast.spell)} cooldown")
     return f"{mmss(cast.at)}  {short_name(cast.who)}: {cast.name}" + (
         f" ({', '.join(notes)})" if notes else "")
 
 
-def seek_target(at: float) -> float:
-    """Where jumping to an event starts playing: a few seconds before it."""
-    return max(0.0, at - LEAD_IN)
+@dataclass
+class EnemyMark:
+    at: float                     # seconds into the clip: when the mob began casting it
+    spell: int
+    name: str
+    who: str                      # the mob's name
+    cast: float | None = None     # s until it went off or was kicked; None: an instant, or not known
+    result: str = ""              # "" (it went off), "kicked" or "stopped"
+    kicker: str = ""              # who kicked it
+    count: int = 1                # how many mobs of that name cast it together (group_enemy_casts)
+
+    @property
+    def end(self) -> float:
+        return self.at + (self.cast or 0)
+
+    @property
+    def label(self) -> str:
+        """What its box says: "Earth Bolt", "✕ Earth Bolt" for one that didn't go off, "Earth
+        Bolt ×3"."""
+        return (f"✕ {self.name}" if self.result else self.name) + (
+            f" ×{self.count}" if self.count > 1 else "")
+
+
+def enemies(details: dict) -> list[str]:
+    """The mobs that cast in a clip, the busiest first."""
+    return [str(name) for name in details.get("enemies") or []]
+
+
+def enemy_casts(details: dict) -> list[EnemyMark]:
+    """The enemies' casts in a clip, in time order ([] for clips without them)."""
+    spells = details.get("spells") or {}
+    names = enemies(details)
+    found = []
+    for c in details.get("enemy_casts") or []:
+        try:
+            at, spell, who = float(c[0]), int(c[1]), names[int(c[2])]
+            cast = float(c[3]) if len(c) > 3 and c[3] else None
+            result = str(c[4]) if len(c) > 4 else ""
+            kicker = str(c[5]) if len(c) > 5 else ""
+        except (TypeError, ValueError, IndexError):
+            continue
+        found.append(EnemyMark(at, spell, spells.get(str(spell), f"Spell {spell}"), who, cast,
+                               result, kicker))
+    return sorted(found, key=lambda c: c.at)
+
+
+# A mob's spell is spam when it's cast more than this many times in one minute (by every mob of
+# that name) and never kicked. In real +10s: Ravenous Descendant's two spells 345, Unleashed
+# Imps' Felfire Burst 141, a Beasttamer's Shoot 51; Earth Bolt, kicked all the time, 38.
+SPAM_PER_MINUTE = 40
+
+
+def enemy_spam(casts: list[EnemyMark]) -> set[tuple[str, int]]:
+    """The (mob, spell ID) pairs that are spam (SPAM_PER_MINUTE)."""
+    times: dict[tuple[str, int], list[float]] = {}
+    kicked = set()
+    for c in casts:
+        times.setdefault((c.who, c.spell), []).append(c.at)
+        if c.result == "kicked":
+            kicked.add((c.who, c.spell))
+    spam = set()
+    for key, ts in times.items():
+        if key in kicked or len(ts) <= SPAM_PER_MINUTE:
+            continue
+        ts.sort()
+        if any(ts[i + SPAM_PER_MINUTE] - ts[i] < 60 for i in range(len(ts) - SPAM_PER_MINUTE)):
+            spam.add(key)
+    return spam
+
+
+# Mobs of one name that begin the same spell within this long of the first are one box ("×3").
+GROUP_SECONDS = 1.0
+
+
+def group_enemy_casts(casts: list[EnemyMark]) -> list[EnemyMark]:
+    """The enemies' casts with those cast together made one: mobs of the same name beginning the
+    same spell within GROUP_SECONDS, all of which went off. The one kept is the first, with their
+    count and the longest cast time."""
+    grouped: list[EnemyMark] = []
+    last: dict[tuple[str, int], EnemyMark] = {}
+    for c in casts:
+        first = last.get((c.who, c.spell))
+        if first and not c.result and c.at - first.at <= GROUP_SECONDS:
+            first.count += 1
+            first.cast = max(first.cast or 0, c.cast or 0) or None
+            continue
+        c = EnemyMark(c.at, c.spell, c.name, c.who, c.cast, c.result, c.kicker)
+        grouped.append(c)
+        if c.result:
+            last.pop((c.who, c.spell), None)
+        else:
+            last[c.who, c.spell] = c
+    return grouped
+
+
+# Coming up: the enemies' casts that end within this long, at most this many.
+UPCOMING_SECONDS = 10
+UPCOMING_ROWS = 6
+
+
+def upcoming(casts: list[EnemyMark], now: float) -> list[tuple[float, EnemyMark]]:
+    """(seconds until it goes off, or is kicked or stopped; the cast) for the enemies' casts
+    that end in the next UPCOMING_SECONDS, the soonest first: those under way and those yet to
+    begin."""
+    found = [(c.end - now, c) for c in casts if now < c.end <= now + UPCOMING_SECONDS]
+    return sorted(found, key=lambda pair: pair[0])[:UPCOMING_ROWS]
+
+
+def enemy_hues(casts: list[EnemyMark]) -> dict[tuple[str, int], int]:
+    """A colour hue for the enemies' spells cast most in a clip; the rest have none (grey).
+    Keyed by (mob, spell ID)."""
+    counts: dict[tuple[str, int], int] = {}
+    for c in casts:
+        counts[c.who, c.spell] = counts.get((c.who, c.spell), 0) + 1
+    most = sorted(counts, key=lambda k: -counts[k])
+    return dict(zip(most, SPELL_HUES, strict=False))
+
+
+def enemy_text(cast: EnemyMark) -> str:
+    """For a tooltip: "1:23  Tender: Earth Bolt (cast 2.0 s, kicked by Me)"."""
+    notes = [f"cast {cast.cast:.1f} s"] if cast.cast else []
+    if cast.result == "kicked":
+        notes.append(f"kicked by {short_name(cast.kicker)}" if cast.kicker else "kicked")
+    elif cast.result:
+        notes.append("didn't finish")
+    if cast.count > 1:
+        notes.append(f"{cast.count} at once")
+    return f"{mmss(cast.at)}  {cast.who}: {cast.name}" + (f" ({', '.join(notes)})" if notes else "")
+
+
+def seek_target(at: float, kind: str = "") -> float:
+    """Where jumping to an event starts playing: a few seconds before it, a few more for a
+    death."""
+    return max(0.0, at - (DEATH_LEAD_IN if kind == "death" else LEAD_IN))
+
+
+def amount_text(amount: float) -> str:
+    """Damage for people: 532k, 1.2M."""
+    if amount >= 1e6:
+        return f"{amount / 1e6:.1f}M"
+    return f"{amount / 1e3:.0f}k" if amount >= 1e3 else f"{amount:.0f}"
+
+
+def hit_text(hit: dict) -> str:
+    """"Septic Spatter (Venom Leech)", "Falling"."""
+    return f"{hit.get('spell') or '?'}" + (f" ({hit['by']})" if hit.get("by") else "")
+
+
+def killed_by(death: dict) -> str:
+    """What killed the player, from the death's hits: "Septic Spatter (Venom Leech), 532k"; ""
+    when the details don't say (cut by an older version, or nothing hit them)."""
+    hits = [h for h in death.get("hits") or [] if isinstance(h, dict)]
+    hit = next((h for h in hits if h.get("killing")), hits[-1] if hits else None)
+    return f"{hit_text(hit)}, {amount_text(hit.get('amount') or 0)}" if hit else ""
 
 
 def highlight_around(kind: str, at: float, end: float | None, length: float) -> tuple[float, float]:
@@ -602,22 +766,31 @@ def highlight_around(kind: str, at: float, end: float | None, length: float) -> 
 
 @dataclass
 class EventRow:
-    at: float
-    kind: str                     # as Marker.kind
+    at: float | None              # None: a heading, nothing to jump to
+    kind: str                     # as Marker.kind; "hit" under a death; "kick", "dispel"
     text: str
     detail: str = ""
     children: list["EventRow"] = field(default_factory=list)
 
 
-def event_rows(details: dict) -> list[EventRow]:
+def death_row(death: dict) -> EventRow:
+    """A death's row: who, what killed them, and under it the last hits before it."""
+    hits = [h for h in death.get("hits") or [] if isinstance(h, dict)]
+    return EventRow(death["at"], "death", f"{short_name(death['name'])} died", killed_by(death),
+                    [EventRow(max(0.0, death["at"] + (h.get("at") or 0)), "hit", hit_text(h),
+                              amount_text(h.get("amount") or 0)) for h in hits])
+
+
+def event_rows(details: dict, best: dict | None = None) -> list[EventRow]:
     """The clip's events for the list beside the video: each boss pull as a row holding the
-    deaths and lusts during it and its kill or wipe; everything else on its own, in time order."""
+    deaths and lusts during it and its kill or wipe; everything else on its own, in time order.
+    best: the details of the run to compare its boss kills with (best_run's)."""
     rows: list[EventRow] = []
     if details.get("run_offset") is not None:
         rows.append(EventRow(details["run_offset"], "start", "Run starts"))
-    loose = [EventRow(d["at"], "death", f"{short_name(d['name'])} died")
-             for d in details.get("deaths", [])]
+    loose = [death_row(d) for d in details.get("deaths", [])]
     loose += [EventRow(l["at"], "lust", lust_text(l)) for l in details.get("lusts", [])]
+    mine, theirs = boss_times(details), boss_times(best or {})
     for e in details.get("encounters", []):
         end = e.get("end")
         kind = "pull" if end is None else "kill" if e.get("killed") else "wipe"
@@ -630,6 +803,8 @@ def event_rows(details: dict) -> list[EventRow]:
             detail += f" · {e['forces']:.2f}% forces"
         if deaths:
             detail += f" · {deaths} death{'s' if deaths != 1 else ''}"
+        if kind == "kill" and e["name"] in theirs and e["name"] in mine:
+            detail += f" · at {mmss(mine[e['name']])}, {split_text(mine[e['name']] - theirs[e['name']])}"
         children = sorted(inside, key=lambda r: r.at)
         if end is not None:
             children.append(EventRow(end, kind, "Killed" if kind == "kill" else "Wipe"))
@@ -637,6 +812,106 @@ def event_rows(details: dict) -> list[EventRow]:
     rows += loose
     return sorted(rows, key=lambda r: r.at)
 
+
+# ── Comparing a key with your best ──
+
+def boss_times(details: dict) -> dict[str, float]:
+    """How far into the run each boss died, s, by its name."""
+    start = details.get("run_offset") or 0.0
+    return {e["name"]: e["end"] - start for e in details.get("encounters") or []
+            if e.get("killed") and e.get("end") is not None}
+
+
+def split_text(seconds: float) -> str:
+    """"0:35 faster than best", "1:02 slower than best", "level with best"."""
+    if abs(seconds) < 1:
+        return "level with best"
+    return f"{mmss(abs(seconds))} {'faster' if seconds < 0 else 'slower'} than best"
+
+
+def _is_key(clip: ClipInfo) -> bool:
+    return (clip.level is not None and not clip.highlight and not clip.is_raid
+            and not clip.is_moment and not clip.is_session)
+
+
+def best_run(clip: ClipInfo, clips: list[ClipInfo]) -> ClipInfo | None:
+    """The clip to compare a key's boss kills with: the fastest completed key of the same dungeon
+    at its level or higher, among the other clips; None without one, or for a clip that isn't a
+    key's."""
+    if not _is_key(clip):
+        return None
+    run = clip.details.get("run_start")
+    others = [c for c in clips if _is_key(c) and c.path != clip.path and c.dungeon == clip.dungeon
+              and c.result == "completed" and c.timer and c.level >= clip.level
+              and c.details.get("encounters") and (run is None or c.details.get("run_start") != run)]
+    return min(others, key=lambda c: c.timer, default=None)
+
+
+def best_text(best: ClipInfo) -> str:
+    """For the clip's facts: "best +12 in 24m10s (2026-11-01)"."""
+    m, sec = divmod(int(best.timer), 60)
+    return f"best +{best.level} in {m}m{sec:02d}s ({time.strftime('%Y-%m-%d', time.localtime(best.started))})"
+
+
+# ── Kicks and dispels ──
+
+def dispels(details: dict) -> list[tuple[float, str, str, str]]:
+    """(at, who, the spell taken off, whom it was on) of the group's dispels, in time order."""
+    spells = details.get("spells") or {}
+    found = []
+    for d in details.get("dispels") or []:
+        try:
+            found.append((float(d[0]), str(d[1]), spells.get(str(int(d[2])), f"Spell {d[2]}"), str(d[3])))
+        except (TypeError, ValueError, IndexError):
+            continue
+    return sorted(found)
+
+
+def has_kicks(details: dict) -> bool:
+    """Whether the clip has anything for the Kicks list."""
+    return bool(details.get("dispels")) or any(len(c) > 4 and c[4] == "kicked"
+                                               for c in details.get("enemy_casts") or [])
+
+
+def kick_rows(details: dict) -> list[EventRow]:
+    """The Kicks list: who kicked how often (everyone in the group, the most first), with each
+    kick under them; the spells that were kicked at least once and still went off, with each time
+    they did; who dispelled how often."""
+    casts = enemy_casts(details)
+    kicks = [c for c in casts if c.result == "kicked"]
+    rows: list[EventRow] = []
+    if kicks:
+        by: dict[str, list[EnemyMark]] = {name: [] for name in casters(details)}
+        for c in kicks:
+            by.setdefault(c.kicker or "?", []).append(c)
+        rows.append(EventRow(None, "", "Kicks", f"{len(kicks)}", [
+            EventRow(None, "", short_name(who), f"{len(theirs)} kick{'s' if len(theirs) != 1 else ''}",
+                     [EventRow(c.at, "kick", f"{c.name} ({c.who})") for c in theirs])
+            for who, theirs in sorted(by.items(), key=lambda kv: -len(kv[1]))]))
+        kickable = {(c.who, c.spell) for c in kicks}
+        through: dict[tuple[str, int], list[EnemyMark]] = {}
+        for c in casts:
+            if not c.result and (c.who, c.spell) in kickable:
+                through.setdefault((c.who, c.spell), []).append(c)
+        if through:
+            kicked = {key: sum((c.who, c.spell) == key for c in kicks) for key in through}
+            rows.append(EventRow(None, "", "Got through", f"{sum(map(len, through.values()))}", [
+                EventRow(None, "", f"{theirs[0].name} ({who})",
+                         f"{len(theirs)} went off, {kicked[who, spell]} kicked",
+                         [EventRow(c.at, "kick", "Went off", f"cast {c.cast:.1f} s" if c.cast else "")
+                          for c in theirs])
+                for (who, spell), theirs in sorted(through.items(), key=lambda kv: -len(kv[1]))]))
+    found = dispels(details)
+    if found:
+        by_player: dict[str, list] = {}
+        for d in found:
+            by_player.setdefault(d[1], []).append(d)
+        rows.append(EventRow(None, "", "Dispels", f"{len(found)}", [
+            EventRow(None, "", short_name(who), f"{len(theirs)} dispel{'s' if len(theirs) != 1 else ''}",
+                     [EventRow(at, "dispel", spell, f"off {short_name(target)}")
+                      for at, _who, spell, target in theirs])
+            for who, theirs in sorted(by_player.items(), key=lambda kv: -len(kv[1]))]))
+    return rows
 
 
 # ── YouTube ──
@@ -791,6 +1066,7 @@ class Step:
     ok: bool
     title: str
     hint: str = ""                # what to do when it isn't ok
+    needed: bool = True           # False: recording works without it; worth a look
 
 
 def setup_checklist(cfg, service_state: str) -> list[Step]:
@@ -801,6 +1077,7 @@ def setup_checklist(cfg, service_state: str) -> list[Step]:
     missing = missing_tools()
     hint = combat_log_hint(str(cfg.combat_log_dir)) if cfg.combat_log_dir else "Folder not found"
     out = cfg.output_dir
+    version, advanced = newest_log_header(cfg.combat_log_dir)
     return [
         Step(bool(recorder and shutil.which(os.path.expanduser(recorder))),
              "gpu-screen-recorder installed",
@@ -815,11 +1092,25 @@ def setup_checklist(cfg, service_state: str) -> list[Step]:
              "No combat log in that folder yet. In WoW: Options > Network > Advanced Combat "
              "Logging, then type /combatlog (each time you log in), or let an addon such as "
              "SimpleCombatLogger or AutoCombatLogger do it."),
+        Step(advanced is not False, "Advanced Combat Logging on",
+             "The newest combat log was written without it, so enemy forces can be off. In WoW: "
+             "Options > Network > Advanced Combat Logging.", needed=False),
+        Step(version is None or version <= combatlog.LOG_VERSION, "Combat log version known",
+             f"WoW now writes combat log version {version}, newer than this app knows: clips may "
+             "miss details until the app is updated.", needed=False),
         Step(bool(out and out.is_dir() and os.access(out, os.W_OK)), "Output folder ready",
              "Settings > Folders: a folder you can write to (is the drive mounted?)."),
         Step(service_state in ("active", "activating"), "Recorder service running",
              "Start it from the tray menu, or Save in Settings."),
     ]
+
+
+def newest_log_header(folder: Path | None) -> tuple[int | None, bool | None]:
+    """combatlog.log_header of the newest combat log under folder; (None, None) without one."""
+    if not folder or not folder.is_dir():
+        return None, None
+    newest, _ = _newest_log(folder)
+    return combatlog.log_header(Path(newest[2])) if newest else (None, None)
 
 
 # ── The settings window's About page ──
@@ -899,6 +1190,9 @@ def session_info(path: Path, details: dict, clips: list[dict], cut: bool = True)
         "casters": details.get("casters") or [],
         "casts": details.get("casts") or [],
         "spells": details.get("spells") or {},
+        "enemies": details.get("enemies") or [],
+        "enemy_casts": details.get("enemy_casts") or [],
+        **({"dispels": details["dispels"]} if isinstance(details.get("dispels"), list) else {}),
     }
     n = len(runs)
     # Before it's cut, how many deaths and bosses it has isn't known yet.
@@ -926,7 +1220,17 @@ def session_highlight_base(details: dict, start: float, end: float, started: flo
     if best is None or overlap(best) <= 0:
         best = {"dungeon": "Highlight", "label": "", "result": "", "run_start": started + start}
     return {**best, "casts": details.get("casts") or [], "spells": details.get("spells") or {},
-            "player": details.get("player"), "casters": details.get("casters") or []}
+            "player": details.get("player"), "casters": details.get("casters") or [],
+            **_enemy_keys(details)}
+
+
+def _enemy_keys(details: dict) -> dict:
+    """A recording's enemies' casts, for details made from it; nothing for one cut before 1.3.4,
+    so add-casts still sees those as without them."""
+    if not isinstance(details.get("enemies"), list):
+        return {}
+    return {"enemies": details["enemies"], "enemy_casts": details.get("enemy_casts") or [],
+            **({"dispels": details["dispels"]} if isinstance(details.get("dispels"), list) else {})}
 
 
 def session_copy_details(clip: ClipInfo) -> dict:
@@ -934,7 +1238,8 @@ def session_copy_details(clip: ClipInfo) -> dict:
     d = clip.details
     return {"recording_start": clip.started, "length": d.get("clip_length"), "runs": d.get("runs", []),
             "keep": False, "chat_hidden": True, "player": d.get("player"),
-            "casters": d.get("casters"), "casts": d.get("casts"), "spells": d.get("spells")}
+            "casters": d.get("casters"), "casts": d.get("casts"), "spells": d.get("spells"),
+            **_enemy_keys(d)}
 
 
 def load_sessions(processed_dir: Path, sessions_dir: Path, clips_dir: Path, read_sidecar,

@@ -1,5 +1,6 @@
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 from linux_wow_recorder.gui import model
 
@@ -265,9 +266,17 @@ def test_setup_checklist(tmp_path, monkeypatch):
     steps = {s.title: s.ok for s in model.setup_checklist(cfg, "active")}
     assert steps == {"gpu-screen-recorder installed": True, "ffmpeg, ffprobe and grep installed": True,
                      "Combat log folder found": True, "Combat logging on": False,
+                     "Advanced Combat Logging on": True, "Combat log version known": True,
                      "Output folder ready": True, "Recorder service running": True}
     (logs / "WoWCombatLog-100826_190000.txt").write_text("x")
     assert all(s.ok for s in model.setup_checklist(cfg, "active"))
+    # The newest log's first line says how it was written: neither stops the recorder
+    (logs / "WoWCombatLog-100826_190000.txt").write_text(
+        "10/8/2026 19:00:00.000-7  COMBAT_LOG_VERSION,23,ADVANCED_LOG_ENABLED,0,BUILD_VERSION,12.2.0,"
+        "PROJECT_ID,1\n")
+    off = [s for s in model.setup_checklist(cfg, "active") if not s.ok]
+    assert [s.title for s in off] == ["Advanced Combat Logging on", "Combat log version known"]
+    assert not any(s.needed for s in off) and "version 23" in off[1].hint
     assert not all(s.ok for s in model.setup_checklist(cfg, "inactive"))
     assert [s.ok for s in model.setup_checklist(None, "not installed")] == [False]
 
@@ -444,12 +453,44 @@ def test_casts_are_read_from_the_details():
     assert len([k for k in hues if k[0] == "A"]) == len(model.SPELL_HUES)
 
 
+def test_enemy_casts_are_read_from_the_details():
+    d = {"enemies": ["Tender", "Striker"],
+         "enemy_casts": [[9.0, 2, 1], [3.0, 1, 0, 2.0], [5.0, 1, 0, 1.5, "kicked", "Me-R-US"],
+                         [6.0, 3, 0, 0, "stopped"], ["bad"], [7.0, 1, 5]],
+         "spells": {"1": "Earth Bolt", "2": "Shoot"}}
+    marks = model.enemy_casts(d)
+    assert marks == [model.EnemyMark(3.0, 1, "Earth Bolt", "Tender", 2.0),
+                     model.EnemyMark(5.0, 1, "Earth Bolt", "Tender", 1.5, "kicked", "Me-R-US"),
+                     model.EnemyMark(6.0, 3, "Spell 3", "Tender", None, "stopped"),
+                     model.EnemyMark(9.0, 2, "Shoot", "Striker")]
+    assert model.enemy_casts({}) == [] and model.enemies(d) == ["Tender", "Striker"]
+    assert marks[0].end == 5.0 and marks[3].end == 9.0
+    assert [model.enemy_text(m) for m in marks[:3]] == [
+        "0:03  Tender: Earth Bolt (cast 2.0 s)",
+        "0:05  Tender: Earth Bolt (cast 1.5 s, kicked by Me)",
+        "0:06  Tender: Spell 3 (didn't finish)"]
+    hues = model.enemy_hues(marks)
+    assert hues["Tender", 1] == model.SPELL_HUES[0]   # the most cast first, over every mob
+
+
+def test_enemy_spam_is_dozens_a_minute_and_never_kicked():
+    n = model.SPAM_PER_MINUTE + 1
+    claws = [model.EnemyMark(i * 0.5, 1, "Claws", "Descendant") for i in range(n)]   # in 20 s
+    bolts = [model.EnemyMark(i * 0.5, 2, "Earth Bolt", "Tender") for i in range(n)]
+    bolts[3].result = "kicked"
+    slow = [model.EnemyMark(i * 2.0, 3, "Shoot", "Striker") for i in range(n * 2)]   # 30 a minute
+    assert model.enemy_spam(claws + bolts + slow) == {("Descendant", 1)}
+    assert model.enemy_spam(claws[:-1]) == set()   # not more than the limit
+
+
 def test_a_full_session_shows_its_casts():
     info = model.session_info(Path("2026-10-08_19-00-00.mkv"),
                               {"recording_start": 1.0, "length": 60.0, "runs": [],
                                "casts": [[5.0, 1, 0]], "spells": {"1": "Judgment"},
-                               "player": "Me-R-US", "casters": ["Me-R-US"]}, [])
+                               "player": "Me-R-US", "casters": ["Me-R-US"],
+                               "enemies": ["Mob"], "enemy_casts": [[6.0, 2, 0]]}, [])
     assert model.casts(info.details) == [model.CastMark(5.0, 1, "Judgment", "Me-R-US")]
+    assert model.enemy_casts(info.details) == [model.EnemyMark(6.0, 2, "Spell 2", "Mob")]
     assert info.details["player"] == "Me-R-US"
 
 
@@ -496,3 +537,141 @@ def test_each_clip_is_listed_in_one_view_only():
     assert [[model.in_mode(c, v) for v in views] for c in (key, pull, moment)] == [
         [True, False, False], [False, True, False], [False, False, True]]
     assert moment.result_text == "Mulgore" and moment.deaths is None
+
+
+def test_details_made_from_an_older_recording_leave_the_enemies_out():
+    # Without the keys, add-casts still takes them for clips without enemies' casts.
+    old = {"runs": [], "casts": [[5.0, 1, 0]], "casters": ["Me-R-US"], "spells": {"1": "Judgment"}}
+    assert "enemies" not in model.session_highlight_base(old, 0, 10, 0)
+    assert "enemy_casts" not in model.session_highlight_base(old, 0, 10, 0)
+    clip = SimpleNamespace(details={**old, "clip_length": 30.0}, started=1.0)
+    assert "enemies" not in model.session_copy_details(clip)
+    clip.details["enemies"] = ["Mob"]
+    assert model.session_copy_details(clip)["enemy_casts"] == []
+    new = {**old, "enemies": ["Mob"], "enemy_casts": [[6.0, 2, 0]]}
+    base = model.session_highlight_base(new, 0, 10, 0)
+    assert base["enemies"] == ["Mob"] and base["enemy_casts"] == [[6.0, 2, 0]]
+    assert model._enemy_keys({"enemies": None}) == {} and model._enemy_keys({"enemies": []}) == {
+        "enemies": [], "enemy_casts": []}
+
+
+def key_clip(name, level, timer, kills, result="completed", started=1_800_000_000.0, **details):
+    """A key's ClipInfo whose bosses died `kills` seconds into the run (it starts 10 s in)."""
+    return model.clip_info(Path(name), {
+        "dungeon": "Ara-Kara", "level": level, "label": f"+{level}", "result": result,
+        "timer": timer, "time_limit": 1800, "run_start": started, "run_offset": 10.0,
+        "run_length": "20m00s", "encounters": [
+            {"name": boss, "start": 10.0 + at - 60, "end": 10.0 + at, "killed": True}
+            for boss, at in kills.items()], **details})
+
+
+def test_a_key_is_compared_with_the_fastest_at_its_level_or_higher():
+    mine = key_clip("mine.mp4", 10, 1500.0, {"Avanoxx": 300, "Ki'katal": 1400})
+    fast = key_clip("fast.mp4", 12, 1300.0, {"Avanoxx": 335, "Ki'katal": 1250}, started=1_800_100_000.0)
+    others = [
+        mine, fast,
+        key_clip("slow.mp4", 10, 1700.0, {"Avanoxx": 200}, started=1_800_200_000.0),
+        key_clip("low.mp4", 9, 1000.0, {"Avanoxx": 100}, started=1_800_300_000.0),       # a lower key
+        key_clip("left.mp4", 12, None, {"Avanoxx": 100}, "abandoned", started=1_800_400_000.0),
+        key_clip("copy.mp4", 10, 1500.0, {"Avanoxx": 300}, chat_hidden=True),            # the same run
+        key_clip("part.mp4", 12, 900.0, {"Avanoxx": 50}, started=1_800_500_000.0,
+                 highlight={"length": "0m30s"}),
+    ]
+    assert model.best_run(mine, others) is fast
+    assert model.best_run(fast, others) is None   # nothing as high
+    assert model.best_run(others[4], others) is fast   # an abandoned key is compared too
+    assert model.best_run(others[6], others) is None   # a highlight's times aren't the run's
+    assert model.best_text(fast).startswith("best +12 in 21m40s (")
+    rows = {r.text: r.detail for r in model.event_rows(mine.details, fast.details)}
+    assert rows["Avanoxx"] == "killed in 1:00 · at 5:00, 0:35 faster than best"
+    assert rows["Ki'katal"] == "killed in 1:00 · at 23:20, 2:30 slower than best"
+    assert model.event_rows(mine.details)[1].detail == "killed in 1:00"
+    assert model.split_text(0.4) == "level with best"
+
+
+def test_a_death_says_what_killed_and_lists_its_last_hits():
+    death = {"name": "Tank-Realm-US", "at": 90.0, "hits": [
+        {"at": -2.0, "by": "", "spell": "Falling", "amount": 900},
+        {"at": -0.1, "by": "Venom Leech", "spell": "Septic Spatter", "amount": 531886, "killing": True},
+        {"at": 0.0, "by": "Venom Leech", "spell": "Melee", "amount": 1_250_000}]}
+    assert model.killed_by(death) == "Septic Spatter (Venom Leech), 532k"
+    assert model.killed_by({"name": "X", "at": 1.0}) == ""
+    assert model.killed_by({"hits": [{"spell": "Lava", "amount": 40}]}) == "Lava, 40"   # the last
+    details = {"encounters": [{"name": "Boss", "start": 60.0, "end": 120.0, "killed": True}],
+               "deaths": [death, {"name": "Healer-Realm-US", "at": 200.0}]}
+    pull, loose = model.event_rows(details)
+    row = pull.children[0]
+    assert (row.text, row.detail, pull.detail) == (
+        "Tank died", "Septic Spatter (Venom Leech), 532k", "killed in 1:00 · 1 death")
+    assert [(h.at, h.kind, h.text, h.detail) for h in row.children] == [
+        (88.0, "hit", "Falling", "900"), (89.9, "hit", "Septic Spatter (Venom Leech)", "532k"),
+        (90.0, "hit", "Melee (Venom Leech)", "1.2M")]
+    assert (loose.text, loose.detail, loose.children) == ("Healer died", "", [])
+    texts = [m.text for m in model.markers(details) if m.kind == "death"]
+    assert texts == ["Tank died: Septic Spatter (Venom Leech), 532k", "Healer died"]
+    assert model.seek_target(90.0, "death") == 84.0 and model.seek_target(90.0) == 87.0
+
+
+KICKS = {
+    "casters": ["Me-Realm-US", "Tank-Realm-US", "Idle-Realm-US"],
+    "enemies": ["Tender", "Boss"],
+    "spells": {"1": "Earth Bolt", "2": "Slam", "3": "Heal", "7": "Paralyzing Shots"},
+    "enemy_casts": [[10.0, 1, 0, 1.5, "kicked", "Me-Realm-US"], [20.0, 1, 0, 2.0],
+                    [30.0, 1, 0, 1.0, "kicked", "Tank-Realm-US"], [40.0, 1, 0, 2.0],
+                    [50.0, 2, 1, 3.0], [60.0, 3, 0, 0, "stopped"],
+                    [70.0, 3, 0, 1.0, "kicked", "Me-Realm-US"], [80.0, 1, 0, 0.5, "kicked", "Felhunter"]],
+    "dispels": [[15.0, "Me-Realm-US", 7, "Tank-Realm-US"], [25.0, "Me-Realm-US", 7, "Me-Realm-US"],
+                ["bad"]],
+}
+
+
+def test_the_kicks_list():
+    assert model.has_kicks(KICKS) and not model.has_kicks({"enemy_casts": [[1.0, 1, 0]]})
+    kicks, through, dispels = model.kick_rows(KICKS)
+    assert (kicks.text, kicks.detail, kicks.at) == ("Kicks", "4", None)
+    assert [(r.text, r.detail) for r in kicks.children] == [
+        ("Me", "2 kicks"), ("Tank", "1 kick"), ("Felhunter", "1 kick"), ("Idle", "0 kicks")]
+    assert [(k.at, k.kind, k.text) for k in kicks.children[0].children] == [
+        (10.0, "kick", "Earth Bolt (Tender)"), (70.0, "kick", "Heal (Tender)")]
+    # Only what was kicked at least once can be: Slam isn't listed, nor the Heal that was stopped
+    assert [(r.text, r.detail) for r in through.children] == [
+        ("Earth Bolt (Tender)", "2 went off, 3 kicked")]
+    assert [(c.at, c.text, c.detail) for c in through.children[0].children] == [
+        (20.0, "Went off", "cast 2.0 s"), (40.0, "Went off", "cast 2.0 s")]
+    assert (dispels.text, dispels.detail) == ("Dispels", "2")
+    assert [(r.text, r.detail) for r in dispels.children] == [("Me", "2 dispels")]
+    assert [(d.at, d.text, d.detail) for d in dispels.children[0].children] == [
+        (15.0, "Paralyzing Shots", "off Tank"), (25.0, "Paralyzing Shots", "off Me")]
+    assert [r.text for r in model.kick_rows({**KICKS, "enemy_casts": []})] == ["Dispels"]
+    assert model.kick_rows({}) == []
+
+
+def test_enemies_casting_together_are_one_box_and_the_next_ones_are_listed():
+    details = {"enemies": ["Imp", "Boss"], "spells": {"1": "Felfire", "2": "Slam"},
+               "enemy_casts": [[10.0, 1, 0, 1.0], [10.4, 1, 0, 2.0], [10.9, 1, 0, 1.0],
+                               [11.5, 1, 0, 1.0],                       # over a second after the first
+                               [11.6, 1, 0, 0.5, "kicked", "Me-R-US"],  # a kicked one stays its own
+                               [11.7, 1, 0, 1.0], [12.0, 2, 1], [30.0, 2, 1, 3.0]]}
+    casts = model.enemy_casts(details)
+    grouped = model.group_enemy_casts(casts)
+    assert [(c.at, c.count, c.cast, c.label) for c in grouped] == [
+        (10.0, 3, 2.0, "Felfire ×3"), (11.5, 1, 1.0, "Felfire"), (11.6, 1, 0.5, "✕ Felfire"),
+        (11.7, 1, 1.0, "Felfire"), (12.0, 1, None, "Slam"), (30.0, 1, 3.0, "Slam")]
+    assert all(c.count == 1 for c in casts)   # the clip's own are left as they were
+    assert "3 at once" in model.enemy_text(grouped[0])
+    # What ends in the next 10 s, the soonest first: under way or still to begin
+    soon = model.upcoming(grouped, 11.0)
+    assert [(round(left, 1), c.label) for left, c in soon] == [
+        (1.0, "Felfire ×3"), (1.0, "Slam"), (1.1, "✕ Felfire"), (1.5, "Felfire"), (1.7, "Felfire")]
+    assert model.upcoming(grouped, 22.9) == []
+    assert [c.label for _, c in model.upcoming(grouped, 23.5)] == ["Slam"]
+    many = [model.EnemyMark(float(i), 1, "Bolt", "Imp") for i in range(20)]
+    assert len(model.upcoming(many, 0.0)) == model.UPCOMING_ROWS
+
+
+def test_a_stopped_cast_of_the_groups():
+    details = {"casters": ["Me-Realm-US"], "spells": {"1": "Fireball"},
+               "casts": [[5.0, 1, 0, 0, "stopped"], [9.0, 1, 0, 2.5]]}
+    stopped, done = model.casts(details)
+    assert (stopped.result, stopped.cast, done.result, done.cast) == ("stopped", None, "", 2.5)
+    assert model.cast_text(stopped) == "0:05  Me: Fireball (didn't finish)"

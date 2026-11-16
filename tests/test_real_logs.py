@@ -1,11 +1,13 @@
-"""find_runs on real combat logs: three sessions of Mythic+ keys, cut down to the lines the app
-reads and with every player's name and GUID replaced (tests/fixtures/sanitize.py)."""
+"""find_runs and read_casts on real combat logs: three sessions of Mythic+ keys and one key with
+the enemies' casts, cut down to the lines the app reads and with every player's name and GUID
+replaced (tests/fixtures/sanitize.py)."""
 
+from collections import Counter
 from pathlib import Path
 
 import pytest
 
-from linux_wow_recorder.combatlog import find_runs, read_log_events
+from linux_wow_recorder.combatlog import EnemyCast, find_runs, read_casts, read_log_events
 
 LOGS = Path(__file__).parent / "fixtures" / "logs"
 
@@ -58,3 +60,23 @@ def test_feigned_deaths_are_not_counted(name, flagged, plain):
              if "  UNIT_DIED," in l and ",Player-" in l]
     assert (sum(l.endswith(",1") for l in lines), sum(l.endswith(",0") for l in lines)) == (flagged, plain)
     assert sum(len(r.deaths) for r in runs_in(name)) == plain
+
+
+def test_the_enemies_casts_in_a_key():
+    # A +10 Voidscar Arena (November 2026), made with --enemies --key 3: the enemies' casts and
+    # the kicks, not the group's casts.
+    log = LOGS / "WoWCombatLog-110526_173620.txt"
+    [run] = runs_in(log.name)
+    assert summary(run) == ("Voidscar Arena", "+10 Timed", "19m19s", 2, ["Bloodlust"] * 2, [True] * 3)
+    casts = read_casts([log])
+    assert all(isinstance(c, EnemyCast) for c in casts)
+    assert Counter(c.result or ("hard" if c.cast else "instant") for c in casts) == {
+        "instant": 200, "hard": 194, "stopped": 15, "kicked": 30}
+    # Every kick in the log is matched to the cast it stopped: one with a START, or a channel
+    # (Mending Void) whose SUCCESS came as it began.
+    kicks = [c for c in casts if c.result == "kicked"]
+    assert len(kicks) == log.read_text().count("  SPELL_INTERRUPT,") and all(c.cast for c in kicks)
+    assert Counter(c.name for c in kicks).most_common(3) == [("Lava Bolt", 10), ("Mad Shriek", 7),
+                                                             ("Mending Void", 5)]
+    assert {c.kicker for c in kicks} == {f"Player{i}-Realm-US" for i in range(1, 6)}
+    assert len({c.mob for c in casts}) == 29 and max(c.cast or 0 for c in casts) < 10

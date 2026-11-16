@@ -18,8 +18,8 @@ from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import (QAbstractItemView, QButtonGroup, QFrame, QGroupBox, QHBoxLayout,
                                QHeaderView, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu,
                                QMessageBox, QProgressDialog, QPushButton, QSlider, QSplitter, QSplitterHandle,
-                               QStackedWidget, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QToolButton, QToolTip, QTreeWidget,
-                               QTreeWidgetItem, QVBoxLayout, QWidget)
+                               QStackedWidget, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QTabWidget, QToolButton, QToolTip,
+                               QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
 import shiboken6
 from .. import APP_NAME, APP_TITLE, __version__, config, cooldowns, hidechat, highlight, live, service, state
@@ -57,7 +57,7 @@ class Timeline(QWidget):
     PAD = 8           # left and right margin, px
     SNAP = 6          # px: a click this close to an event jumps to it
     BOSS = (4, 18)    # lanes: (top, bottom), px
-    TRACK = (24, 30)
+    TRACK = (23, 31)
     EVENTS = (36, 50)
     LEGEND_Y = 64     # baseline
 
@@ -140,15 +140,18 @@ class Timeline(QWidget):
                     p.setPen(pen)
                 p.drawRoundedRect(rect, 3, 3)
 
-        # The track: all of it, then the played part, then the playhead.
+        # The track: all of it, then the played part, then the playhead. The unplayed part is
+        # the text colour, faded: the palette's Mid is nearly the window colour on dark themes.
         track = QRectF(self.PAD, self.TRACK[0], self.width() - 2 * self.PAD, self.TRACK[1] - self.TRACK[0])
+        rest = QColor(pal.windowText().color())
+        rest.setAlpha(70)
         p.setPen(Qt.NoPen)
-        p.setBrush(pal.mid())
-        p.drawRoundedRect(track, 3, 3)
+        p.setBrush(rest)
+        p.drawRoundedRect(track, 4, 4)
         if self.length:
             played = QRectF(track.left(), track.top(), self._x(self.position) - self.PAD, track.height())
             p.setBrush(pal.highlight())
-            p.drawRoundedRect(played, 3, 3)
+            p.drawRoundedRect(played, 4, 4)
             if self.marks:   # the highlight: a band over the track, with a handle at each end
                 x0, x1 = self._x(self.marks[0]), self._x(self.marks[1])
                 band = QColor(theme.color("lust", pal))
@@ -172,11 +175,12 @@ class Timeline(QWidget):
                     x = self._x(m.at)
                     p.drawLine(QLineF(x, self.EVENTS[0], x, self.EVENTS[1]))
 
-            # The playhead, ringed with the background so it stands out over any mark.
+            # The playhead: a knob in the text colour, ringed with the highlight, so it stands
+            # out from the blue of the played part and the kills.
             x = self._x(self.position)
-            p.setPen(QPen(pal.window().color(), 2))
-            p.setBrush(pal.highlight())
-            p.drawEllipse(QRectF(x - 6, sum(self.TRACK) / 2 - 6, 12, 12))
+            p.setPen(QPen(pal.highlight().color(), 3))
+            p.setBrush(pal.windowText())
+            p.drawEllipse(QRectF(x - 7, sum(self.TRACK) / 2 - 7, 14, 14))
 
         self._paint_legend(p, pal, muted)
         p.end()
@@ -227,7 +231,8 @@ class Timeline(QWidget):
         near = self._near(x)
         boss = self._boss_at(x, y)
         if near:
-            at = model.seek_target(min(near, key=lambda m: abs(self._x(m.at) - x)).at)
+            nearest = min(near, key=lambda m: abs(self._x(m.at) - x))
+            at = model.seek_target(nearest.at, nearest.kind)
         elif boss:
             at = model.seek_target(boss.start)
         else:
@@ -277,9 +282,14 @@ class Timeline(QWidget):
 class CastStrip(QWidget):
     """The spells cast around where the video is, a lane per player shown: a box per cast with
     the spell's name, scrolling as the video plays, the newest at the playhead line. A hard cast
-    has a thin bar back to where it started. Clicking a cast plays from just before it; hovering
-    names it. Grabbing it and dragging scrubs through the video, paused while held."""
+    has a thin bar back to where it started. Below, the enemies' lane: a box from when a mob began
+    casting, outlined, with a thin bar on to when it went off; one kicked or stopped has a ✕.
+    Mobs that cast the same thing together share a box ("×3"); a player's cast that never
+    finished has a ✕ too. Clicking a cast plays from just before it; hovering names it;
+    right-clicking an enemy's offers to hide it. Grabbing the strip and dragging scrubs through
+    the video, paused while held."""
     seek = Signal(float)
+    enemy_menu = Signal(object, QPoint)   # an enemy's cast was right-clicked: (the cast, where)
     scrub_started = Signal()   # the button went down on the strip: the player pauses
     scrub_ended = Signal()     # and up again: it plays on if it was playing
 
@@ -291,6 +301,8 @@ class CastStrip(QWidget):
     LABEL = 84        # px for the players' names, when there's more than one lane
     MAX_BOX = 130     # px: a long name is cut short
     LEAD_IN = 1.0     # seconds played before a clicked cast
+    ENEMIES = ""      # the enemies' lane, among the players' names
+    ENEMY_ROWS = 2
 
     def __init__(self):
         super().__init__()
@@ -299,6 +311,14 @@ class CastStrip(QWidget):
         self.casts: list[model.CastMark] = []
         self.hues: dict[tuple[str, int], int] = {}
         self.shown: list[str] = []   # the players with a lane, top to bottom
+        self.enemy_casts: list[model.EnemyMark] = []
+        self.enemy_boxes: list[model.EnemyMark] = []   # those, with casts made together as one
+        self.hidden_spells: set[tuple[str, str]] = set()   # (mob, spell name)s left out
+        self.enemy_hues: dict[tuple[str, int], int] = {}
+        self.spam: set[tuple[str, int]] = set()   # (mob, spell ID)s left out with hide_spam
+        self.enemies_on = True   # the enemies' lane, when the clip has enemies' casts
+        self.hidden_mobs: set[str] = set()
+        self.hide_spam = True
         self.you: str | None = None
         self.major_only = False   # only cooldowns.MAJOR, coloured by kind
         self.position = 0.0
@@ -315,18 +335,42 @@ class CastStrip(QWidget):
         self.dragged = False
         self.set_shown([])
 
-    def set_casts(self, casts: list[model.CastMark], you: str | None = None):
+    def set_casts(self, casts: list[model.CastMark], you: str | None = None,
+                  enemy_casts: list[model.EnemyMark] | None = None):
         self.casts = casts
         self.you = you
         self.hues = model.spell_hues(casts)
+        self.enemy_casts = enemy_casts or []
+        self.enemy_boxes = model.group_enemy_casts(self.enemy_casts)
+        self.enemy_hues = model.enemy_hues(self.enemy_casts)
+        self.spam = model.enemy_spam(self.enemy_casts)
         self.position = 0.0
-        self.update()
+        self.set_shown(self.shown)
 
     def set_shown(self, players: list[str]):
-        """Whose casts get a lane: two rows for one player, one each for more."""
+        """Whose casts get a lane: two rows for one player, one each for more; the enemies'
+        lane has two."""
         self.shown = players
-        self.setFixedHeight(self.TOP * 2 + max(1, len(players)) * self._rows() * self.ROW + 2)
+        self.setFixedHeight(self.TOP * 2 + max(1, sum(n for _, n in self._lanes())) * self.ROW + 2)
         self.update()
+
+    def set_enemies(self, on: bool, hidden: set[str], hide_spam: bool,
+                    hidden_spells: set[tuple[str, str]] = frozenset()):
+        """The enemies' lane on or off, the mobs and the spells left out of it, and whether
+        spam is."""
+        self.enemies_on, self.hidden_mobs, self.hide_spam = on, hidden, hide_spam
+        self.hidden_spells = set(hidden_spells)
+        self.set_shown(self.shown)
+
+    def enemies_shown(self) -> list[model.EnemyMark]:
+        """The enemies' casts the lane shows (casts made together as one), in time order; none
+        with the lane off."""
+        if not self.enemies_on:
+            return []
+        return [c for c in self.enemy_boxes if self._enemy_shown(c)]
+
+    def has_lanes(self) -> bool:
+        return bool(self._lanes())
 
     def set_major_only(self, on: bool):
         self.major_only = on
@@ -337,11 +381,18 @@ class CastStrip(QWidget):
         k = self.WIDER if self.major_only else 1
         return self.BEFORE * k, self.AFTER * k
 
-    def _rows(self) -> int:
-        return 2 if len(self.shown) <= 1 else 1
+    def _lanes(self) -> list[tuple[str, int]]:
+        """(player, or ENEMIES; its rows), top to bottom."""
+        keys = self.shown + ([self.ENEMIES] if self.enemies_on and self.enemy_casts else [])
+        rows = 2 if len(self.shown) <= 1 else 1
+        return [(k, self.ENEMY_ROWS if k == self.ENEMIES else rows) for k in keys]
 
     def _left(self) -> float:
-        return self.PAD + (self.LABEL if len(self.shown) > 1 else 0)
+        return self.PAD + (self.LABEL if len(self._lanes()) > 1 else 0)
+
+    def _enemy_shown(self, c: model.EnemyMark) -> bool:
+        return (c.who not in self.hidden_mobs and (c.who, c.name) not in self.hidden_spells
+                and not (self.hide_spam and (c.who, c.spell) in self.spam))
 
     def set_position(self, seconds: float):
         if self.dragged:
@@ -401,25 +452,37 @@ class CastStrip(QWidget):
         head = self._x(now, now)
         before, after = self._span()
         first, last = now - before - self.MAX_BOX / self._scale(), now + after
-        n = self._rows()
-        lanes = {who: i for i, who in enumerate(self.shown)}
+        lanes = self._lanes()
+        size = dict(lanes)
+        top: dict[str, int] = {}   # each lane's first row
+        used = 0
+        for key, n in lanes:
+            top[key], used = used, used + n
 
         # Boxes left to right; each in the first row of its lane free at its start, or else over
         # the end of the row that frees up first (that box is cut short).
-        rows: list[list[list]] = [[] for _ in range(len(self.shown) * n)]
-        for c in self.casts:
-            if c.who not in lanes or not first <= c.at <= last:
-                continue
-            if self.major_only and not cooldowns.kind(c.spell):
-                continue
+        rows: list[list[list]] = [[] for _ in range(sum(size.values()))]
+
+        def place(lane: str, c, label: str):
             x = self._x(c.at, now)
-            width = min(self.MAX_BOX, metrics.horizontalAdvance(c.name) + 10)
-            mine = rows[lanes[c.who] * n:(lanes[c.who] + 1) * n]
+            width = min(self.MAX_BOX, metrics.horizontalAdvance(label) + 10)
+            mine = rows[top[lane]:top[lane] + size[lane]]
             free = [r for r in mine if not r or r[-1][0] + r[-1][1] + 2 <= x]
             row = free[0] if free else min(mine, key=lambda r: r[-1][0] + r[-1][1])
             if row and row[-1][0] + row[-1][1] + 2 > x:
                 row[-1][1] = max(4.0, x - row[-1][0] - 2)
             row.append([x, width, c])
+
+        for c in self.casts:
+            if c.who not in top or not first <= c.at <= last:
+                continue
+            if self.major_only and not cooldowns.kind(c.spell):
+                continue
+            place(c.who, c, self._label(c))
+        if self.ENEMIES in top:
+            for c in self.enemy_boxes:
+                if first <= c.at <= last and self._enemy_shown(c):
+                    place(self.ENEMIES, c, self._label(c))
 
         self.boxes = []
         p.setClipRect(QRectF(self._left(), 0, self.width(), self.height()))
@@ -427,33 +490,54 @@ class CastStrip(QWidget):
             y = self.TOP + i * self.ROW
             for x, width, c in row:
                 rect = QRectF(x, y, width, self.ROW - 2)
-                hue = (model.KIND_HUES[cooldowns.kind(c.spell)] if self.major_only
+                foe = isinstance(c, model.EnemyMark)
+                hue = (self.enemy_hues.get((c.who, c.spell)) if foe
+                       else model.KIND_HUES[cooldowns.kind(c.spell)] if self.major_only
                        else self.hues.get((c.who, c.spell)))
                 fill = (QColor.fromHsl(hue, 150, 75 if dark else 205) if hue is not None
                         else pal.mid().color())
                 if c.at > now:
                     fill.setAlpha(110)   # still to come
-                if c.cast:   # its cast time, as a thin bar leading into it
-                    p.setPen(QPen(fill, 3, Qt.SolidLine, Qt.FlatCap))
-                    mid = rect.center().y()
-                    p.drawLine(QLineF(self._x(c.at - c.cast, now), mid, x, mid))
-                p.setPen(Qt.NoPen)
-                p.setBrush(fill)
-                p.drawRoundedRect(rect, 3, 3)
+                if not foe and c.result:   # begun and never finished: an outline, nothing inside
+                    p.setPen(QPen(theme.muted(pal), 1, Qt.DashLine))
+                    p.setBrush(Qt.NoBrush)
+                    p.drawRoundedRect(rect.adjusted(0.5, 0.5, -0.5, -0.5), 3, 3)
+                elif foe:   # outlined; its cast time as a thin bar on to when it ended
+                    line = (QColor.fromHsl(hue, 150, 150 if dark else 110) if hue is not None
+                            else QColor(theme.muted(pal)))
+                    line.setAlpha(fill.alpha())
+                    if c.cast:
+                        p.setPen(QPen(line, 3, Qt.SolidLine, Qt.FlatCap))
+                        p.drawLine(QLineF(x, rect.bottom() - 1, self._x(c.end, now), rect.bottom() - 1))
+                    p.setPen(QPen(line, 1.5))
+                    inner = QColor(fill)
+                    inner.setAlpha(fill.alpha() // 3)
+                    p.setBrush(inner)
+                    p.drawRoundedRect(rect.adjusted(0.75, 0.75, -0.75, -0.75), 3, 3)
+                else:
+                    if c.cast:   # its cast time, as a thin bar leading into it
+                        p.setPen(QPen(fill, 3, Qt.SolidLine, Qt.FlatCap))
+                        mid = rect.center().y()
+                        p.drawLine(QLineF(self._x(c.at - c.cast, now), mid, x, mid))
+                    p.setPen(Qt.NoPen)
+                    p.setBrush(fill)
+                    p.drawRoundedRect(rect, 3, 3)
                 if width > 14:
                     p.setPen(pal.windowText().color())
                     p.drawText(rect.adjusted(5, 0, -3, 0), Qt.AlignVCenter | Qt.AlignLeft,
-                               metrics.elidedText(c.name, Qt.ElideRight, int(width - 8)))
+                               metrics.elidedText(self._label(c), Qt.ElideRight, int(width - 8)))
                 self.boxes.append((rect, c))
         p.setClipping(False)
 
-        if len(self.shown) > 1:   # whose lane is whose, with a line between lanes
-            for i, who in enumerate(self.shown):
-                y = self.TOP + i * n * self.ROW
+        if len(lanes) > 1:   # whose lane is whose, with a line between lanes
+            for i, (who, _) in enumerate(lanes):
+                y = self.TOP + top[who] * self.ROW
                 p.setPen(pal.windowText().color() if who == self.you else theme.muted(pal))
                 p.drawText(QRectF(self.PAD, y, self.LABEL - 6, self.ROW - 2),
                            Qt.AlignVCenter | Qt.AlignLeft,
-                           metrics.elidedText(model.short_name(who), Qt.ElideRight, self.LABEL - 6))
+                           metrics.elidedText("Enemies" if who == self.ENEMIES
+                                              else model.short_name(who),
+                                              Qt.ElideRight, self.LABEL - 6))
                 if i:
                     line = QColor(theme.muted(pal))
                     line.setAlpha(60)
@@ -465,7 +549,18 @@ class CastStrip(QWidget):
         p.drawLine(QLineF(head, 0, head, self.height()))
         p.end()
 
-    def _cast_at(self, x: float, y: float) -> model.CastMark | None:
+    @staticmethod
+    def _label(c: model.CastMark | model.EnemyMark) -> str:
+        if isinstance(c, model.EnemyMark):
+            return c.label
+        return f"✕ {c.name}" if c.result else c.name
+
+    def contextMenuEvent(self, event):
+        cast = self._cast_at(event.pos().x(), event.pos().y())
+        if isinstance(cast, model.EnemyMark):
+            self.enemy_menu.emit(cast, event.globalPos())
+
+    def _cast_at(self, x: float, y: float) -> model.CastMark | model.EnemyMark | None:
         return next((c for rect, c in reversed(self.boxes) if rect.contains(QPointF(x, y))), None)
 
     def mousePressEvent(self, event):
@@ -490,7 +585,8 @@ class CastStrip(QWidget):
             self.seek.emit(self.position)
             return
         cast = self._cast_at(x, event.position().y())
-        self.setToolTip(model.cast_text(cast) if cast else "")
+        self.setToolTip("" if not cast else model.enemy_text(cast)
+                        if isinstance(cast, model.EnemyMark) else model.cast_text(cast))
 
     def mouseReleaseEvent(self, event):
         if self.grab_at is None:
@@ -506,6 +602,69 @@ class CastStrip(QWidget):
                            else max(0.0, now + (x - self._x(now, now)) / self._scale()))
         self.grab_at = None
         self.scrub_ended.emit()
+
+
+class ComingUp(QWidget):
+    """The enemies' casts about to go off, the soonest first: a countdown, the spell and the mob.
+    It lists what the cast strip's enemies lane shows, so hiding a mob or a spell there hides it
+    here. One that was kicked or stopped has a ✕ and counts down to when that happened."""
+
+    ROW = 20
+    PAD = 8
+    SOON, SOONER = 5.0, 3.0   # seconds: the countdown turns amber, then red
+
+    def __init__(self, strip: CastStrip):
+        super().__init__()
+        self.strip = strip
+        self.setMinimumWidth(230)
+        self.setMaximumWidth(320)
+        self.ticker = QTimer(self, interval=100)
+        self.ticker.timeout.connect(self.update)
+
+    def rows(self) -> list[tuple[float, model.EnemyMark]]:
+        return model.upcoming(self.strip.enemies_shown(), self.strip.now())
+
+    def showEvent(self, event):
+        self.ticker.start()
+        super().showEvent(event)
+
+    def hideEvent(self, event):
+        self.ticker.stop()
+        super().hideEvent(event)
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        pal = self.palette()
+        muted = theme.muted(pal)
+        font = p.font()
+        bold = QFont(font)
+        bold.setBold(True)
+        p.setPen(muted)
+        p.drawText(QRectF(self.PAD, 0, self.width() - 2 * self.PAD, self.ROW),
+                   Qt.AlignVCenter | Qt.AlignLeft, "Coming up")
+        metrics = p.fontMetrics()
+        count_w = metrics.horizontalAdvance("00.0") + 8
+        rows = self.rows()
+        now = self.strip.now()
+        for i, (left, c) in enumerate(rows):
+            y = (i + 1) * self.ROW
+            if y + self.ROW > self.height():
+                break
+            p.setFont(bold if c.at <= now else font)   # under way
+            p.setPen(muted if c.result else theme.color("error", pal) if left < self.SOONER
+                     else theme.color("warning", pal) if left < self.SOON else pal.windowText().color())
+            p.drawText(QRectF(self.PAD, y, count_w, self.ROW), Qt.AlignVCenter | Qt.AlignRight,
+                       f"{left:.1f}")
+            p.setPen(muted if c.result else pal.windowText().color())
+            room = self.width() - 2 * self.PAD - count_w - 8
+            p.drawText(QRectF(self.PAD + count_w + 8, y, room, self.ROW), Qt.AlignVCenter | Qt.AlignLeft,
+                       metrics.elidedText(f"{c.label} · {c.who}", Qt.ElideRight, int(room)))
+        if not rows:
+            p.setFont(font)
+            p.setPen(muted)
+            p.drawText(QRectF(self.PAD, self.ROW, self.width() - 2 * self.PAD, self.ROW),
+                       Qt.AlignVCenter | Qt.AlignLeft, "Nothing in the next 10 s")
+        p.end()
 
 
 class StayOpenMenu(QMenu):
@@ -761,19 +920,22 @@ class ClipBrowser(QWidget):
         self.full_button.clicked.connect(self.toggle_full_screen)
         self.full_screen = False
         self.was_maximized = False
-        # The group's casts under the video, for clips that have them: Casts shows or hides
+        # The group's casts under the timeline, for clips that have them: Casts shows or hides
         # them, its menu ticks whose (you, unless other players are ticked).
         self.cast_strip = CastStrip()
         self.cast_strip.seek.connect(self.seek)
         self.cast_strip.scrub_started.connect(self.scrub_start)
         self.cast_strip.scrub_ended.connect(self.scrub_end)
+        self.cast_strip.enemy_menu.connect(self.enemy_cast_menu)
+        self.coming_up = ComingUp(self.cast_strip)
         self.casts_menu = StayOpenMenu(self)
+        self.enemies_menu: QMenu | None = None   # the casts menu's "Which enemies", when it has one
         self.casts_button = QToolButton()
         self.casts_button.setText("Casts")
         self.casts_button.setCheckable(True)
         self.casts_button.setAutoRaise(True)
         self.casts_button.setFocusPolicy(Qt.NoFocus)   # Space plays, not this
-        self.casts_button.setToolTip("Show the spells cast, under the video (C); the arrow picks "
+        self.casts_button.setToolTip("Show the spells cast, under the timeline (C); the arrow picks "
                                      "whose")
         self.casts_button.setMenu(self.casts_menu)
         self.casts_button.setPopupMode(QToolButton.MenuButtonPopup)
@@ -848,6 +1010,18 @@ class ClipBrowser(QWidget):
         self.events.itemClicked.connect(self.seek_to_event)
         self.events.setContextMenuPolicy(Qt.CustomContextMenu)
         self.events.customContextMenuRequested.connect(self.event_menu)
+        # Kicks: who kicked and dispelled, and the kickable casts that went off anyway.
+        self.kicks = QTreeWidget()
+        self.kicks.setHeaderHidden(True)
+        self.kicks.setColumnCount(3)
+        self.kicks.setIndentation(18)
+        self.kicks.setUniformRowHeights(True)
+        self.kicks.itemActivated.connect(self.seek_to_event)
+        self.kicks.itemClicked.connect(self.seek_to_event)
+        self.lists = QTabWidget()
+        self.lists.setDocumentMode(True)
+        self.lists.addTab(self.events, "Events")
+        self.lists.addTab(self.kicks, "Kicks")
 
         # Actions: Play is the main one (with the player); the rest are an icon row and a menu.
         self.keep_button = self._tool_button("Keep this clip forever, whatever \"Keep clips\" says",
@@ -896,15 +1070,18 @@ class ClipBrowser(QWidget):
         dv.setContentsMargins(0, 0, 0, 0)
         dv.addLayout(header)
         dv.addWidget(self.facts)
-        dv.addWidget(self.events, 1)
+        lists_row = QHBoxLayout()
+        lists_row.addWidget(self.lists, 1)
+        lists_row.addWidget(self.coming_up)
+        dv.addLayout(lists_row, 1)
 
         player = QWidget()
         pv = QVBoxLayout(player)
         pv.setContentsMargins(0, 0, 0, 0)
-        pv.addWidget(self.video_stack, 1)
-        pv.addWidget(self.cast_strip)
+        pv.addWidget(self.video_stack, 1)   # the controls and scrub bar right under the video
         pv.addLayout(controls)
         pv.addWidget(self.highlight_bar)
+        pv.addWidget(self.cast_strip)
         # Drag the bar under the timeline to give the video more room, or the details.
         right = BarSplitter(Qt.Vertical)
         right.setChildrenCollapsible(False)
@@ -1118,7 +1295,8 @@ class ClipBrowser(QWidget):
         while (item := self.checklist_rows.takeAt(0)) is not None:
             if item.widget():
                 item.widget().deleteLater()
-        heading = QLabel("Not ready to record yet")
+        heading = QLabel("Not ready to record yet" if any(s.needed and not s.ok for s in steps)
+                         else "Worth a look")
         font = heading.font()
         font.setBold(True)
         heading.setFont(font)
@@ -1397,9 +1575,10 @@ class ClipBrowser(QWidget):
             self.result_chip.setStyleSheet("")
             self.facts.setText("")
             self.events.clear()
+            self.fill_kicks({})
             self.timeline.set_clip(0, {})
             self.cast_strip.set_casts([])
-            self.fill_casts_menu([], None)
+            self.fill_casts_menu([], None, [])
             self.show_casts()
             self.highlight_bar.hide()
             return
@@ -1500,11 +1679,20 @@ class ClipBrowser(QWidget):
             facts.append("chat hidden")
         if d.get("log_late"):
             facts.append(f"combat log began {model.mmss(d['log_late'])} late")
+        if d.get("log_basic"):
+            facts.append("Advanced Combat Logging was off")
+        if d.get("log_version"):
+            facts.append(f"combat log version {d['log_version']} is new to this app")
+        best = model.best_run(clip, self.clips)
+        if best:
+            facts.append(model.best_text(best))
         if clip.elsewhere:
             facts.append(f"in {clip.path.parent}")
         self.facts.setText(" · ".join(facts))
         self.events.clear()
-        rows = model.session_event_rows(d) if clip.is_session else model.event_rows(d)
+        rows = (model.session_event_rows(d) if clip.is_session
+                else model.event_rows(d, best.details if best else None))
+        self.fill_kicks(d)
         for row in rows:
             item = self._event_tree(row)
             self.events.addTopLevelItem(item)
@@ -1524,11 +1712,11 @@ class ClipBrowser(QWidget):
         marks = self.timeline.marks
         self.timeline.set_clip(d.get("clip_length") or self.player.duration() / 1000, d)
         self.timeline.set_marks(marks)   # a reload while making a highlight keeps it
-        casts = model.casts(d)
-        if casts != self.cast_strip.casts:
-            self.cast_strip.set_casts(casts, d.get("player"))
+        casts, foes = model.casts(d), model.enemy_casts(d)
+        if casts != self.cast_strip.casts or foes != self.cast_strip.enemy_casts:
+            self.cast_strip.set_casts(casts, d.get("player"), foes)
             self.cast_strip.set_position(self.player.position() / 1000)
-            self.fill_casts_menu(model.casters(d), d.get("player"))
+            self.fill_casts_menu(model.casters(d), d.get("player"), model.enemies(d))
         self.show_casts()
         self.keep_button.setChecked(clip.keep)
         self.keep_button.setText("★ Kept" if clip.keep else "☆ Keep")
@@ -1546,6 +1734,25 @@ class ClipBrowser(QWidget):
         self.hook_button.setVisible(bool(self.cfg and self.cfg.after_clips) and not clip.is_session
                                     and not clip.elsewhere)
 
+    def fill_kicks(self, details: dict):
+        """The Kicks tab: there only for a clip with kicks or dispels."""
+        self.kicks.clear()
+        has = model.has_kicks(details)
+        self.lists.setTabVisible(1, has)
+        if not has:
+            return
+        for row in model.kick_rows(details):
+            self.kicks.addTopLevelItem(self._event_tree(row))
+        self.kicks.expandAll()   # a column is sized by the rows that are open: all, for the times
+        for col in (0, 2):
+            self.kicks.resizeColumnToContents(col)
+        self.kicks.collapseAll()
+        for i in range(self.kicks.topLevelItemCount()):
+            # the headings are open, the players and spells under them shut
+            self.kicks.topLevelItem(i).setExpanded(True)
+        self.kicks.header().setStretchLastSection(False)
+        self.kicks.header().setSectionResizeMode(1, QHeaderView.Stretch)
+
     def _event_tree(self, row: model.EventRow) -> QTreeWidgetItem:
         """A row and everything under it."""
         item = self._event_item(row)
@@ -1561,14 +1768,19 @@ class ClipBrowser(QWidget):
             self._expand(item.child(i), child)
 
     def _event_item(self, row: model.EventRow) -> QTreeWidgetItem:
-        item = QTreeWidgetItem([model.mmss(row.at), row.text, row.detail])
+        # A death's hits are a second or two before it: no time of their own
+        item = QTreeWidgetItem(["" if row.at is None or row.kind == "hit" else model.mmss(row.at),
+                                row.text, row.detail])
         item.setData(0, Qt.UserRole, row.at)
-        end = row.children[-1].at if row.children and row.children[-1].kind in ("kill", "wipe") else None
-        item.setData(0, Qt.UserRole + 1, (row.kind if not row.children else "pull", end))
-        item.setIcon(1, event_icon(row.kind, self.palette()))
+        # A boss pull (or a session's run) holds what happened in it; a death only its hits.
+        holds = bool(row.children) and row.kind in ("kill", "wipe", "pull", "start", "")
+        end = row.children[-1].at if holds and row.children[-1].kind in ("kill", "wipe") else None
+        item.setData(0, Qt.UserRole + 1, ("pull" if holds and row.kind else row.kind, end))
+        if row.kind:
+            item.setIcon(1, event_icon(row.kind, self.palette()))
         item.setForeground(0, theme.muted(self.palette()))
         item.setForeground(2, theme.muted(self.palette()))
-        if row.children:
+        if holds:
             font = item.font(1)
             font.setBold(True)
             item.setFont(1, font)
@@ -1639,7 +1851,8 @@ class ClipBrowser(QWidget):
     def seek_to_event(self, item: QTreeWidgetItem):
         at = item.data(0, Qt.UserRole)
         if at is not None:
-            self.seek(model.seek_target(at))   # a few seconds of lead-up
+            kind = (item.data(0, Qt.UserRole + 1) or ("", None))[0]
+            self.seek(model.seek_target(at, kind))   # a few seconds of lead-up
             self.play()
 
     def seek(self, seconds: float):
@@ -1655,12 +1868,15 @@ class ClipBrowser(QWidget):
         self.cast_strip.set_position(seconds)
 
     def show_casts(self, *_args):
-        """The cast strip, when it's ticked, the clip has casts and someone is ticked in the
-        menu; the button only when the clip has casts."""
-        has = bool(self.cast_strip.casts)
+        """The cast strip, when it's ticked, the clip has casts and someone (or the enemies) is
+        ticked in the menu; the button only when the clip has casts."""
+        has = bool(self.cast_strip.casts or self.cast_strip.enemy_casts)
         self.casts_button.setVisible(has)
         self.cast_strip.setVisible(has and self.casts_button.isChecked()
-                                   and bool(self.cast_strip.shown))
+                                   and self.cast_strip.has_lanes())
+        self.coming_up.setVisible(
+            bool(self.cast_strip.enemy_casts) and self.casts_button.isChecked()
+            and self.cast_strip.enemies_on and self.settings.value("cast_upcoming", "true") != "false")
         if _args:   # ticked or unticked by the user
             self.settings.setValue("show_casts", "true" if _args[0] else "false")
 
@@ -1672,9 +1888,13 @@ class ClipBrowser(QWidget):
             others = set()
         return self.settings.value("cast_hide_you", "false") != "true", others
 
-    def fill_casts_menu(self, casters: list[str], you: str | None):
-        """A tick per player in the clip: you first, then the others by how much they cast."""
+    def fill_casts_menu(self, casters: list[str], you: str | None, mobs: list[str]):
+        """A tick per player in the clip: you first, then the others by how much they cast; then
+        the enemies, and a menu of them, the busiest first."""
         self.casts_menu.clear()
+        if self.enemies_menu:
+            self.enemies_menu.deleteLater()
+            self.enemies_menu = None
         show_you, others = self.cast_choice()
         major = self.casts_menu.addAction("Major cooldowns only")
         major.setToolTip("Big damage, healing and defensive spells, coloured red, green and blue")
@@ -1694,7 +1914,112 @@ class ClipBrowser(QWidget):
             self.casts_menu.addSeparator()
             self.casts_menu.addAction("Only you", lambda: self.tick_casters(only_you=True))
             self.casts_menu.addAction("Everyone", lambda: self.tick_casters(only_you=False))
+        if mobs:
+            self.fill_enemies_menu(mobs)
         self.show_cast_lanes()
+
+    def enemy_choice(self) -> tuple[bool, set[str], bool, set[tuple[str, str]]]:
+        """(the enemies' lane on, the mobs left out of it, spam left out, the spells left out),
+        from gui.ini."""
+        try:
+            hidden = set(json.loads(self.settings.value("cast_hidden_mobs", "[]")))
+        except (TypeError, ValueError):
+            hidden = set()
+        return (self.settings.value("cast_enemies", "true") != "false", hidden,
+                self.settings.value("cast_hide_spam", "true") != "false", self.hidden_spells())
+
+    def hidden_spells(self) -> set[tuple[str, str]]:
+        """The enemies' spells left out of their lane, as (mob, spell name), from gui.ini."""
+        try:
+            pairs = json.loads(self.settings.value("cast_hidden_spells", "[]"))
+            return {(str(mob), str(spell)) for mob, spell in pairs}
+        except (TypeError, ValueError):
+            return set()
+
+    def set_spell_hidden(self, mob: str, spell: str, hidden: bool, menu: bool = True):
+        """Leaves an enemy's spell out of the lane, or brings it back. menu: fill the casts menu
+        again, so its Hidden spells lists it (not while that menu is the one being ticked)."""
+        spells = self.hidden_spells()
+        spells = spells | {(mob, spell)} if hidden else spells - {(mob, spell)}
+        self.settings.setValue("cast_hidden_spells", json.dumps(sorted(map(list, spells))))
+        if menu and self.current:
+            self.fill_casts_menu(model.casters(self.current.details), self.cast_strip.you,
+                                 model.enemies(self.current.details))
+        else:
+            self.show_cast_lanes()
+
+    def enemy_cast_menu(self, cast: model.EnemyMark, where: QPoint):
+        """Right-click on an enemy's cast in the strip: leave that spell, or that mob, out."""
+        menu = QMenu(self)
+        menu.addAction(f"Hide {cast.name}", lambda: self.set_spell_hidden(cast.who, cast.name, True))
+        menu.addAction(f"Hide everything {cast.who} casts", lambda: self.hide_mob(cast.who))
+        menu.exec(where)
+
+    def hide_mob(self, name: str):
+        self.tick_mob(name, False)
+        for action in self.enemies_menu.actions() if self.enemies_menu else []:
+            if action.data() == name:
+                action.blockSignals(True)
+                action.setChecked(False)
+                action.blockSignals(False)
+
+    def fill_enemies_menu(self, mobs: list[str]):
+        on, hidden, hide_spam, hidden_spells = self.enemy_choice()
+        self.casts_menu.addSeparator()
+        lane = self.casts_menu.addAction("Enemies")
+        lane.setToolTip("The enemies' casts, in a lane of their own")
+        lane.setCheckable(True)
+        lane.setChecked(on)
+        lane.toggled.connect(lambda on: self.set_enemy_setting("cast_enemies", on))
+        soon = self.casts_menu.addAction("Coming up")
+        soon.setToolTip("A list of the enemies' casts about to go off, beside the events")
+        soon.setCheckable(True)
+        soon.setChecked(self.settings.value("cast_upcoming", "true") != "false")
+        soon.toggled.connect(lambda on: self.set_enemy_setting("cast_upcoming", on))
+        which = StayOpenMenu("Which enemies", self.casts_menu)
+        self.casts_menu.addMenu(which)
+        spam = which.addAction("Hide spam")
+        spam.setToolTip("Spells a mob casts dozens of times a minute")
+        spam.setCheckable(True)
+        spam.setChecked(hide_spam)
+        spam.toggled.connect(lambda on: self.set_enemy_setting("cast_hide_spam", on))
+        which.addSeparator()
+        for name in mobs:
+            action = which.addAction(name)
+            action.setCheckable(True)
+            action.setChecked(name not in hidden)
+            action.setData(name)
+            action.toggled.connect(lambda on, name=name: self.tick_mob(name, on))
+        if len(mobs) > 1:
+            which.addSeparator()
+            which.addAction("All", lambda: self.tick_mobs(True))
+            which.addAction("None", lambda: self.tick_mobs(False))
+        if hidden_spells:   # hidden with a right-click on the strip: untick to bring one back
+            spells = StayOpenMenu("Hidden spells", which)
+            which.addSeparator()
+            which.addMenu(spells)
+            for mob, spell in sorted(hidden_spells, key=lambda pair: (pair[1], pair[0])):
+                action = spells.addAction(f"{spell} ({mob})")
+                action.setCheckable(True)
+                action.setChecked(True)
+                action.toggled.connect(
+                    lambda on, mob=mob, spell=spell: self.set_spell_hidden(mob, spell, on, menu=False))
+        self.enemies_menu = which
+
+    def set_enemy_setting(self, key: str, on: bool):
+        self.settings.setValue(key, "true" if on else "false")
+        self.show_cast_lanes()
+
+    def tick_mob(self, name: str, on: bool):
+        hidden = self.enemy_choice()[1]
+        hidden = hidden - {name} if on else hidden | {name}
+        self.settings.setValue("cast_hidden_mobs", json.dumps(sorted(hidden)))
+        self.show_cast_lanes()
+
+    def tick_mobs(self, on: bool):
+        for action in self.enemies_menu.actions() if self.enemies_menu else []:
+            if action.isCheckable() and action.data():   # a mob's
+                action.setChecked(on)
 
     def tick_caster(self, name: str, mine: bool, on: bool):
         show_you, others = self.cast_choice()
@@ -1714,6 +2039,7 @@ class ClipBrowser(QWidget):
         self.cast_strip.set_shown([a.data() for a in self.casts_menu.actions()
                                    if a.data() and a.isChecked()])
         self.cast_strip.set_major_only(self.settings.value("cast_major_only", "false") == "true")
+        self.cast_strip.set_enemies(*self.enemy_choice())
         self.show_casts()
 
     def set_major_only(self, on: bool):
@@ -2456,6 +2782,9 @@ def event_icon(kind: str, palette) -> QIcon:
     elif kind == "death":
         p.setBrush(theme.color("death", palette))
         p.drawRoundedRect(QRectF(5.5, 1, 3, 12), 1, 1)
+    elif kind == "hit":   # one of a death's last hits
+        p.setBrush(theme.color("death", palette))
+        p.drawEllipse(QRectF(5, 5, 4, 4))
     elif kind == "lust":
         p.setPen(QPen(theme.color("lust", palette), 3, Qt.SolidLine, Qt.FlatCap))
         p.drawLine(QLineF(3, 2, 3, 12))

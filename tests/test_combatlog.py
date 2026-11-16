@@ -1,6 +1,7 @@
-from linux_wow_recorder.combatlog import (Cast, count_special_mobs, drop_despawns, find_runs,
-                                          last_event_time, parse_log_time, read_casts,
-                                          read_log_events, run_in_progress)
+from linux_wow_recorder.combatlog import (Cast, Death, Dispel, EnemyCast, Hit, Run, add_death_hits,
+                                          count_special_mobs, drop_despawns, find_runs, hits_before,
+                                          last_event_time, log_header, log_notes, parse_log_time,
+                                          read_casts, read_hits, read_log_events, run_in_progress)
 
 T0 = 1_800_000_000.0
 
@@ -595,6 +596,55 @@ def test_read_casts_keeps_the_groups(tmp_path):
     assert len(read_casts([log])) == 4
 
 
+def mob_line(at, event, spell, name, guid="Creature-0-1-2-3-100-A", who="Caster", flags="0xa48"):
+    return cast_line(at, event, spell, name, guid, who, flags)
+
+
+def kick_line(at, kicked, kicked_name, mob="Creature-0-1-2-3-100-A", who="Caster",
+              kicker="Player-1-ME", kicker_name="Me-Realm-US", flags="0xa48"):
+    return (f'10/8/2026 19:03:{at:06.3f}-7  SPELL_INTERRUPT,{kicker},"{kicker_name}",0x511,0x0,'
+            f'{mob},"{who}",{flags},0x0,47528,"Mind Freeze",0x10,{kicked},"{kicked_name}",4\n')
+
+
+def test_read_casts_keeps_the_enemies(tmp_path):
+    log = tmp_path / "WoWCombatLog-100826_190000.txt"
+    t = parse_log_time("10/8/2026 19:03:00.000-7")
+    other = "Creature-0-1-2-3-100-B"
+    log.write_text(
+        mob_line(1, "SPELL_CAST_START", 1, "Earth Bolt")
+        + mob_line(3, "SPELL_CAST_SUCCESS", 1, "Earth Bolt")            # went off: cast 2 s
+        + mob_line(4, "SPELL_CAST_SUCCESS", 2, "Fel Missiles")          # a channel: no START
+        + mob_line(5, "SPELL_CAST_START", 1, "Earth Bolt")
+        + kick_line(6.5, 1, "Earth Bolt")                               # kicked 1.5 s in
+        + mob_line(7, "SPELL_CAST_START", 3, "Healing Breeze", other, "Tender", "0x10a48")
+        + mob_line(9, "SPELL_CAST_START", 1, "Earth Bolt", other, "Tender", "0x10a48")  # stopped
+        + kick_line(10, 4, "Lightning Bolt", "Vehicle-0-1-2-3-200-C", "Boss",
+                    "Pet-0-1-2-3-4-5", "Felhunter")                     # START not in the log
+        + mob_line(11, "SPELL_CAST_SUCCESS", 205231, "Eye Beam", "Creature-0-1-2-3-103673-D",
+                   "Darkglare", "0x2148")                               # an outsider's pet
+        + mob_line(12, "SPELL_CAST_SUCCESS", 5, "Bite", "Creature-0-1-2-3-300-E", "Wolf",
+                   "0xa18")                                             # not hostile
+        + kick_line(13, 6, "Chaos Bolt", "Player-1-PVP", "Enemy-Realm-US", flags="0x548")
+        + mob_line(14, "SPELL_CAST_START", 7, "Summon", "Creature-0-1-2-3-400-F", "Totem",
+                   "0x2248")                                            # a mob's summon
+        + mob_line(50, "SPELL_CAST_SUCCESS", 7, "Summon", "Creature-0-1-2-3-400-F", "Totem",
+                   "0x2248")                                            # far too late
+        + mob_line(52, "SPELL_CAST_SUCCESS", 8, "Mending Void", "Creature-0-1-2-3-500-G", "Minder")
+        + kick_line(53.5, 8, "Mending Void", "Creature-0-1-2-3-500-G", "Minder")   # a channel
+    )
+    assert read_casts([log]) == [
+        EnemyCast(t + 1, 1, "Earth Bolt", "Caster", 2.0),
+        EnemyCast(t + 4, 2, "Fel Missiles", "Caster"),
+        EnemyCast(t + 5, 1, "Earth Bolt", "Caster", 1.5, "kicked", "Me-Realm-US"),
+        EnemyCast(t + 7, 3, "Healing Breeze", "Tender", result="stopped"),
+        EnemyCast(t + 9, 1, "Earth Bolt", "Tender", result="stopped"),
+        EnemyCast(t + 10, 4, "Lightning Bolt", "Boss", result="kicked", kicker="Felhunter"),
+        EnemyCast(t + 14, 7, "Summon", "Totem", result="stopped"),
+        EnemyCast(t + 50, 7, "Summon", "Totem"),
+        EnemyCast(t + 52, 8, "Mending Void", "Minder", 1.5, "kicked", "Me-Realm-US"),
+    ]
+
+
 def test_last_event_time_is_the_newest_whole_line(tmp_path):
     log = tmp_path / "WoWCombatLog-102626_120415.txt"
     assert last_event_time([]) is None
@@ -689,3 +739,110 @@ def test_a_garbled_guid_is_no_npc():
     from linux_wow_recorder import forces
     assert forces.npc_id("Creature-0-3767-2290-17123-164567-00004A2F1D") == 164567
     assert forces.npc_id("Creature-0-3767-2290-17123-16x-00") is None
+
+
+def test_a_cast_begun_and_never_finished_is_listed_as_stopped(tmp_path):
+    log = tmp_path / "WoWCombatLog-100826_190000.txt"
+    t = parse_log_time("10/8/2026 19:03:00.000-7")
+    log.write_text(
+        cast_line(1, "SPELL_CAST_START", 133, "Fireball")
+        + cast_line(2, "SPELL_CAST_SUCCESS", 108853, "Fire Blast")     # an instant mid-cast
+        + cast_line(3, "SPELL_CAST_SUCCESS", 133, "Fireball")          # went off: cast 2 s
+        + cast_line(4, "SPELL_CAST_START", 133, "Fireball")            # moved: never went off
+        + cast_line(6, "SPELL_CAST_START", 11366, "Pyroblast")         # nor did this, by the end
+        + cast_line(7, "SPELL_CAST_START", 6478, "Opening")            # a door: never "goes off"
+        + cast_line(30, "SPELL_CAST_SUCCESS", 108853, "Fire Blast")
+    )
+    assert read_casts([log]) == [
+        Cast(t + 2, 108853, "Fire Blast", "Me-Realm-US", mine=True),
+        Cast(t + 3, 133, "Fireball", "Me-Realm-US", 2.0, mine=True),
+        Cast(t + 4, 133, "Fireball", "Me-Realm-US", mine=True, result="stopped"),
+        Cast(t + 30, 108853, "Fire Blast", "Me-Realm-US", mine=True),
+    ]
+
+
+def test_read_casts_keeps_the_groups_dispels(tmp_path):
+    log = tmp_path / "WoWCombatLog-100826_190000.txt"
+    t = parse_log_time("10/8/2026 19:03:00.000-7")
+
+    def dispel(at, event, who, flags, target):
+        return (f'10/8/2026 19:03:{at:06.3f}-7  {event},Player-1-H,"{who}",{flags},0x0,'
+                f'Player-1-T,"{target}",0x512,0x0,77130,"Purify Spirit",0x8,1294569,'
+                f'"Paralyzing Shots",8,DEBUFF\n')
+    log.write_text(dispel(1, "SPELL_DISPEL", "Healer-Realm-US", "0x512", "Tank-Realm-US")
+                   + dispel(2, "SPELL_STOLEN", "Me-Realm-US", "0x511", "Mage Mob")
+                   + dispel(3, "SPELL_DISPEL", "Stranger-Realm-US", "0x548", "Tank-Realm-US"))
+    assert read_casts([log]) == [
+        Dispel(t + 1, "Healer-Realm-US", 1294569, "Paralyzing Shots", "Tank-Realm-US"),
+        Dispel(t + 2, "Me-Realm-US", 1294569, "Paralyzing Shots", "Mage Mob"),
+    ]
+
+
+# The unit's 19 advanced-logging fields, between a damage line's spell and its amounts.
+INFO = "Player-1-T,0000000000000000,100,200,1,2,3,4,0,5,6,7,1.0,2.0,2588,3.1,700"
+
+
+def hit_line(at, spell, amount, overkill=-1, mob="Venom Leech", name="Tank-Realm-US", flags="0x512",
+             event="SPELL_DAMAGE", info=INFO + ","):
+    what = "" if event == "SWING_DAMAGE" else f'{spell},"Spell {spell}",0x8,'
+    end = "" if event == "SWING_DAMAGE" else ",ST"
+    return (f'10/8/2026 19:03:{at:06.3f}-7  {event},Creature-0-1-2-3-100-A,"{mob}",0xa48,0x0,'
+            f'Player-1-T,"{name}",{flags},0x0,{what}{info}{amount},{amount + 5},{overkill},8,0,0,0,nil,nil,nil{end}\n')
+
+
+def test_the_hits_before_a_death(tmp_path):
+    log = tmp_path / "WoWCombatLog-100826_190000.txt"
+    t = parse_log_time("10/8/2026 19:03:00.000-7")
+    fall = ('10/8/2026 19:03:40.000-7  ENVIRONMENTAL_DAMAGE,0000000000000000,nil,0x80000000,0x80000000,'
+            f'Player-1-M,"Me-Realm-US",0x511,0x0,{INFO},Falling,900,900,0,1,0,0,0,nil,nil,nil\n')
+    log.write_text(
+        hit_line(1, 1, 100)                                        # long before: not kept
+        + "".join(hit_line(20 + i, 2, 200 + i) for i in range(6))  # six in the last 10 s
+        + hit_line(26, 3, 5000, overkill=1200, event="SPELL_PERIODIC_DAMAGE")   # the killing one
+        + hit_line(26.2, 0, 50, event="SWING_DAMAGE")              # logged after it, before the death
+        + hit_line(26.1, 4, 70, name="Healer-Realm-US")            # someone else
+        + hit_line(26.1, 4, 70, name="Stranger-Realm-US", flags="0x548")   # not in the group
+        + hit_line(27, 5, 10, info="")                             # without advanced logging
+        + fall
+    )
+    hits = read_hits([log])
+    assert len(hits) == 12 and hits[-1] == Hit(t + 40, "Me-Realm-US", "", "Falling", 900, mine=True)
+    assert [h.spell for h in hits if h.amount == 10] == ["Spell 5"]   # read from the line's end
+    last = hits_before(hits, t + 26.3, "Tank-Realm-US")
+    assert [(h.spell, h.amount, h.killing) for h in last] == [
+        ("Spell 2", 203, False), ("Spell 2", 204, False), ("Spell 2", 205, False),
+        ("Spell 3", 5000, True), ("Melee", 50, False)]
+    assert last[3].source == "Venom Leech" and not hits[7].killing   # copies: the read ones stay
+    # Without overkill anywhere, the last hit is the one; the logger is found without a name
+    assert [(h.spell, h.killing) for h in hits_before(hits, t + 40.01)] == [("Falling", True)]
+    assert hits_before(hits, t + 100, "Tank-Realm-US") == []
+    # Reading only around the deaths gives the same hits for them
+    near = read_hits([log], [t + 26.3])
+    assert hits_before(near, t + 26.3, "Tank-Realm-US") == last and len(near) < len(hits)
+    assert read_hits([log], []) == []
+    run = Run("Dungeon", t, t + 60, "+2", deaths=[Death("Tank-Realm-US", t + 26.3)])
+    add_death_hits([run], [log])
+    assert run.deaths[0].hits == last
+
+
+def test_a_logs_first_line_says_its_version_and_advanced_logging(tmp_path):
+    def log(name, line):
+        path = tmp_path / name
+        path.write_text(line + "\n10/8/2026 19:00:01.000-7  ZONE_CHANGE,1,\"Zone\",0\n")
+        return path
+    head = "10/8/2026 19:00:00.000-7  COMBAT_LOG_VERSION,{},ADVANCED_LOG_ENABLED,{},BUILD_VERSION,12.1.5,PROJECT_ID,1"
+    fine, basic, new = (log("a.txt", head.format(22, 1)), log("b.txt", head.format(22, 0)),
+                        log("c.txt", head.format(23, 1)))
+    assert log_header(fine) == (22, True) and log_header(basic) == (22, False)
+    assert log_header(log("d.txt", "10/8/2026 19:00:00.000-7  ZONE_CHANGE,1,\"Zone\",0")) == (None, None)
+    assert log_header(tmp_path / "missing.txt") == (None, None)
+    assert log_notes([fine]) == {}
+    assert log_notes([fine, basic, new]) == {"log_basic": True, "log_version": 23}
+    assert log_notes([log("e.txt", head.format(9, 1))]) == {}   # an older client's: not new
+
+
+def test_a_death_moment_keeps_who_died():
+    from linux_wow_recorder.combatlog import find_moments
+    events = [zone(0, 0, "Mulgore", 0), unit_died(100, "Player-1-ME", "0x511")]
+    [moment] = find_moments(events, ["death"])
+    assert [(d.name, d.time) for d in moment.deaths] == [(events[1][2][5], T0 + 100)]

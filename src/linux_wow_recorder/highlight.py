@@ -51,6 +51,11 @@ def details(clip_details: dict, source: Path, start: float, end: float,
              if at(l["at"]) is not None]
     casts = [[at(c[0]), *c[1:]] for c in clip_details.get("casts") or []
              if at(c[0]) is not None]
+    enemy_casts = [[at(c[0]), *c[1:]] for c in clip_details.get("enemy_casts") or []
+                   if at(c[0]) is not None]
+    dispels = [[at(c[0]), *c[1:]] for c in clip_details.get("dispels") or []
+               if at(c[0]) is not None]
+    used = {c[1] for c in casts + enemy_casts} | {c[2] for c in dispels}
     copy = {k: v for k, v in clip_details.items() if k not in ("thumbnail", "run_offset")}
     copy.update({
         "clip_start": (clip_details.get("clip_start") or 0) + start,
@@ -58,10 +63,12 @@ def details(clip_details: dict, source: Path, start: float, end: float,
         "encounters": encounters,
         "deaths": deaths,
         "lusts": lusts,
-        **({"casts": casts,
-            "spells": {k: v for k, v in (clip_details.get("spells") or {}).items()
-                       if int(k) in {c[1] for c in casts}}}
-           if "casts" in clip_details else {}),
+        **({"casts": casts} if "casts" in clip_details else {}),
+        **({"enemy_casts": enemy_casts} if "enemy_casts" in clip_details else {}),
+        **({"dispels": dispels} if "dispels" in clip_details else {}),
+        **({"spells": {k: v for k, v in (clip_details.get("spells") or {}).items()
+                       if int(k) in used}}
+           if "casts" in clip_details or "enemy_casts" in clip_details else {}),
         "deaths_total": len(deaths),
         "bosses_killed": sum(1 for e in encounters if e.get("killed") and e.get("end") is not None),
         "keep": False,

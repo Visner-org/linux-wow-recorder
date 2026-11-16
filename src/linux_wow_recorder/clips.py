@@ -14,8 +14,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import addon
-from .combatlog import (RAIDS_ALL, Cast, Run, combat_logs_between, count_special_mobs, drop_despawns,
-                        elite_kills, find_moments, find_runs, read_casts, read_log_events)
+from .combatlog import (RAIDS_ALL, Cast, Dispel, EnemyCast, Hit, Run, add_death_hits, combat_logs_between,
+                        count_special_mobs, drop_despawns, elite_kills, find_moments, find_runs, hits_before,
+                        log_notes, read_casts, read_hits, read_log_events)
 from .config import STATE_DIR, Config
 from .detect import find_wow
 
@@ -259,14 +260,18 @@ def read_sidecar(clip: Path) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+# Thousands of them: each on one line, not a line per number.
+ONE_LINE = ("casts", "enemy_casts", "dispels")
+
+
 def write_sidecar(clip: Path, data: dict):
     path = sidecar_path(clip)
     tmp = path.with_name(path.name + ".part")
-    text = json.dumps({**data, "casts": None} if "casts" in data else data, indent=2,
-                      ensure_ascii=False)
-    if "casts" in data:   # thousands of them: on one line, not a line per number
-        text = text.replace('\n  "casts": null', '\n  "casts": '
-                            + json.dumps(data["casts"], separators=(",", ":")), 1)
+    long = [k for k in ONE_LINE if k in data]
+    text = json.dumps({**data, **dict.fromkeys(long)}, indent=2, ensure_ascii=False)
+    for k in long:
+        text = text.replace(f'\n  "{k}": null', f'\n  "{k}": '
+                            + json.dumps(data[k], separators=(",", ":"), ensure_ascii=False), 1)
     tmp.write_text(text + "\n")
     tmp.replace(path)
 
@@ -278,16 +283,21 @@ def set_keep(clip: Path, keep: bool):
     write_sidecar(clip, data)
 
 
-def cast_details(casts: list[Cast], clip_start: float, length: float) -> dict:
-    """The group's casts inside a clip, for its details: "casters", the players, the one
-    recording first ("player"; the one with the most casts if that changed) and then the others
-    by how much they cast; "casts" as [at, spell ID, caster's index] (and the cast time of a
-    hard cast); "spells" naming the IDs."""
+def cast_details(casts: list[Cast | EnemyCast | Dispel], clip_start: float, length: float) -> dict:
+    """The group's and the enemies' casts inside a clip, for its details: "casters", the
+    players, the one recording first ("player"; the one with the most casts if that changed) and
+    then the others by how much they cast; "casts" as [at, spell ID, caster's index] (and the
+    cast time of a hard cast; one begun at `at` and never finished: 0, "stopped"); "enemies",
+    the mobs' names by how much they cast; "enemy_casts", enemy_cast_row's; "dispels" as [at,
+    who, the spell ID taken off, whom it was on]; "spells" naming the IDs."""
     inside = [c for c in casts if 0 <= c.time - clip_start <= length]
+    group = [c for c in inside if isinstance(c, Cast)]
+    foes = [c for c in inside if isinstance(c, EnemyCast)]
+    dispels = [c for c in inside if isinstance(c, Dispel)]
     counts: dict[str, int] = {}
-    for c in inside:
+    for c in group:
         counts[c.player] = counts.get(c.player, 0) + 1
-    mine = [c.player for c in inside if c.mine]
+    mine = [c.player for c in group if c.mine]
     player = max(set(mine), key=mine.count) if mine else None
     casters = sorted(counts, key=lambda name: (name != player, -counts[name]))
     index = {name: i for i, name in enumerate(casters)}
@@ -295,13 +305,40 @@ def cast_details(casts: list[Cast], clip_start: float, length: float) -> dict:
         "player": player,
         "casters": casters,
         "casts": [[round(c.time - clip_start, 1), c.spell, index[c.player],
-                   *([c.cast] if c.cast else [])] for c in inside],
+                   *([0, c.result] if c.result else [c.cast] if c.cast else [])] for c in group],
+        **enemy_details(foes, clip_start),
+        "dispels": [[round(c.time - clip_start, 1), c.player, c.spell, c.target] for c in dispels],
         "spells": {str(c.spell): c.name for c in inside},
     }
 
 
+def enemy_details(foes: list[EnemyCast], clip_start: float) -> dict:
+    """"enemies" and "enemy_casts" for a clip's details (cast_details), from its enemies' casts.
+    Each cast is [at, spell ID, mob's index], at being when it began; then its cast time if it's
+    known (0 if not), and for one that didn't go off, "kicked" and who kicked it, or "stopped"."""
+    counts: dict[str, int] = {}
+    for c in foes:
+        counts[c.mob] = counts.get(c.mob, 0) + 1
+    mobs = sorted(counts, key=lambda name: -counts[name])
+    index = {name: i for i, name in enumerate(mobs)}
+
+    def row(c: EnemyCast) -> list:
+        tail = ([c.cast or 0, c.result, *([c.kicker] if c.kicker else [])] if c.result
+                else [c.cast] if c.cast else [])
+        return [round(c.time - clip_start, 1), c.spell, index[c.mob], *tail]
+    return {"enemies": mobs, "enemy_casts": [row(c) for c in foes]}
+
+
+def hit_details(hits: list[Hit], death: float) -> list[dict]:
+    """A death's last hits for a clip's details, oldest first: seconds before the death ("at",
+    0 or below), who did it ("by"; "" for falling and the like), the spell, the amount, and
+    "killing" on the one that killed."""
+    return [{"at": round(min(0.0, h.time - death), 1), "by": h.source, "spell": h.spell,
+             "amount": h.amount, **({"killing": True} if h.killing else {})} for h in hits]
+
+
 def sidecar_for(run: Run, clip_start: float, length: float, recording: Path,
-                casts: list[Cast] | None = None) -> dict:
+                casts: list[Cast | EnemyCast | Dispel] | None = None) -> dict:
     """The clip's details. Times inside the clip are seconds from its start; anything outside
     the clip (a run split over two recordings) is left out."""
     def at(t: float) -> float | None:
@@ -312,7 +349,9 @@ def sidecar_for(run: Run, clip_start: float, length: float, recording: Path,
                    "end": at(e.end) if e.end is not None else None, "killed": e.killed,
                    "forces": e.forces}
                   for e in run.encounters if at(e.start) is not None]
-    deaths = [{"name": d.name, "at": at(d.time)} for d in run.deaths if at(d.time) is not None]
+    deaths = [{"name": d.name, "at": at(d.time),
+               **({"hits": hit_details(d.hits, d.time)} if d.hits else {})}
+              for d in run.deaths if at(d.time) is not None]
     lusts = [{"name": l.name, "caster": l.caster, "at": at(l.time)}
              for l in run.lusts if at(l.time) is not None]
     return {
@@ -330,7 +369,7 @@ def sidecar_for(run: Run, clip_start: float, length: float, recording: Path,
         "clip_length": round(length, 1),
         "run_offset": round(max(0.0, run.start - clip_start), 1),
         "bosses_killed": sum(e.killed for e in run.encounters),
-        "deaths_total": len(run.deaths),
+        "deaths_total": 0 if run.is_moment else len(run.deaths),
         "encounters": encounters,
         "deaths": deaths,
         "lusts": lusts,
@@ -367,9 +406,10 @@ def cut_command(src: Path, offset: float, length: float, part: Path, faststart: 
 
 
 def cut_clip(cfg: Config, src: Path, rec_start: float, rec_end: float, run: Run,
-             casts: list[Cast] | None = None) -> Path | None:
-    """Cuts run's clip out of src and writes its sidecar (with the player's casts during it).
-    None if ffmpeg failed."""
+             casts: list[Cast | EnemyCast | Dispel] | None = None, notes: dict | None = None
+             ) -> Path | None:
+    """Cuts run's clip out of src and writes its sidecar (with the player's casts during it, and
+    notes: combatlog.log_notes'). None if ffmpeg failed."""
     offset, stop = clip_window(cfg, rec_start, rec_end, run)
     cfg.clips_dir.mkdir(parents=True, exist_ok=True)
     out = cfg.clips_dir / clip_name(run, rec_start, rec_end)
@@ -395,7 +435,7 @@ def cut_clip(cfg: Config, src: Path, rec_start: float, rec_end: float, run: Run,
                   f"{result.stderr.strip() or '(nothing)'}")
         return None
     part.replace(out)
-    details = sidecar_for(run, rec_start + offset, stop - offset, src, casts)
+    details = {**sidecar_for(run, rec_start + offset, stop - offset, src, casts), **(notes or {})}
     details["keep"] = read_sidecar(out).get("keep", False)   # a retry keeps the user's choice
     thumbnail = make_thumbnail(out, details)
     details["thumbnail"] = thumbnail.name if thumbnail else None
@@ -413,7 +453,7 @@ def _move_done(cfg: Config, src: Path, details: dict | None = None):
 
 
 def session_details(rec_start: float, rec_end: float, runs: list[Run], recording: Path,
-                    casts: list[Cast] | None = None, moments: bool = False) -> dict:
+                    casts: list[Cast | EnemyCast | Dispel] | None = None, moments: bool = False) -> dict:
     """A full recording's details, for the clip browser's Full sessions: its start and length,
     each dungeon run in it shaped like a clip's details, and the player's casts, with times
     from the recording's start."""
@@ -464,7 +504,15 @@ def process_recording(cfg: Config, src: Path) -> SessionResult:
     runs = [r for r in runs if r not in skipped]
     drop_despawns(runs, logs)
     count_special_mobs(runs, logs)
+    add_death_hits(runs, logs)
     casts = read_casts(logs)
+    notes = log_notes(logs)
+    if notes.get("log_basic"):
+        log.warning(f"{src.name}: Advanced Combat Logging was off (WoW: Options > Network); "
+                    "enemy forces may be off.")
+    if notes.get("log_version"):
+        log.warning(f"{src.name}: its combat log is version {notes['log_version']}, newer than "
+                    "this app knows; clips may miss details until the app is updated.")
     pulls = sum(r.is_raid for r in runs)
     log.info(f"{src.name}: {len(runs) - pulls} dungeon run(s) and {pulls} raid pull(s) in the "
              "combat log.")
@@ -475,7 +523,7 @@ def process_recording(cfg: Config, src: Path) -> SessionResult:
         if not clip_window(cfg, rec_start, rec_end, run):
             log.info(f"{run.name} {run.label} is barely in this recording; skipped.")
             continue
-        clip = cut_clip(cfg, src, rec_start, rec_end, run, casts)
+        clip = cut_clip(cfg, src, rec_start, rec_end, run, casts, notes)
         if clip:
             result.clips.append((run, clip))
         else:
@@ -547,8 +595,9 @@ def _cut_moments_of(cfg: Config, rec: Path, details: dict, levels: list[tuple[fl
         return result
     log.info(f"{rec.name}: {len(moments)} moment clip(s).")
     casts = read_casts(logs) if logs else None
+    add_death_hits(moments, logs)
     for m in moments:
-        clip = cut_clip(cfg, rec, rec_start, rec_end, m, casts)
+        clip = cut_clip(cfg, rec, rec_start, rec_end, m, casts, log_notes(logs))
         if clip:
             result.clips.append((m, clip))
         else:
@@ -600,10 +649,26 @@ def _process_all(cfg: Config, stop: threading.Event | None,
     return results
 
 
+def _add_hits(details: dict, start: float, hits: list[Hit]) -> bool:
+    """Gives the deaths in a clip's details (or in a full recording's runs) the hits before them,
+    where they have none yet. Whether any got them."""
+    added = False
+    for part in (details, *(details.get("runs") or [])):
+        for d in part.get("deaths") or []:
+            if "hits" in d or d.get("at") is None or not d.get("name"):
+                continue
+            found = hits_before(hits, start + d["at"], d["name"])
+            if found:
+                d["hits"] = hit_details(found, start + d["at"])
+                added = True
+    return added
+
+
 def add_casts(cfg: Config) -> tuple[int, int] | None:
-    """Adds the player's casts to the details of the clips and full recordings cut before casts
-    were read, from the combat logs still there. Returns (how many got them, how many have no
-    combat log left), or None while clips are being cut."""
+    """Adds to the details of the clips and full recordings cut by older versions what this one
+    reads, from the combat logs still there: the casts, the enemies' casts, the dispels, and what
+    killed each player. Returns (how many got something, how many have no combat log left to get
+    the group's casts from), or None while clips are being cut."""
     CUT_LOCK.parent.mkdir(parents=True, exist_ok=True)
     with open(CUT_LOCK, "a") as lock:
         try:
@@ -611,7 +676,8 @@ def add_casts(cfg: Config) -> tuple[int, int] | None:
         except BlockingIOError:
             return None
         added = missing = 0
-        read: dict[tuple[Path, ...], list[Cast]] = {}   # a big log is read once for all its clips
+        # a big log is read once for all its clips
+        read: dict[tuple[Path, ...], tuple[list[Cast | EnemyCast | Dispel], list[Hit]]] = {}
         for folder in (cfg.clips_dir, cfg.processed_dir):
             if not folder.is_dir():
                 continue
@@ -619,16 +685,28 @@ def add_casts(cfg: Config) -> tuple[int, int] | None:
                 details = read_sidecar(f)
                 start = details.get("clip_start", details.get("recording_start"))
                 length = details.get("clip_length", details.get("length"))
-                # "casters": read by this version (the first kept only the player's own)
-                if "casters" in details or start is None or not length:
+                # "dispels": read by this version (1.3.5, with what killed each player);
+                # "enemies" by 1.3.4; "casters" by 1.2.0 (the first kept only the player's own
+                # casts)
+                if "dispels" in details or start is None or not length:
                     continue
                 logs = tuple(combat_logs_between(cfg.combat_log_dir, start, start + length))
                 if not logs:
-                    missing += 1
+                    if "casters" not in details:
+                        missing += 1
                     continue
                 if logs not in read:
-                    read[logs] = read_casts(list(logs))
-                details.update(cast_details(read[logs], start, length))
+                    read[logs] = (read_casts(list(logs)), read_hits(list(logs)))
+                casts, hits = read[logs]
+                new = cast_details(casts, start, length)
+                if "casters" in details:   # the group's casts are there: only what's new since
+                    keys = ("dispels",) if "enemies" in details else ("enemies", "enemy_casts", "dispels")
+                    ids = {str(c[1]) for c in new["enemy_casts"]} | {str(c[2]) for c in new["dispels"]}
+                    new = {**{k: new[k] for k in keys},
+                           "spells": {**(details.get("spells") or {}),
+                                      **{k: v for k, v in new["spells"].items() if k in ids}}}
+                details.update(new)
+                _add_hits(details, start, hits)
                 write_sidecar(f, details)
                 added += 1
         return added, missing

@@ -11,7 +11,7 @@ import fcntl
 from linux_wow_recorder import clips, config
 from linux_wow_recorder.clips import (cleanup, clip_name, process_pending, read_sidecar, set_keep,
                                       stale_recordings)
-from linux_wow_recorder.combatlog import Run
+from linux_wow_recorder.combatlog import Cast, Death, Dispel, EnemyCast, Hit, Run
 
 
 def make_cfg(tmp_path, **storage):
@@ -62,6 +62,11 @@ def test_cuts_a_session_into_clips(tmp_path):
         f'Creature-0-1,"Ingra Maloch",0xa48,0x0,53600,"Shield of the Righteous",0x2\n'
         f'{stamp(start + 96)}  SPELL_CAST_SUCCESS,Player-1-B,"Healer-Realm-US",0x512,0x0,'
         f'Player-1-A,"Tank-Realm-US",0x511,0x0,8936,"Regrowth",0x8\n'
+        f'{stamp(start + 97)}  SPELL_CAST_START,Creature-0-1-2-3-164567-A,"Ingra Maloch",0x10a48,'
+        f'0x0,0000000000000000,nil,0x80000000,0x80000000,328177,"Fungal Fortitude",0x8\n'
+        f'{stamp(start + 98)}  SPELL_INTERRUPT,Player-1-A,"Tank-Realm-US",0x511,0x0,'
+        f'Creature-0-1-2-3-164567-A,"Ingra Maloch",0x10a48,0x0,96231,"Rebuke",0x1,328177,'
+        f'"Fungal Fortitude",8\n'
     )
     os.utime(log, (end, end))
 
@@ -87,7 +92,11 @@ def test_cuts_a_session_into_clips(tmp_path):
     assert details["player"] == "Tank-Realm-US"
     assert details["casters"] == ["Tank-Realm-US", "Healer-Realm-US"]
     assert details["casts"] == [[45, 53600, 0], [46, 8936, 1]]
-    assert details["spells"] == {"53600": "Shield of the Righteous", "8936": "Regrowth"}
+    # The enemies' casts, from when they began: this one kicked a second in.
+    assert details["enemies"] == ["Ingra Maloch"]
+    assert details["enemy_casts"] == [[47, 328177, 0, 1, "kicked", "Tank-Realm-US"]]
+    assert details["spells"] == {"53600": "Shield of the Righteous", "8936": "Regrowth",
+                                 "328177": "Fungal Fortitude"}
     # A picture for the clip browser, 20 s into the first pull.
     assert details["thumbnail"] == clip.with_suffix(".jpg").name
     assert clip.with_suffix(".jpg").read_bytes()[:2] == b"\xff\xd8"   # a JPEG
@@ -310,6 +319,26 @@ def test_only_one_program_cuts_at_a_time(tmp_path):
     assert process_pending(cfg, wait=False) == []
 
 
+def test_enemy_casts_in_a_clips_details(tmp_path):
+    t = 1_800_000_000.0
+    casts = [EnemyCast(t + 1, 1, "Earth Bolt", "Tender", 2.0),
+             EnemyCast(t + 2, 2, "Shoot", "Striker"),
+             EnemyCast(t + 3, 1, "Earth Bolt", "Tender", 1.5, "kicked", "Me-Realm-US"),
+             EnemyCast(t + 4, 3, "Lightning Bolt", "Tender", result="kicked", kicker="Felhunter"),
+             EnemyCast(t + 5, 1, "Earth Bolt", "Tender", result="stopped"),
+             EnemyCast(t + 99, 2, "Shoot", "Striker")]   # after the clip
+    d = clips.cast_details(casts, t, 30)
+    assert d["enemies"] == ["Tender", "Striker"]   # by how much they cast
+    assert d["enemy_casts"] == [[1.0, 1, 0, 2.0], [2.0, 2, 1], [3.0, 1, 0, 1.5, "kicked", "Me-Realm-US"],
+                                [4.0, 3, 0, 0, "kicked", "Felhunter"], [5.0, 1, 0, 0, "stopped"]]
+    assert d["spells"] == {"1": "Earth Bolt", "2": "Shoot", "3": "Lightning Bolt"}
+    assert d["casters"] == [] and d["casts"] == []
+    clips.write_sidecar(tmp_path / "c.mp4", d)
+    text = (tmp_path / "c.json").read_text()
+    assert '"enemy_casts": [[1.0,1,0,2.0],[2.0,2,1],' in text   # on one line
+    assert read_sidecar(tmp_path / "c.mp4") == d
+
+
 def test_add_casts_fills_in_older_clips(tmp_path):
     cfg = make_cfg(tmp_path)
     start = 1_800_000_000.0
@@ -319,6 +348,8 @@ def test_add_casts_fills_in_older_clips(tmp_path):
         f'0000000000000000,nil,0x80000000,0x80000000,1,"Judgment",0x2\n'
         f'{stamp(start + 50)}  SPELL_CAST_SUCCESS,Player-1-A,"Me-Realm-US",0x511,0x0,'
         f'0000000000000000,nil,0x80000000,0x80000000,2,"Consecration",0x2\n'
+        f'{stamp(start + 8)}  SPELL_CAST_SUCCESS,Creature-0-1-2-3-4-5,"Mob",0xa48,0x0,'
+        f'0000000000000000,nil,0x80000000,0x80000000,3,"Smash",0x1\n'
     )
     os.utime(log, (start + 100, start + 100))
     cfg.clips_dir.mkdir()
@@ -330,10 +361,23 @@ def test_add_casts_fills_in_older_clips(tmp_path):
                                                      "clip_length": 30.0})
     clips.write_sidecar(cfg.processed_dir / "rec.mkv", {"recording_start": start - 10,
                                                         "length": 100.0})
-    assert clips.add_casts(cfg) == (2, 1)
+    # Cut by 1.2.0 to 1.3.3: the group's casts, no enemies' (gets them; its own casts stay)
+    clips.write_sidecar(cfg.clips_dir / "group.mp4", {"clip_start": start, "clip_length": 30.0,
+                                                      "casts": [[9.0, 7, 0]], "casters": ["X-R-US"],
+                                                      "spells": {"7": "Kept"}})
+    # and with its log gone: not counted as missing, it has the group's casts
+    clips.write_sidecar(cfg.clips_dir / "group-gone.mp4", {"clip_start": start - 90000,
+                                                           "clip_length": 30.0, "casters": []})
+    assert clips.add_casts(cfg) == (4, 1)   # old, done (the enemies' only), rec, group
+    group = read_sidecar(cfg.clips_dir / "group.mp4")
+    assert group["casts"] == [[9.0, 7, 0]] and group["casters"] == ["X-R-US"]
+    assert group["enemies"] == ["Mob"] and group["enemy_casts"] == [[8.0, 3, 0]]
+    assert group["spells"] == {"7": "Kept", "3": "Smash"}
+    assert "enemies" not in read_sidecar(cfg.clips_dir / "group-gone.mp4")
+    assert clips.add_casts(cfg) == (0, 1)   # done once
     assert read_sidecar(cfg.clips_dir / "old.mp4")["casts"] == [[5.0, 1, 0]]
     assert '"casts": [[5.0,1,0]],' in (cfg.clips_dir / "old.json").read_text()   # one line
-    assert read_sidecar(cfg.clips_dir / "done.mp4")["casts"] == []   # already read: left alone
+    assert read_sidecar(cfg.clips_dir / "done.mp4")["casts"] == []   # already read: kept
     assert "casts" not in read_sidecar(cfg.clips_dir / "gone.mp4")   # its log is gone
     session = read_sidecar(cfg.processed_dir / "rec.mkv")
     assert session["casts"] == [[15.0, 1, 0], [60.0, 2, 0]] and session["player"] == "Me-Realm-US"
@@ -460,3 +504,62 @@ def test_moments_are_cut_once_wow_is_closed(tmp_path, monkeypatch):
     assert details["moments"][0]["at"] == 40   # the fight began 10 s earlier, moment_seconds into the clip
     assert "moments" not in read_sidecar(cfg.processed_dir / rec.name)
     assert process_pending(cfg) == []   # done: not cut again
+
+
+def test_a_clips_details_say_what_killed_and_who_dispelled(tmp_path):
+    start = 1_800_000_000.0
+    killing = Hit(start + 49.9, "Tank-Realm-US", "Venom Leech", "Septic Spatter", 531886, 49103, killing=True)
+    run = Run("Dungeon", start, start + 600, "+10 Completed", level=10, result="completed", deaths=[
+        Death("Tank-Realm-US", start + 50, [Hit(start + 48, "Tank-Realm-US", "", "Falling", 900), killing]),
+        Death("Healer-Realm-US", start + 60)])
+    casts = [Cast(start + 5, 1, "Fireball", "Me-Realm-US", mine=True, result="stopped"),
+             Cast(start + 9, 1, "Fireball", "Me-Realm-US", 2.5, mine=True),
+             Dispel(start + 20, "Healer-Realm-US", 7, "Paralyzing Shots", "Tank-Realm-US")]
+    details = clips.sidecar_for(run, start, 600, Path("rec.mkv"), casts)
+    assert details["deaths"] == [
+        {"name": "Tank-Realm-US", "at": 50.0, "hits": [
+            {"at": -2.0, "by": "", "spell": "Falling", "amount": 900},
+            {"at": -0.1, "by": "Venom Leech", "spell": "Septic Spatter", "amount": 531886,
+             "killing": True}]},
+        {"name": "Healer-Realm-US", "at": 60.0}]   # nothing hit them in the log: no hits
+    assert details["casts"] == [[5.0, 1, 0, 0, "stopped"], [9.0, 1, 0, 2.5]]
+    assert details["dispels"] == [[20.0, "Healer-Realm-US", 7, "Tank-Realm-US"]]
+    assert details["spells"] == {"1": "Fireball", "7": "Paralyzing Shots"}
+    clips.write_sidecar(tmp_path / "a.mp4", details)
+    assert '"dispels": [[20.0,"Healer-Realm-US",7,"Tank-Realm-US"]],' in (tmp_path / "a.json").read_text()
+
+
+def test_add_casts_adds_what_killed_and_the_dispels(tmp_path):
+    cfg = make_cfg(tmp_path)
+    start = 1_800_000_000.0
+    log = cfg.combat_log_dir / f"WoWCombatLog-{datetime.datetime.fromtimestamp(start - 600):%m%d%y_%H%M%S}.txt"
+    info = "Player-1-T,0000000000000000,100,200,1,2,3,4,0,5,6,7,1.0,2.0,2588,3.1,700"
+    log.write_text(
+        f'{stamp(start + 19)}  SPELL_DAMAGE,Creature-0-1-2-3-100-A,"Venom Leech",0xa48,0x0,Player-1-T,'
+        f'"Tank-Realm-US",0x512,0x0,9,"Septic Spatter",0x8,{info},5000,5005,1200,8,0,0,0,nil,nil,nil,AOE\n'
+        f'{stamp(start + 25)}  SPELL_DISPEL,Player-1-H,"Healer-Realm-US",0x512,0x0,Player-1-T,'
+        f'"Tank-Realm-US",0x512,0x0,77130,"Purify Spirit",0x8,7,"Paralyzing Shots",8,DEBUFF\n')
+    os.utime(log, (start + 100, start + 100))
+    cfg.clips_dir.mkdir()
+    cfg.processed_dir.mkdir()
+    # Cut by 1.3.4: the casts and the enemies' are there and stay as they are
+    clips.write_sidecar(cfg.clips_dir / "clip.mp4", {
+        "clip_start": start, "clip_length": 30.0, "casters": ["X-R-US"], "casts": [[9.0, 5, 0]],
+        "enemies": ["Old"], "enemy_casts": [[1.0, 6, 0]], "spells": {"5": "Kept", "6": "Theirs"},
+        "deaths": [{"name": "Tank-Realm-US", "at": 20.0}, {"name": "Healer-Realm-US", "at": 21.0}]})
+    clips.write_sidecar(cfg.processed_dir / "rec.mkv", {
+        "recording_start": start - 10, "length": 100.0, "casters": [], "casts": [], "enemies": [],
+        "enemy_casts": [], "runs": [{"deaths": [{"name": "Tank-Realm-US", "at": 30.0}]}]})
+    assert clips.add_casts(cfg) == (2, 0)
+    clip = read_sidecar(cfg.clips_dir / "clip.mp4")
+    assert clip["deaths"] == [
+        {"name": "Tank-Realm-US", "at": 20.0, "hits": [
+            {"at": -1.0, "by": "Venom Leech", "spell": "Septic Spatter", "amount": 5000, "killing": True}]},
+        {"name": "Healer-Realm-US", "at": 21.0}]
+    assert clip["dispels"] == [[25.0, "Healer-Realm-US", 7, "Tank-Realm-US"]]
+    assert clip["casts"] == [[9.0, 5, 0]] and clip["enemy_casts"] == [[1.0, 6, 0]]
+    assert clip["spells"] == {"5": "Kept", "6": "Theirs", "7": "Paralyzing Shots"}
+    session = read_sidecar(cfg.processed_dir / "rec.mkv")
+    assert session["runs"][0]["deaths"][0]["hits"][0]["spell"] == "Septic Spatter"
+    assert session["dispels"] == [[35.0, "Healer-Realm-US", 7, "Tank-Realm-US"]]
+    assert clips.add_casts(cfg) == (0, 0)   # done once

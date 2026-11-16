@@ -58,14 +58,14 @@ And in WoW:
   recorded but not cut. A completed key is found even if logging started late; an abandoned
   key needs logging on from the start.
 - **Advanced Combat Logging** on (Options > Network). Not required, but the log is more
-  complete.
+  complete; the clips window says so when the newest log was written without it.
 
 ## Installing
 
 ### Nobara or Fedora (RPM)
 
 ```bash
-sudo dnf install ./linux-wow-recorder-1.3.3-4.fc44.noarch.rpm
+sudo dnf install ./linux-wow-recorder-1.3.5-1.fc44.noarch.rpm
 ```
 
 This brings in ffmpeg and Qt, and on Nobara gpu-screen-recorder. Open **Linux WoW Recorder**
@@ -107,7 +107,7 @@ For Ubuntu 25.10+ (26.04 tested) and Debian 13. Download the `.deb` from
 [Releases](https://github.com/Visner-org/linux-wow-recorder/releases), then:
 
 ```bash
-sudo apt install ./linux-wow-recorder_1.3.3-4_all.deb
+sudo apt install ./linux-wow-recorder_1.3.5-1_all.deb
 flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
 flatpak install --user flathub com.dec05eba.gpu_screen_recorder
 ```
@@ -326,7 +326,9 @@ tray icons. Without a tray, closing the window quits the app.
 
 - **Recording now**: the newest frame every 3 seconds while WoW records, to check it's the
   right window. It's a few seconds behind, and waits while the window is in the background.
-- **Not ready to record yet**: a checklist of what's missing, with what to do.
+- **Not ready to record yet**: a checklist of what's missing, with what to do. **Worth a look**
+  means recording works, but something's off with the combat log (Advanced Combat Logging off,
+  or a log version new to the app).
 - **The clips** as cards or a sortable table (the Table / Cards button). **Showing** filters
   All, Completed or Abandoned; or search by dungeon.
 - **Keystones / Raids / Full sessions**: one clip per run, one per raid boss pull ("#3" is the
@@ -337,11 +339,28 @@ tray icons. Without a tray, closing the window quits the app.
   below. Click to play from there; hold and drag to scrub.
 - **Casts**: a strip of the spells cast, scrolling with the video; drag it to scrub. **Casts**
   (or C) shows or hides it, and picks whose casts get a lane. **Major cooldowns only** shows the
-  big ones: damage red, healing green, defensive blue. Casts are yours and your group's. Clips
-  from before 1.2.0 can get them with `linux-wow-recorder add-casts` while their logs exist.
+  big ones: damage red, healing green, defensive blue. Casts are yours and your group's; a
+  dashed box with a ✕ is a cast that was begun and never finished.
+- **Enemies**: the mobs' casts get a lane of their own under the group's, each from when the
+  mob began casting, with a bar to when it went off. ✕ marks one that didn't finish: hover it
+  to see who kicked it. Mobs casting the same thing together share a box ("×3"). **Which
+  enemies** in the Casts menu picks the mobs (remembered by name) and hides spam: spells a mob
+  casts dozens of times a minute and nobody kicks. Right-click a cast to hide that spell or
+  that mob; **Hidden spells** in the same menu brings a spell back.
+- **Coming up**: beside the events, the enemies' casts about to go off, with a countdown. It
+  lists what the Enemies lane shows. Untick **Coming up** in the Casts menu to hide it.
 - **The events**: one row per boss pull ("killed in 1:44 · 41.80% forces · 2 deaths") with its
   deaths and lusts. Click to play from there. Enemy forces are counted from the log, so they
   can be a little off from the game's bar; a key whose log began late doesn't have them.
+- **What killed whom**: a death's row names the hit that killed ("Septic Spatter (Venom Leech),
+  532k"); open it for the last hits before it. Falls and the like count too.
+- **Your best**: a key's boss kills say how far into the run they came, and how that compares
+  with your fastest completed clip of that dungeon at the same key level or higher ("at 12:40,
+  0:35 faster than best"). The line under the title names that run.
+- **Kicks**: a tab beside Events. Who kicked how often, the kickable casts that went off
+  anyway, and who dispelled what. Click a line to watch it.
+- **Older clips** get all of this with `linux-wow-recorder add-casts`, while their combat logs
+  exist.
 - **Highlights** save part of a clip as its own clip. The scissors button marks 30 seconds;
   drag the ends, or press I and O. Right-click a pull, death or lust for "Make a highlight of
   this". **Save highlight** takes seconds; it may start a second or two early (nearest
@@ -541,6 +560,9 @@ config file by hand: `systemctl --user restart linux-wow-recorder`.
 
 **Deaths or lusts look wrong.** They come straight from the combat log and aren't checked for
 every class yet. Please report it, with the clip's `.json` if you can.
+
+**"Combat log version ... is new to this app."** A WoW patch changed the combat log. Clips are
+still cut; details like casts or deaths may be off until the app's next version.
 
 ## Uninstalling
 

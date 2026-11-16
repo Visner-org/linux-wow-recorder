@@ -86,7 +86,9 @@ def test_clip_browser_lists_filters_and_shows_details(qtbot, cfg):
 
     # Clicking an event plays from a few seconds before it.
     w.seek_to_event(top[1].child(1))
-    assert w.timeline.position == 87.0
+    assert w.timeline.position == 84.0   # a death: a few more
+    w.seek_to_event(top[1].child(0))
+    assert w.timeline.position == 58.0   # the lust at 61
 
     # A bigger window grows the video, not the list.
     w.show()
@@ -1088,6 +1090,57 @@ def test_the_casts_strip_shows_your_casts_and_plays_from_one(qtbot, cfg):
     assert not w.cast_strip.isVisible() and not w.casts_button.isVisible()
 
 
+def test_the_casts_strip_has_an_enemies_lane(qtbot, cfg):
+    spam = [[10.0 + i * 0.2, 9, 1] for i in range(model.SPAM_PER_MINUTE + 1)]
+    make_clip(cfg, "a.mp4", dungeon="Ara-Kara", result="completed", label="+2 Completed",
+              run_start=RUN_START + 60, player="Me-R-US", casters=["Me-R-US"],
+              casts=[[20.0, 1, 0]], spells={"1": "Judgment", "2": "Web Bolt", "9": "Claws"},
+              enemies=["Weaver", "Descendant"],
+              enemy_casts=[[18.0, 2, 0, 1.0, "kicked", "Me-R-US"], [21.0, 2, 0, 2.0], *spam])
+    make_clip(cfg, "b.mp4", dungeon="The Stonevault", result="completed", label="+2 Completed",
+              enemies=["Golem"], enemy_casts=[[3.0, 2, 0]], spells={"2": "Smash"})
+    w = browser.ClipBrowser()
+    qtbot.addWidget(w)
+    w.show()
+    w.set_mode(model.KEYS)
+    w.select(str(cfg.clips_dir / "a.mp4"))
+    assert w.cast_strip.isVisible() and w.cast_strip.enemies_on
+    two_lanes = w.cast_strip.height()
+    strip = w.cast_strip   # you alone keep two rows, over the enemies' two
+    assert two_lanes == strip.TOP * 2 + 4 * strip.ROW + 2
+    enemies = next(a for a in w.casts_menu.actions() if a.text() == "Enemies")
+    assert enemies.isChecked() and w.enemies_menu is not None
+    w.cast_strip.set_position(22.0)
+    w.cast_strip.grab()
+    shown = [(type(c).__name__, c.name) for _, c in w.cast_strip.boxes]
+    assert ("CastMark", "Judgment") in shown
+    assert sorted(n for k, n in shown if k == "EnemyMark") == ["Web Bolt", "Web Bolt"]   # no spam
+    kicked = next(c for _, c in w.cast_strip.boxes if getattr(c, "result", "") == "kicked")
+    assert kicked.label == "✕ Web Bolt"
+    spam_tick, *mobs = [a for a in w.enemies_menu.actions() if a.isCheckable()]
+    assert spam_tick.text() == "Hide spam" and [a.text() for a in mobs] == ["Weaver", "Descendant"]
+    spam_tick.setChecked(False)   # the spam shows, and that's remembered
+    w.cast_strip.grab()
+    assert any(c.name == "Claws" for _, c in w.cast_strip.boxes)
+    assert w.enemy_choice() == (True, set(), False, set())
+    mobs[0].setChecked(False)   # no Weaver, remembered by name
+    w.cast_strip.grab()
+    assert not any(c.name == "Web Bolt" for _, c in w.cast_strip.boxes)
+    assert browser.ClipBrowser().enemy_choice()[1] == {"Weaver"}
+    enemies.setChecked(False)   # the lane goes
+    assert w.cast_strip.height() < two_lanes
+    w.cast_strip.grab()
+    assert not any(isinstance(c, model.EnemyMark) for _, c in w.cast_strip.boxes)
+    enemies.setChecked(True)
+    w.select(str(cfg.clips_dir / "b.mp4"))   # enemies' casts only: the strip still shows
+    assert w.casts_button.isVisible() and w.cast_strip.isVisible()
+    w.cast_strip.set_position(3.5)
+    w.cast_strip.grab()
+    assert [c.name for _, c in w.cast_strip.boxes] == ["Smash"]
+    for key in ("cast_enemies", "cast_hidden_mobs", "cast_hide_spam"):
+        w.settings.remove(key)
+
+
 def test_clicking_the_video_plays_and_pauses(qtbot, cfg, monkeypatch):
     make_clip(cfg, "a.mp4", dungeon="Ara-Kara", result="completed", label="+2 Completed")
     w = browser.ClipBrowser()
@@ -1148,3 +1201,99 @@ def test_key_rules_in_settings(qtbot, cfg, fake_recorder):
     assert (c["key_min_level"], c["key_min_time_left"], c["key_max_time_left"]) == (2, -5, "")
     w.key_min_level.setValue(1)
     assert w.collect()["clips"]["key_min_level"] == 0
+
+
+def test_kicks_coming_up_and_what_killed(qtbot, cfg):
+    make_clip(cfg, "a.mp4", dungeon="Ara-Kara", level=10, result="completed", label="+10 Completed",
+              timer=1500.0, time_limit=1800, run_start=RUN_START + 60, player="Me-R-US",
+              casters=["Me-R-US"], casts=[[19.0, 1, 0, 0, "stopped"], [20.0, 1, 0]],
+              spells={"1": "Judgment", "2": "Web Bolt", "3": "Slam", "7": "Poison"},
+              enemies=["Weaver", "Boss"],
+              enemy_casts=[[18.0, 2, 0, 1.0, "kicked", "Me-R-US"], [21.0, 2, 0, 2.0],
+                           [21.3, 2, 0, 2.0], [24.0, 3, 1, 3.0]],
+              dispels=[[30.0, "Me-R-US", 7, "Tank-R-US"]], log_basic=True, log_version=23,
+              encounters=[{"name": "Avanoxx", "start": 60.0, "end": 120.0, "killed": True}],
+              deaths=[{"name": "Tank-R-US", "at": 90.0, "hits": [
+                  {"at": -0.2, "by": "Weaver", "spell": "Web Bolt", "amount": 400000, "killing": True}]}])
+    make_clip(cfg, "best.mp4", dungeon="Ara-Kara", level=11, result="completed", label="+11 Completed",
+              timer=1400.0, time_limit=1800, run_start=RUN_START,
+              encounters=[{"name": "Avanoxx", "start": 80.0, "end": 140.0, "killed": True}])
+    make_clip(cfg, "plain.mp4", dungeon="The Stonevault", result="completed", label="+2 Completed",
+              run_start=RUN_START - 60)
+    w = browser.ClipBrowser()
+    qtbot.addWidget(w)
+    w.show()
+    w.set_mode(model.KEYS)
+    w.select(str(cfg.clips_dir / "a.mp4"))
+    facts = w.facts.text()
+    assert "Advanced Combat Logging was off" in facts and "combat log version 23" in facts
+    assert "best +11 in 23m20s" in facts
+
+    # Events: the boss kill against the best run's, the death with what killed and its hits
+    pull = w.events.topLevelItem(1)
+    assert pull.text(2) == "killed in 1:00 · 1 death · at 1:30, 0:20 faster than best"
+    death = pull.child(0)
+    assert (death.text(1), death.text(2)) == ("Tank died", "Web Bolt (Weaver), 400k")
+    assert not death.font(1).bold() and not death.isExpanded()   # its hits are folded away
+    assert (death.child(0).text(1), death.child(0).text(2)) == ("Web Bolt (Weaver)", "400k")
+    w.seek_to_event(death.child(0))
+    assert w.timeline.position == 86.8   # the hit, 0.2 s before the death
+    assert "Tank died: Web Bolt (Weaver), 400k" in [m.text for m in w.timeline.markers]
+
+    # Kicks: a tab of its own, only for a clip with kicks or dispels
+    assert w.lists.isTabVisible(1) and w.lists.tabText(1) == "Kicks"
+    heads = [w.kicks.topLevelItem(i) for i in range(w.kicks.topLevelItemCount())]
+    assert [(h.text(1), h.text(2)) for h in heads] == [("Kicks", "1"), ("Got through", "2"),
+                                                      ("Dispels", "1")]
+    assert heads[0].isExpanded() and heads[0].child(0).text(2) == "1 kick"
+    w.seek_to_event(heads[0])   # a heading: nowhere to go
+    w.seek_to_event(heads[1].child(0).child(0))   # the first Web Bolt that went off, at 21 s
+    assert w.timeline.position == 18.0
+
+    # The strip: the stopped cast has a ✕, the two Web Bolts cast together are one box
+    w.cast_strip.set_position(22.0)
+    w.cast_strip.grab()
+    labels = [w.cast_strip._label(c) for _, c in w.cast_strip.boxes]
+    assert "✕ Judgment" in labels and "Judgment" in labels and "Web Bolt ×2" in labels
+
+    # Coming up: what the strip shows that ends in the next 10 s
+    assert w.coming_up.isVisible()
+    assert [(round(left, 1), c.label) for left, c in w.coming_up.rows()] == [
+        (1.0, "Web Bolt ×2"), (5.0, "Slam")]
+    w.coming_up.grab()
+    # Hiding a spell (the strip's right-click menu) takes it out of both; it's remembered
+    kicked = next(c for c in w.cast_strip.enemy_boxes if c.result)
+    w.set_spell_hidden(kicked.who, kicked.name, True)
+    assert [c.label for _, c in w.coming_up.rows()] == ["Slam"]
+    assert browser.ClipBrowser().hidden_spells() == {("Weaver", "Web Bolt")}
+    hidden = next(a.menu() for a in w.enemies_menu.actions() if a.text() == "Hidden spells")
+    hidden.actions()[0].setChecked(False)   # unticked there: it's back
+    assert len(w.coming_up.rows()) == 2 and w.hidden_spells() == set()
+    w.hide_mob("Boss")
+    assert [c.label for _, c in w.coming_up.rows()] == ["Web Bolt ×2"]
+    soon = next(a for a in w.casts_menu.actions() if a.text() == "Coming up")
+    soon.setChecked(False)
+    assert not w.coming_up.isVisible()
+    soon.setChecked(True)
+
+    w.select(str(cfg.clips_dir / "plain.mp4"))   # nothing to kick: no tab, no list
+    assert not w.lists.isTabVisible(1) and not w.coming_up.isVisible()
+    assert "best" not in w.facts.text()
+    for key in ("cast_hidden_mobs", "cast_hidden_spells", "cast_upcoming"):
+        w.settings.remove(key)
+
+
+def test_the_checklist_says_when_recording_still_works(qtbot, cfg, monkeypatch):
+    steps = [model.Step(True, "Recorder"), model.Step(False, "Advanced Combat Logging on", "Turn it on.",
+                                                      needed=False)]
+    monkeypatch.setattr(model, "setup_checklist", lambda *_: steps)
+    w = browser.ClipBrowser()
+    qtbot.addWidget(w)
+    w.show()
+    from PySide6.QtWidgets import QLabel
+    assert w.checklist.isVisible()
+    assert w.checklist.findChildren(QLabel)[0].text() == "Worth a look"
+    steps.append(model.Step(False, "Recorder service running"))
+    w.update_checklist()
+    QApplication.processEvents()
+    assert "Not ready to record yet" in [label.text() for label in w.checklist.findChildren(QLabel)]
