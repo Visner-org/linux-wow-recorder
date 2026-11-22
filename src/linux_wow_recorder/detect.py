@@ -123,9 +123,54 @@ def _xprop(display: dict[str, str], *args: str) -> str:
 
 
 def wow_window(pid: int) -> bool | None:
-    """True once WoW's window is up: an X11 window of process pid, or one named "World of
-    Warcraft" (a Flatpak's Wine has process IDs of its own). Wine draws through XWayland unless
-    told otherwise. None if that can't be told: no X display, no xprop, Wine's Wayland driver."""
+    """True once WoW's window is up, as X11 (XWayland) or KWin sees it. None if that can't be
+    told: no X display or xprop, and not KDE."""
+    x11 = _x11_window(pid)
+    if x11:
+        return True
+    kwin = _kwin_window(pid)
+    if kwin:
+        return True
+    return None if x11 is None and kwin is None else False
+
+
+# KWin's window search (its KRunner plugin) and window details, over D-Bus. They see Wayland
+# windows too: Wine's own Wayland driver (WoW Forever on this PC, 2026-11-22) has none in X11.
+_KWIN_MATCH = ("busctl", "--user", "--timeout=5", "call", "org.kde.KWin", "/WindowsRunner",
+               "org.kde.krunner1", "Match", "s", "World of Warcraft")
+_KWIN_INFO = ("busctl", "--user", "--timeout=5", "call", "org.kde.KWin", "/KWin",
+              "org.kde.KWin", "getWindowInfo", "s")
+
+
+def _busctl(*args: str) -> str:
+    return subprocess.run(args, capture_output=True, text=True, timeout=10, check=True).stdout
+
+
+def _kwin_window(pid: int) -> bool | None:
+    """True if KWin has a window of process pid, or of a wow*.exe (a Flatpak's Wine has process
+    IDs of its own), titled World of Warcraft. None if KWin can't be asked (not KDE, no
+    busctl)."""
+    if not shutil.which("busctl"):
+        return None
+    try:
+        found = _busctl(*_KWIN_MATCH)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    for uuid in re.findall(r'"\d+_(\{[0-9a-fA-F-]+\})"', found):
+        try:
+            info = _busctl(*_KWIN_INFO, uuid)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if re.search(rf'"pid" i {pid}\b', info) or \
+                re.search(r'"resourceClass" s "wow\w*\.exe"', info, re.IGNORECASE):
+            return True
+    return False
+
+
+def _x11_window(pid: int) -> bool | None:
+    """True once WoW's window is up in X11: a window of process pid, or one named "World of
+    Warcraft" (a Flatpak's Wine has process IDs of its own). None if that can't be told: no X
+    display, no xprop."""
     display = x_display()
     if not display.get("DISPLAY") or not shutil.which("xprop"):
         return None

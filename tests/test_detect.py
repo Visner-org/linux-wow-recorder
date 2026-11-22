@@ -1,3 +1,4 @@
+import subprocess
 import types
 
 import pytest
@@ -95,6 +96,52 @@ def test_wow_window_by_process_or_name(monkeypatch):
 
 def test_wow_window_cant_tell_without_x(monkeypatch):
     monkeypatch.setattr(detect, "x_display", lambda: {})
+    assert wow_window(1234) is None
+
+
+# The real one: conftest stubs detect._kwin_window for every test, so none asks this PC's KWin.
+kwin_window = detect._kwin_window
+KWIN_MATCH = ('a(sssida{sv}) 1 "0_{a78bc0c9-236c-460a-acda-da13fb39268a}" "World of Warcraft" '
+              '"" 100 0.8 2 "icon-data" (iiibiiay) 32 32 128 true 8 4 4096 0 0\n')
+
+
+def _fake_kwin(monkeypatch, match, info):
+    def busctl(*args):
+        return match if "Match" in args else info
+    monkeypatch.setattr(detect.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(detect, "_busctl", busctl)
+
+
+@pytest.mark.parametrize("info, seen", [
+    ('a{sv} 3 "caption" s "World of Warcraft" "pid" i 1234 "resourceClass" s "wow.exe"', True),
+    ('a{sv} 2 "pid" i 7 "resourceClass" s "WowClassic.exe"', True),   # a Flatpak's Wine
+    ('a{sv} 2 "pid" i 12345 "resourceClass" s "firefox"', False),     # a tab with that title
+])
+def test_kwin_window(monkeypatch, info, seen):
+    _fake_kwin(monkeypatch, KWIN_MATCH, info)
+    assert kwin_window(1234) is seen
+
+
+def test_kwin_window_none_open(monkeypatch):
+    _fake_kwin(monkeypatch, "a(sssida{sv}) 0\n", "")
+    assert kwin_window(1234) is False
+
+
+def test_kwin_window_cant_tell_without_kwin(monkeypatch):
+    def busctl(*args):
+        raise subprocess.CalledProcessError(1, args)
+    monkeypatch.setattr(detect.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(detect, "_busctl", busctl)
+    assert kwin_window(1234) is None
+
+
+def test_wow_window_on_waylands_wine_comes_from_kwin(monkeypatch):
+    _fake_xprop(monkeypatch, {})   # no X11 windows at all
+    assert wow_window(1234) is False
+    monkeypatch.setattr(detect, "_kwin_window", lambda pid: True)
+    assert wow_window(1234) is True
+    monkeypatch.setattr(detect, "x_display", lambda: {})
+    monkeypatch.setattr(detect, "_kwin_window", lambda pid: None)
     assert wow_window(1234) is None
 
 

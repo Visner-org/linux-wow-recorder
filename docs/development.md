@@ -52,8 +52,9 @@ libfontconfig1 libdbus-1-3 libglib2.0-0t64 libpulse0` there).
 daemon.run() loop, every poll_interval seconds
   detect.find_wow()                   scans /proc for Wow*.exe in a process's command line
   WoW found → start_session()
-      window_pending()                portal capture: waits for WoW's window (detect.wow_window,
-                                      xprop) up to 60 s, so the dialog opens on top of WoW
+      window_pending()                portal capture: waits for WoW's window (detect.wow_window:
+                                      xprop, or KWin over D-Bus for Wine's Wayland driver) up
+                                      to 60 s, so the dialog opens on top of WoW
                                       and KDE can restore the saved window pick
       portal_ready()                  portal capture: asks D-Bus (busctl) for the portal's
                                       ScreenCast; missing (the portal started before the

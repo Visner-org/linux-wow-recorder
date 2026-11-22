@@ -58,7 +58,7 @@ recorded on a real PC yet. If you try one, please say how it went in an issue.
 **Nobara, Fedora 44:** download the `.rpm` from [Releases](../../releases), then
 
 ```bash
-sudo dnf install ./linux-wow-recorder-1.3.6-1.fc44.noarch.rpm
+sudo dnf install ./linux-wow-recorder-1.3.7-1.fc44.noarch.rpm
 ```
 
 On plain Fedora, also install the gpu-screen-recorder Flatpak (below).
@@ -66,7 +66,7 @@ On plain Fedora, also install the gpu-screen-recorder Flatpak (below).
 **Ubuntu 25.10+, Debian 13:** download the `.deb` from [Releases](../../releases), then
 
 ```bash
-sudo apt install ./linux-wow-recorder_1.3.6-1_all.deb
+sudo apt install ./linux-wow-recorder_1.3.7-1_all.deb
 flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
 flatpak install --user flathub com.dec05eba.gpu_screen_recorder
 ```

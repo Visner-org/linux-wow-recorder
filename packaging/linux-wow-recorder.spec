@@ -62,6 +62,10 @@ if [ "$1" -eq 0 ]; then
 fi
 
 %changelog
+* Sun Nov 22 2026 Linux WoW Recorder - 1.3.7-1
+- The screen-share dialog opens as soon as WoW's window is up on KDE, also with Wine's
+  Wayland driver, instead of after a minute
+
 * Sun Nov 22 2026 Linux WoW Recorder - 1.3.6-1
 - Fixes recording after logging out and back in: screen sharing is restarted when it's broken,
   and the tray says so if that doesn't help

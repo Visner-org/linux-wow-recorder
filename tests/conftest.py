@@ -41,3 +41,10 @@ def _screen_sharing_works(monkeypatch):
     from linux_wow_recorder import portal
     monkeypatch.setattr(portal, "screencast_ok", lambda: True)
     monkeypatch.setattr(portal, "restart", lambda: True)
+
+
+@pytest.fixture(autouse=True)
+def _no_kwin(monkeypatch):
+    """WoW's window as KWin sees it: not asked of this computer's KWin."""
+    from linux_wow_recorder import detect
+    monkeypatch.setattr(detect, "_kwin_window", lambda pid: None)
