@@ -1,6 +1,6 @@
 pkgbase = linux-wow-recorder
 	pkgdesc = Records World of Warcraft sessions and cuts one clip per dungeon run
-	pkgver = 1.2.4
+	pkgver = 1.3.6
 	pkgrel = 1
 	url = https://github.com/Visner-org/linux-wow-recorder
 	arch = any
@@ -17,7 +17,8 @@ pkgbase = linux-wow-recorder
 	depends = grep
 	depends = systemd
 	depends = hicolor-icon-theme
-	source = linux-wow-recorder-1.2.4.tar.gz::https://github.com/Visner-org/linux-wow-recorder/archive/refs/tags/1.2.4.tar.gz
-	sha256sums = 2e6251c3541049c94936c91756457ad38ce4f3e57408059c4daff7a32d77bb6f
+	optdepends = xorg-xprop: opens the screen-share dialog once WoW's window is up
+	source = linux-wow-recorder-1.3.6.tar.gz::https://github.com/Visner-org/linux-wow-recorder/archive/refs/tags/1.3.6.tar.gz
+	sha256sums = b031991d7e708d917fa6397e5139596b04d742ad6f3e89ee18980f285907997a
 
 pkgname = linux-wow-recorder
