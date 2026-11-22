@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from linux_wow_recorder import clips, config, daemon, state
+from linux_wow_recorder import clips, config, daemon, portal, state
 
 
 class FakeRecorder:
@@ -254,6 +254,57 @@ def test_a_missing_output_folder_is_said_and_recording_starts_when_its_back(make
     d.check_session(1)
     assert d.recorder.running and d.status.data["state"] == state.RECORDING
     assert d.status.data["problem"] is None
+
+
+def test_broken_screen_sharing_is_restarted_once_and_then_records(make, monkeypatch):
+    d, clock, _ = make()
+    d.cfg.capture = "portal"
+    ok = types.SimpleNamespace(now=False, restarts=0)
+
+    def restart():
+        ok.restarts += 1
+        ok.now = True
+        return True
+    monkeypatch.setattr(portal, "screencast_ok", lambda: ok.now)
+    monkeypatch.setattr(portal, "restart", restart)
+    d.start_session("Retail", "Wow.exe", 1)
+    assert ok.restarts == 1 and d.recorder.running
+    assert d.status.data["state"] == state.RECORDING and d.status.data["problem"] is None
+    assert "recording_failed" not in d.notifier.sent
+
+
+def test_screen_sharing_still_broken_is_said_and_records_once_it_works(make, monkeypatch):
+    d, clock, _ = make()
+    d.cfg.capture = "portal"
+    ok = types.SimpleNamespace(now=False, restarts=0)
+
+    def restart():
+        ok.restarts += 1
+        return False
+    monkeypatch.setattr(portal, "screencast_ok", lambda: ok.now)
+    monkeypatch.setattr(portal, "restart", restart)
+    d.start_session("Retail", "Wow.exe", 1)
+    assert d.recorder.starts == 0
+    assert d.status.data["problem"] == daemon.PORTAL_PROBLEM
+    for _ in range(daemon.MAX_RESTARTS + 2):   # waits, however long it takes
+        clock.now += daemon.PORTAL_RECHECK
+        d.check_session(1)
+    assert ok.restarts == 1 and d.recorder.starts == 0
+    assert d.notifier.sent.count("recording_failed") == 1
+
+    ok.now = True
+    clock.now += daemon.PORTAL_RECHECK
+    d.check_session(1)
+    assert d.recorder.running and d.status.data["state"] == state.RECORDING
+    assert d.status.data["problem"] is None
+
+
+def test_screen_sharing_isnt_checked_when_recording_a_monitor(make, monkeypatch):
+    d, clock, _ = make()
+    d.cfg.capture = "screen"
+    monkeypatch.setattr(portal, "screencast_ok", lambda: False)
+    d.start_session("Retail", "Wow.exe", 1)
+    assert d.recorder.running
 
 
 def test_the_output_folder_going_away_mid_session_is_said(make, monkeypatch):

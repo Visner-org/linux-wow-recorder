@@ -55,6 +55,11 @@ daemon.run() loop, every poll_interval seconds
       window_pending()                portal capture: waits for WoW's window (detect.wow_window,
                                       xprop) up to 60 s, so the dialog opens on top of WoW
                                       and KDE can restore the saved window pick
+      portal_ready()                  portal capture: asks D-Bus (busctl) for the portal's
+                                      ScreenCast; missing (the portal started before the
+                                      desktop, after logging out and in), restarts
+                                      xdg-desktop-portal once a session; still missing: no
+                                      recording, PORTAL_PROBLEM, asked again every 30 s
       recorder.start()                gpu-screen-recorder → <output>/sessions/<time>.mkv
       status.json: recording
   WoW still running → check_session()
@@ -330,6 +335,7 @@ launcher, which names the game in its arguments, are skipped. Add a new client's
 |---|---|
 | `detect.py` | finds a running WoW client in /proc |
 | `recorder.py` | starts and stops gpu-screen-recorder |
+| `portal.py` | checks the screen-share service (xdg-desktop-portal) has ScreenCast; restarts it |
 | `combatlog.py` | finds dungeon runs, bosses, deaths and lusts in the combat log (`_RunFinder`: one method per event), the group's and the enemies' casts and dispels (`read_casts`), the hits before a death (`read_hits`), and moments (`find_moments`) |
 | `addon.py` | installs the WoW addon, reads its saved level-ups and elites |
 | `cooldowns.py` | the major cooldowns, by spell ID and kind (damage, healing, defensive) |

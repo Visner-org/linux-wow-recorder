@@ -11,7 +11,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import APP_TITLE, __version__, addon, logs, service, state
+from . import APP_TITLE, __version__, addon, logs, portal, service, state
 from .clips import (SessionResult, cleanup, free_gb, new_recording_path, process_pending,
                     stale_recordings)
 from .combatlog import (KEY_DONE, combat_logs_between, last_event_time, log_opened,
@@ -61,6 +61,10 @@ WINDOW_WAIT = 60
 PICK_PROBLEM = "Not recording: pick WoW's window in the screen-share dialog."
 # While the output folder is gone (its drive unmounted after the service started).
 OUTPUT_PROBLEM = "Not recording: the output folder isn't there (drive not mounted?)."
+# While the desktop's screen-share service has no ScreenCast, even after restarting it.
+PORTAL_PROBLEM = "Not recording: screen sharing isn't working. Try logging out and back in."
+# ... it's asked again this often, and recording starts once it works.
+PORTAL_RECHECK = 30
 
 
 @dataclass
@@ -72,6 +76,9 @@ class Session:
     disk_warned: bool = False
     disk_stopped: bool = False   # stopped for low disk space; not restarted this session
     no_output: bool = False      # the output folder is gone; recording starts when it's back
+    no_portal: bool = False      # screen sharing is broken; recording starts when it works
+    portal_checked: float = 0.0  # when it was last asked about, while broken
+    portal_restarted: bool = False   # the screen-share service was restarted this session
     paused: bool = False         # the user paused recording for this session
     picking: bool = False        # the screen-share dialog is waiting; nothing's recorded yet
     announced: bool = False      # session_started sent, once WoW was being recorded
@@ -300,6 +307,8 @@ class Daemon:
             self.output_missing()
             return
         s.no_output = False
+        if not self.portal_ready():
+            return
         if free < cfg.stop_below_gb:
             s.disk_stopped = True
             self.status.update(state=state.NOT_RECORDING, recording_file=None, free_gb=round(free, 1),
@@ -326,6 +335,35 @@ class Daemon:
             s.alerted = True
             self.notifier.send("recording_failed", f"⚠️ **The recorder didn't start.** {SEE_LOG}")
 
+    def portal_ready(self) -> bool:
+        """With portal capture: True if the screen-share service can record. If it can't, it's
+        restarted once a session; if that doesn't help, nothing is recorded until it works
+        (check_session asks again) and the user is told once."""
+        s = self.session
+        if self.recorder.capture_mode != "portal" or portal.screencast_ok() is not False:
+            s.no_portal = False
+            return True
+        if not s.portal_restarted:
+            s.portal_restarted = True
+            log.warning("The screen-share service (xdg-desktop-portal) has no ScreenCast, as "
+                        "after logging out and back in; restarting it.")
+            if portal.restart():
+                log.info("Screen sharing works again.")
+                s.no_portal = False
+                return True
+        if not s.no_portal:
+            log.error("Screen sharing still isn't working after restarting xdg-desktop-portal; "
+                      "not recording until it is. Logging out and back in usually fixes it.")
+        s.no_portal = True
+        s.portal_checked = time.time()
+        self.status.update(state=state.NOT_RECORDING, recording_file=None, picking=False,
+                           problem=PORTAL_PROBLEM)
+        if not s.alerted:
+            s.alerted = True
+            self.notifier.send("recording_failed", "⚠️ **Not recording:** screen sharing "
+                               f"isn't working. {SEE_LOG}")
+        return False
+
     def check_session(self, pid: int | None = None):
         """pid: WoW's process now."""
         s = self.session
@@ -344,6 +382,13 @@ class Daemon:
                 log.info("The output folder is back; recording.")
                 self.start_recording()
                 self.recording_again()
+            return
+        if s.no_portal:
+            if time.time() - s.portal_checked >= PORTAL_RECHECK:
+                self.start_recording()   # asks again; records if it works now
+                if not s.no_portal:
+                    log.info("Screen sharing works again; recording.")
+                    self.recording_again()
             return
         now = time.time()
         if now - s.last_disk_check >= DISK_CHECK_INTERVAL:

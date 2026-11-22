@@ -65,7 +65,7 @@ And in WoW:
 ### Nobara or Fedora (RPM)
 
 ```bash
-sudo dnf install ./linux-wow-recorder-1.3.5-1.fc44.noarch.rpm
+sudo dnf install ./linux-wow-recorder-1.3.6-1.fc44.noarch.rpm
 ```
 
 This brings in ffmpeg and Qt, and on Nobara gpu-screen-recorder. Open **Linux WoW Recorder**
@@ -107,7 +107,7 @@ For Ubuntu 25.10+ (26.04 tested) and Debian 13. Download the `.deb` from
 [Releases](https://github.com/Visner-org/linux-wow-recorder/releases), then:
 
 ```bash
-sudo apt install ./linux-wow-recorder_1.3.5-1_all.deb
+sudo apt install ./linux-wow-recorder_1.3.6-1_all.deb
 flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
 flatpak install --user flathub com.dec05eba.gpu_screen_recorder
 ```
@@ -545,6 +545,10 @@ Nothing is sent: read it, then share it.
 
 **WoW runs but nothing is recorded.** Check the service is running (`status`; an empty ring in
 the tray). Run `linux-wow-recorder test-recorder` with WoW closed to see the recorder's error.
+
+**"Screen sharing isn't working."** The desktop's screen-share service (xdg-desktop-portal)
+can come up broken after logging out and back in. The app restarts it once by itself and
+records as soon as it works; if it still doesn't, log out and back in, or restart the computer.
 
 **"No combat log covers this session."** Logging was off: `/combatlog`, a logging addon, or
 [the WoW addon](#the-wow-addon). The full recording stays in `processed/` for 3 days.

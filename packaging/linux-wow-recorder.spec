@@ -62,6 +62,10 @@ if [ "$1" -eq 0 ]; then
 fi
 
 %changelog
+* Sun Nov 22 2026 Linux WoW Recorder - 1.3.6-1
+- Fixes recording after logging out and back in: screen sharing is restarted when it's broken,
+  and the tray says so if that doesn't help
+
 * Wed Nov 11 2026 Linux WoW Recorder - 1.3.5-1
 - Deaths say what killed, with the last hits before them
 - A Kicks tab: who kicked and dispelled, and the kickable casts that went off

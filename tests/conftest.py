@@ -32,3 +32,12 @@ def _no_wow_running(monkeypatch):
     mustn't change what the tests do."""
     from linux_wow_recorder import clips
     monkeypatch.setattr(clips, "find_wow", lambda: None)
+
+
+@pytest.fixture(autouse=True)
+def _screen_sharing_works(monkeypatch):
+    """The screen-share check asks this computer's D-Bus and can restart its portal: tests
+    get a working one unless they say otherwise."""
+    from linux_wow_recorder import portal
+    monkeypatch.setattr(portal, "screencast_ok", lambda: True)
+    monkeypatch.setattr(portal, "restart", lambda: True)
