@@ -62,6 +62,9 @@ if [ "$1" -eq 0 ]; then
 fi
 
 %changelog
+* Mon Nov 23 2026 Linux WoW Recorder - 1.3.8-1
+- Fixes recording when the service starts at login before the desktop is ready
+
 * Sun Nov 22 2026 Linux WoW Recorder - 1.3.7-1
 - The screen-share dialog opens as soon as WoW's window is up on KDE, also with Wine's
   Wayland driver, instead of after a minute

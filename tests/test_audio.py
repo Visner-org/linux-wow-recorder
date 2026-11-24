@@ -73,3 +73,29 @@ def test_a_leftover_recorder_is_adopted_only_if_it_writes_the_saved_file(tmp_pat
     finally:
         proc.kill()
         proc.wait()
+
+
+def test_the_recorder_gets_the_desktops_display_as_it_is_now(tmp_path, monkeypatch):
+    # The service can start before the desktop, so its own environment has no display.
+    from linux_wow_recorder import detect, recorder
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+    monkeypatch.setattr(detect, "desktop_env", lambda: {"WAYLAND_DISPLAY": "wayland-0"})
+    monkeypatch.setattr(recorder.time, "sleep", lambda s: None)
+    seen = {}
+
+    class FakeProc:
+        pid = 4321
+
+        def __init__(self, cmd, **kwargs):
+            seen.update(kwargs["env"])
+
+        def poll(self):
+            return 1
+
+        def wait(self, timeout=None):
+            return 1
+
+    monkeypatch.setattr(recorder.subprocess, "Popen", FakeProc)
+    data = config.DEFAULTS | {"paths": {"combat_log_dir": str(tmp_path), "output_dir": str(tmp_path)}}
+    Recorder(config.from_dict(data)).start(tmp_path / "out.mkv")
+    assert seen["WAYLAND_DISPLAY"] == "wayland-0"

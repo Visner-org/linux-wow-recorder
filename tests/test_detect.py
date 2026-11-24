@@ -153,3 +153,15 @@ def test_the_display_comes_from_systemd_when_the_service_has_none(monkeypatch):
     monkeypatch.setattr(detect.subprocess, "run",
                         lambda *a, **k: types.SimpleNamespace(stdout=out))
     assert detect.x_display() == {"DISPLAY": ":0", "XAUTHORITY": "/run/user/1000/xauth_new"}
+
+
+def test_the_wayland_display_comes_from_systemd_when_the_service_has_none(monkeypatch):
+    # Started at login, before KDE told systemd: gsr then can't reach the desktop (11-23).
+    for key in detect.DESKTOP_VARS:
+        monkeypatch.delenv(key, raising=False)
+    out = "HOME=/home/me\nWAYLAND_DISPLAY=wayland-0\nXDG_CURRENT_DESKTOP=KDE\nDISPLAY=:0\n"
+    monkeypatch.setattr(detect.subprocess, "run",
+                        lambda *a, **k: types.SimpleNamespace(stdout=out))
+    assert detect.desktop_env() == {"WAYLAND_DISPLAY": "wayland-0", "XDG_CURRENT_DESKTOP": "KDE",
+                                    "DISPLAY": ":0"}
+    assert detect.x_display() == {"DISPLAY": ":0"}

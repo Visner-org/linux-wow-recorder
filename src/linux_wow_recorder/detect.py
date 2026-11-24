@@ -100,11 +100,16 @@ def find_wow() -> str | None:
     return found[0] if found else None
 
 
-def x_display() -> dict[str, str]:
-    """DISPLAY and XAUTHORITY as the desktop has them now. A service started at boot runs
-    before the desktop hands them to systemd, so its own environment has none; and
-    XAUTHORITY changes with each login."""
-    found = {k: os.environ[k] for k in ("DISPLAY", "XAUTHORITY") if os.environ.get(k)}
+# What a program needs to reach the desktop. XDG_CURRENT_DESKTOP and XDG_SESSION_TYPE also steer
+# which portal and capture gpu-screen-recorder uses.
+DESKTOP_VARS = ("DISPLAY", "XAUTHORITY", "WAYLAND_DISPLAY", "XDG_CURRENT_DESKTOP", "XDG_SESSION_TYPE")
+
+
+def desktop_env() -> dict[str, str]:
+    """The desktop's display variables as systemd has them now. A service started at login can
+    run before the desktop hands them to systemd, so its own environment has none (or old
+    ones); and XAUTHORITY changes with each login."""
+    found = {k: os.environ[k] for k in DESKTOP_VARS if os.environ.get(k)}
     try:
         out = subprocess.run(["systemctl", "--user", "show-environment"], capture_output=True,
                              text=True, timeout=5).stdout
@@ -112,9 +117,14 @@ def x_display() -> dict[str, str]:
         return found
     for line in out.splitlines():
         key, _, value = line.partition("=")
-        if key in ("DISPLAY", "XAUTHORITY") and value:
+        if key in DESKTOP_VARS and value:
             found[key] = value
     return found
+
+
+def x_display() -> dict[str, str]:
+    """DISPLAY and XAUTHORITY as the desktop has them now."""
+    return {k: v for k, v in desktop_env().items() if k in ("DISPLAY", "XAUTHORITY")}
 
 
 def _xprop(display: dict[str, str], *args: str) -> str:

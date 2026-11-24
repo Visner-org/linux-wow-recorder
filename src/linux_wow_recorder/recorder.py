@@ -15,7 +15,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from . import logs
+from . import detect, logs
 from .config import STATE_DIR, WOW_SOUND, Config
 
 log = logging.getLogger(__name__)
@@ -134,8 +134,10 @@ class Recorder:
             out.write(f"$ {shlex.join(cmd)}\n".encode())
             out.flush()
             try:
+                # The desktop's display as it is now: the service may have started before it.
                 self.proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=out,
-                                             stderr=subprocess.STDOUT, start_new_session=True)
+                                             stderr=subprocess.STDOUT, start_new_session=True,
+                                             env={**os.environ, **detect.desktop_env()})
             except OSError as e:
                 log.error(f"Couldn't start the recorder: {e}")
                 out.write(f"{e}\n".encode())
