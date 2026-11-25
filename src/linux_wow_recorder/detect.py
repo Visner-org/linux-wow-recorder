@@ -20,6 +20,12 @@ _GAME_FOLDER = re.compile(r"[\\/]_(\w+?)_[\\/][^\\/]*$")
 # Programs next to the game that aren't the game.
 _HELPERS = ("voiceproxy", "error", "launcher", "crash", "update", "wowup")
 
+# Programs that start the game with its .exe among their arguments, and interpreters that run
+# them as a script. Anything else naming the .exe (grep, rsync, an editor) isn't WoW.
+_LAUNCHER = re.compile(r"wine|proton|umu|pressure-vessel|pv-|srt-|reaper|start\.exe|gamescope"
+                       r"|lutris|heroic|bottles|faugus", re.IGNORECASE)
+_INTERPRETER = re.compile(r"(python[\d.]*|sh|bash|env)$")
+
 FLAVORS = {
     "wow": "Retail", "wowt": "Retail PTR", "wowb": "Retail beta",
     "wowclassic": "Classic", "wowclassict": "Classic PTR", "wowclassicb": "Classic beta",
@@ -66,6 +72,18 @@ def _args(pid_dir: Path) -> list[str] | None:
     return [a.decode(errors="replace") for a in raw.split(b"\0") if a]
 
 
+def _running_wow(args: list[str] | None) -> tuple[str, str] | None:
+    """wow_process(), only for the game itself or a launcher running it."""
+    if not args:
+        return None
+    if not _WOW_EXE.search(args[0]):
+        names = [re.split(r"[\\/]", a)[-1] for a in args[:2]]
+        if not _LAUNCHER.match(names[0]) and not (
+                len(names) > 1 and _INTERPRETER.match(names[0]) and _LAUNCHER.match(names[1])):
+            return None
+    return wow_process(args)
+
+
 def find_wow_process(proc: Path = Path("/proc")) -> tuple[str, str, int] | None:
     """(flavor, .exe name, process ID) of the WoW client running now, or None. The game itself
     wins over a launcher's process that names its .exe too (umu-run, Proton's start.exe): Wine
@@ -75,7 +93,7 @@ def find_wow_process(proc: Path = Path("/proc")) -> tuple[str, str, int] | None:
         if not pid_dir.name.isdigit():
             continue
         args = _args(pid_dir)
-        found = wow_process(args) if args else None
+        found = _running_wow(args)
         if not found:
             continue
         if _WOW_EXE.search(args[0]):
@@ -91,7 +109,7 @@ def wow_alive(pid: int, proc: Path = Path("/proc")) -> bool:
     except OSError:
         return False
     args = _args(proc / str(pid))
-    return stat.rpartition(")")[2].split()[:1] != ["Z"] and bool(args and wow_process(args))
+    return stat.rpartition(")")[2].split()[:1] != ["Z"] and bool(_running_wow(args))
 
 
 def find_wow() -> str | None:

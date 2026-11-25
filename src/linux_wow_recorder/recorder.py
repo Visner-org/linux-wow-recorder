@@ -26,6 +26,8 @@ _CAPTURE_LOST = re.compile(r'pipewire: stream \S+ previous state: "[^"]*", new s
 # Its line once a portal capture is running. Until then the screen-share dialog is waiting for a
 # pick (it can open behind WoW), and nothing is recorded.
 _STREAMING = re.compile(r'pipewire: stream \S+ previous state: "[^"]*", new state: "streaming"')
+# Its line when the screen-share dialog was closed without a pick.
+_CANCELED = "capture was canceled by the user"
 # How long start() waits for a remembered portal pick to start streaming.
 PORTAL_WAIT = 6
 # Where gpu-screen-recorder remembers the last pick in the screen-share dialog
@@ -171,6 +173,14 @@ class Recorder:
             except OSError:
                 return False
         return not self._streaming
+
+    def canceled(self) -> bool:
+        """True if the recorder ended because the screen-share dialog was canceled."""
+        try:
+            return self.output_log is not None and \
+                _CANCELED in self.output_log.read_text(errors="replace")
+        except OSError:
+            return False
 
     def forget_pick(self):
         forget_pick()

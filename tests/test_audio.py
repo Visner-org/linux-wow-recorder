@@ -99,3 +99,14 @@ def test_the_recorder_gets_the_desktops_display_as_it_is_now(tmp_path, monkeypat
     data = config.DEFAULTS | {"paths": {"combat_log_dir": str(tmp_path), "output_dir": str(tmp_path)}}
     Recorder(config.from_dict(data)).start(tmp_path / "out.mkv")
     assert seen["WAYLAND_DISPLAY"] == "wayland-0"
+
+
+def test_canceled_reads_the_recorders_output(tmp_path):
+    rec = Recorder(config.from_dict(config.load_raw(tmp_path / "missing.toml")))
+    assert not rec.canceled()
+    rec.output_log = tmp_path / "out.log"
+    rec.output_log.write_text("gsr error: failed to create window\n")
+    assert not rec.canceled()
+    rec.output_log.write_text("gsr error: gsr_capture_portal_setup: desktop portal capture failed. "
+                              "It seems like desktop portal capture was canceled by the user.\n")
+    assert rec.canceled()

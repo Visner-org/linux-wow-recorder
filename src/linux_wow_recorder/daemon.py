@@ -27,15 +27,18 @@ log = logging.getLogger(__name__)
 # "Logging"); they point to the log on this computer instead.
 SEE_LOG = "Details are in the log on this computer (tray menu: Open log folder)."
 
-# How often a session tries a new recording after the recorder fails, before giving up.
+# After the recorder fails, a new recording is tried this often right away, then only every
+# SLOW_RETRY seconds. The count starts over once a recording has run for GOOD_AFTER seconds.
 MAX_RESTARTS = 3
+SLOW_RETRY = 30
+GOOD_AFTER = 300
 DISK_CHECK_INTERVAL = 60
 # After what was recorded is gone (WoW's window closed): a new recording starts when WoW is back
 # as a new process, or after this long if it's the same one.
 CAPTURE_RETRY = 30
 # ... and says so if WoW is still there after this long. Closing WoW takes its window first, a
 # few seconds before the process ends: that's no news.
-CAPTURE_NOTICE = 15
+CAPTURE_NOTICE = 20
 # How long into a session the programs with sound are logged once: WoW opens its sound a little
 # after it starts.
 AUDIO_CHECK_AFTER = 90
@@ -72,6 +75,9 @@ class Session:
     flavor: str
     start: float = 0.0
     restarts: int = 0
+    tried: float = 0.0           # the last new recording after a failure
+    good_since: float = 0.0      # when this recording was first seen running
+    declined: bool = False       # the screen-share dialog was closed; no new one by itself
     alerted: bool = False        # recording_failed already sent this session
     disk_warned: bool = False
     disk_stopped: bool = False   # stopped for low disk space; not restarted this session
@@ -299,6 +305,7 @@ class Daemon:
 
     def start_recording(self):
         cfg, s = self.cfg, self.session
+        s.good_since = 0.0
         if self.window_pending():
             return
         try:
@@ -328,6 +335,9 @@ class Daemon:
                 self.status.update(state=state.RECORDING, recording_file=str(self.recorder.file),
                                    picking=False)
                 self.announce()
+            return
+        if self.recorder.canceled():
+            self.not_picked()
             return
         self.status.update(state=state.NOT_RECORDING, recording_file=None, picking=False,
                            problem="The recorder didn't start.")
@@ -400,22 +410,33 @@ class Daemon:
         if not s.log_found and now - s.log_checked >= LOG_RECHECK_INTERVAL:
             s.log_checked = now
             self.check_combat_log(s, now)
-        if s.disk_stopped or self.recorder.is_running() or s.restarts >= MAX_RESTARTS:
+        if self.recorder.is_running():
+            s.good_since = s.good_since or now
+            if now - s.good_since >= GOOD_AFTER:
+                s.restarts = s.captures_lost = 0
+            return
+        if s.disk_stopped or s.declined or \
+                (s.restarts >= MAX_RESTARTS and now - s.tried < SLOW_RETRY):
             return
 
         s.restarts += 1
         tail = self.recorder.log_tail()
-        log.warning(f"The recorder isn't running; new recording (try {s.restarts} of "
-                    f"{MAX_RESTARTS}). Its last output:\n{tail}")
+        log.warning(f"The recorder isn't running; new recording (try {s.restarts}). "
+                    f"Its last output:\n{tail}")
         self.recorder.stop()   # forgets the dead one
         if not s.alerted:
             s.alerted = True
             self.notifier.send("recording_failed", "⚠️ **The recorder stopped mid-session**; "
                                f"starting a new recording. {SEE_LOG}")
         self.start_recording()
-        if s.restarts >= MAX_RESTARTS and not self.recorder.is_running():
-            log.error("The recorder keeps failing; giving up until WoW is started again.")
-            self.status.update(problem="The recorder keeps failing; trying again next session.")
+        s.tried = time.time()
+        self.recording_again()
+        # Not over a reason of its own: the dialog closed, WoW's window, the drive, disk space.
+        if s.restarts >= MAX_RESTARTS and not self.recorder.is_running() and not (
+                s.declined or s.window_wait or s.no_output or s.no_portal or s.disk_stopped):
+            if s.restarts == MAX_RESTARTS:
+                log.error(f"The recorder keeps failing; trying again every {SLOW_RETRY} seconds.")
+            self.status.update(problem="The recorder keeps failing; still trying.")
 
     def announce(self):
         """session_started, the first time WoW is being recorded this session: not while the
@@ -462,13 +483,16 @@ class Daemon:
                                picking=False, problem=None)
             self.announce()
             return False
+        self.not_picked()
+        return True
+
+    def not_picked(self):
         log.warning("The screen-share dialog was closed without a pick; not recording this "
                     "session.")
         self.recorder.stop()
-        s.restarts = MAX_RESTARTS
+        self.session.declined = True
         self.status.update(state=state.NOT_RECORDING, recording_file=None, picking=False,
                            problem="Nothing picked: not recording this session.")
-        return True
 
     def check_monitor(self):
         """Switches between the window picked in the screen-share dialog and the monitor, as
@@ -478,6 +502,7 @@ class Daemon:
         if want == s.monitor:
             return
         s.monitor, s.picking, s.restarts, s.lost_at = want, False, 0, 0.0
+        s.declined = False
         self.recorder.stop()
         self.recorder.capture = (self.cfg.monitor or "screen") if want else None
         log.info(f"Recording {self.recorder.capture_mode} instead, as asked.")
@@ -498,7 +523,7 @@ class Daemon:
         log.info("Picking another window, as asked.")
         self.recorder.stop()
         self.recorder.forget_pick()
-        s.picking, s.restarts, s.lost_at = False, 0, 0.0
+        s.picking, s.restarts, s.lost_at, s.declined = False, 0, 0.0, False
         self.status.update(recording_file=None, problem=None)
         self.start_recording()
 
@@ -601,6 +626,7 @@ class Daemon:
                 self.recording_again()
                 return False
             if waited >= CAPTURE_NOTICE and self.status.data["state"] != state.NOT_RECORDING:
+                log.warning("WoW's window closed but WoW is still running; not recording.")
                 pick = " (pick it in the screen-share dialog)" if self.recorder.capture_mode == "portal" else ""
                 self.status.update(state=state.NOT_RECORDING, problem=(
                     f"WoW's window closed: recording again when it's back{pick}."))
@@ -613,14 +639,14 @@ class Daemon:
         # A window picked in the screen-share dialog can't follow a new WoW: its window is new.
         lost = (self.recorder.is_running() and self.recorder.capture_lost()) or \
             (restarted and self.recorder.capture_mode == "portal" and self.recorder.is_running())
-        if not lost or s.captures_lost >= MAX_RESTARTS:
+        if not lost:
             return False
         s.captures_lost += 1
-        log.warning("What was being recorded is gone (WoW's window closed). The recording so "
-                    "far is kept; a new one starts if WoW comes back.")
+        log.info("What was being recorded is gone (WoW's window closed). The recording so "
+                 "far is kept; a new one starts if WoW comes back.")
         self.recorder.stop()
         self.status.update(recording_file=None)
-        if restarted:   # WoW's already back
+        if restarted and s.captures_lost <= MAX_RESTARTS:   # WoW's already back
             s.lost_at = 0.0
             self.start_recording()
             self.recording_again()
@@ -680,7 +706,7 @@ class Daemon:
             s.picking = False
             self.status.update(state=state.PAUSED, recording_file=None, picking=False, problem=None)
         elif not want and s.paused:
-            s.paused = False
+            s.paused = s.declined = False
             log.info("Recording again, as asked.")
             self.start_recording()
         return s.paused
@@ -709,7 +735,9 @@ class Daemon:
 
     def end_session(self):
         log.info("WoW closed; finishing the session.")
-        was_recording = self.recorder.is_running() and not self.session.picking
+        # Closing WoW takes its window first, which ends the recording (lost_at).
+        was_recording = bool(self.session.lost_at) or (
+            self.recorder.is_running() and not self.session.picking)
         self.recorder.stop()
         length = time.time() - self.session.start
         with self._lock:

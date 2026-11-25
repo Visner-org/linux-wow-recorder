@@ -165,3 +165,18 @@ def test_the_wayland_display_comes_from_systemd_when_the_service_has_none(monkey
     assert detect.desktop_env() == {"WAYLAND_DISPLAY": "wayland-0", "XDG_CURRENT_DESKTOP": "KDE",
                                     "DISPLAY": ":0"}
     assert detect.x_display() == {"DISPLAY": ":0"}
+
+
+@pytest.mark.parametrize("args, found", [
+    (["grep", "wow.exe", "notes.txt"], False),
+    (["bash", "-c", "ls Wow.exe"], False),
+    (["rsync", "/home/u/.wine/drive_c/WoW/_retail_/Wow.exe", "/backup"], False),
+    (["vim", "/g/_retail_/Wow.exe"], False),
+    (["/usr/bin/wine64-preloader", "/usr/bin/wine64", r"C:\WoW\_retail_\Wow.exe"], True),
+    (["python3", "/opt/Proton 10/proton", "waitforexitandrun", "/g/_retail_/Wow.exe"], True),
+    ([r"C:\windows\system32\start.exe", "/exec", r"C:\WoW\_retail_\Wow.exe"], True),
+])
+def test_only_the_game_or_its_launcher_counts(tmp_path, args, found):
+    proc = fake_proc(tmp_path, {10: args})
+    assert bool(find_wow_process(proc)) is found
+    assert wow_alive(10, proc) is found

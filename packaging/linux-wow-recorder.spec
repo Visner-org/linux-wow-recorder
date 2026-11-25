@@ -62,6 +62,12 @@ if [ "$1" -eq 0 ]; then
 fi
 
 %changelog
+* Wed Nov 25 2026 Linux WoW Recorder - 1.3.9-1
+- Keeps trying when recording fails, instead of giving up until WoW is restarted
+- No more frozen video when WoW's window is lost several times in a session
+- The "session ended" message is sent when WoW's window closes first
+- Other programs that name Wow.exe no longer start a recording
+
 * Mon Nov 23 2026 Linux WoW Recorder - 1.3.8-1
 - Fixes recording when the service starts at login before the desktop is ready
 

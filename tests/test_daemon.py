@@ -39,6 +39,11 @@ class FakeRecorder:
     def waiting_for_pick(self):
         return self.running and self.waiting
 
+    was_canceled = False
+
+    def canceled(self):
+        return self.was_canceled
+
     def forget_pick(self):
         self.forgotten += 1
 
@@ -193,7 +198,7 @@ def test_a_crash_while_cutting_is_not_fatal(make, monkeypatch):
     assert d._cutter is None and d.status.data["state"] == state.WAITING
 
 
-def test_the_recorder_is_restarted_at_most_max_restarts_times(make):
+def test_a_failing_recorder_is_retried_slowly_after_max_restarts(make):
     d, clock, _ = make()
     d.start_session("Retail")
     assert d.recorder.starts == 1
@@ -205,6 +210,62 @@ def test_the_recorder_is_restarted_at_most_max_restarts_times(make):
     assert d.recorder.starts == 1 + daemon.MAX_RESTARTS
     assert d.notifier.sent.count("recording_failed") == 1   # once per session
     assert "keeps failing" in d.status.data["problem"]
+
+    d.recorder.works = True             # the desktop is back: recorded without restarting WoW
+    clock.now += daemon.SLOW_RETRY
+    d.check_session()
+    assert d.recorder.running and d.status.data["state"] == state.RECORDING
+    assert d.status.data["problem"] is None
+
+
+def test_failures_far_apart_dont_add_up(make):
+    d, clock, _ = make()
+    d.start_session("Retail")
+    for _ in range(daemon.MAX_RESTARTS + 2):
+        d.recorder.running = False
+        clock.now += 5
+        d.check_session()
+        assert d.recorder.running and d.session.restarts == 1
+        d.check_session()
+        clock.now += daemon.GOOD_AFTER
+        d.check_session()
+        assert d.session.restarts == 0
+
+
+def test_a_dialog_canceled_right_away_isnt_opened_again(make):
+    d, clock, _ = make(works=False)
+    d.recorder.was_canceled = True
+    d.start_session("Retail", "Wow.exe", pid=100)
+    for _ in range(5):
+        clock.now += daemon.SLOW_RETRY
+        d.check_session(100)
+    assert d.recorder.starts == 1 and "Nothing picked" in d.status.data["problem"]
+    assert d.notifier.sent == []
+
+
+def test_a_window_lost_many_times_is_never_ignored(make):
+    d, clock, _ = make()
+    d.start_session("Retail", "Wow.exe", pid=100)
+    for n in range(daemon.MAX_RESTARTS):
+        d.check_session(101 + n)
+        assert d.recorder.running and d.recorder.starts == 2 + n
+    d.check_session(200)
+    assert not d.recorder.running        # not the old window's last frame
+    clock.now += daemon.CAPTURE_RETRY
+    d.check_session(200)
+    assert d.recorder.running
+
+
+def test_session_ended_is_sent_when_the_window_closes_before_wow(make, monkeypatch):
+    d, clock, _ = make()
+    monkeypatch.setattr(daemon, "process_pending", lambda cfg, stop=None, in_use=None: [])
+    d.start_session("Retail", "Wow.exe", pid=100)
+    d.recorder.lost = True
+    d.check_session(100)
+    clock.now += 10
+    d.end_session()
+    wait_for_cutter(d)
+    assert d.notifier.sent == ["session_started", "session_ended"]
 
 
 def test_low_disk_space_warns_once_then_stops(make):

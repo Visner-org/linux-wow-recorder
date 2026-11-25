@@ -76,7 +76,7 @@ daemon.run() loop, every poll_interval seconds
                                       one when WoW is back; say so only if WoW's still there
                                       after 15 s (quitting WoW drops the window first)
       free space every 60 s           warn / stop below the limits
-      recorder died → restart it      up to 3 times per session
+      recorder died → restart it      3 times, then every 30 s
   WoW gone twice in a row → end_session()
       recorder.stop()                 SIGINT, wait for the file to be saved
       status.json: waiting
