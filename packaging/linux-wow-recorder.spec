@@ -62,6 +62,12 @@ if [ "$1" -eq 0 ]; then
 fi
 
 %changelog
+* Fri Nov 27 2026 Linux WoW Recorder - 1.3.10-1
+- Finds keys that were missed when WoW set the dungeon's difficulty late
+- Settings keeps a sound setup edited in the config file
+- The clip browser uses less CPU while it's closed
+- Fixes for a few rare crashes and leftover files
+
 * Wed Nov 25 2026 Linux WoW Recorder - 1.3.9-1
 - Keeps trying when recording fails, instead of giving up until WoW is restarted
 - No more frozen video when WoW's window is lost several times in a session

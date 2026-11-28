@@ -1114,7 +1114,8 @@ class ClipBrowser(QWidget):
         # New and deleted clips show up by themselves.
         self.watcher = QFileSystemWatcher(self)
         self.reload_timer = QTimer(self, singleShot=True, interval=1500)
-        self.reload_timer.timeout.connect(self.reload)
+        self.reload_timer.timeout.connect(self.reload_if_shown)
+        self.reload_waiting = False   # a change came in while the window was closed
         self.watcher.directoryChanged.connect(lambda _: self.reload_timer.start())
         self._theming = False
         self.apply_theme()
@@ -1284,6 +1285,18 @@ class ClipBrowser(QWidget):
         self.live_timer.start()
         self.update_checklist()
         self.checklist_timer.start()
+        if self.fresh:
+            self.flash_timer.start()
+        if self.reload_waiting:
+            self.reload_waiting = False
+            self.reload()
+
+    def reload_if_shown(self):
+        """Reloads for a folder change, or once the window opens again if it's closed."""
+        if self.isVisible():
+            self.reload()
+        else:
+            self.reload_waiting = True
 
     # ── Setup checklist ──
 
@@ -1516,7 +1529,7 @@ class ClipBrowser(QWidget):
         self.list_stack.setCurrentIndex(view)
         self.settings.setValue("view", "table" if view else "cards")
         self.show_view_button()
-        self.select(self.current.path if self.current else None)   # just the one, as in the other
+        self.select(str(self.current.path) if self.current else None)   # just the one, as in the other
         self.show_count()
 
     def show_view_button(self):
@@ -2542,6 +2555,8 @@ class ClipBrowser(QWidget):
             self.toggle_full_screen()
         self.player.pause()
         self.live_timer.stop()
+        self.checklist_timer.stop()
+        self.flash_timer.stop()
         super().closeEvent(event)
         self.closed.emit()
 

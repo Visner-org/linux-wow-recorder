@@ -99,8 +99,10 @@ def test_clip_browser_lists_filters_and_shows_details(qtbot, cfg):
 
     # Cards or table: one button that switches, remembered.
     assert w.view_button.text() == "Table"
+    shown = w.current
     w.view_button.click()
     assert w.list_stack.currentWidget() is w.tree and w.view_button.text() == "Cards"
+    assert w.current is not None and w.current.path == shown.path   # the clip stays loaded
     assert browser.ClipBrowser().list_stack.currentWidget().__class__.__name__ == "QTreeWidget"
     w.view_button.click()
     assert w.list_stack.currentWidget() is w.cards
@@ -140,6 +142,7 @@ def test_upload_to_youtube_copies_a_description_and_opens_the_page(qtbot, cfg, m
 def test_clip_browser_picks_up_the_first_clip(qtbot, cfg):
     w = browser.ClipBrowser()
     qtbot.addWidget(w)
+    w.show()                            # a closed window waits until it's opened again
     assert w.tree.topLevelItemCount() == 0
     assert w.watcher.directories() == [str(cfg.output_dir.parent)]   # no output folder yet
     make_clip(cfg, "a.mp4", dungeon="Ara-Kara", result="completed", label="+2 Completed")
@@ -1297,3 +1300,29 @@ def test_the_checklist_says_when_recording_still_works(qtbot, cfg, monkeypatch):
     w.update_checklist()
     QApplication.processEvents()
     assert "Not ready to record yet" in [label.text() for label in w.checklist.findChildren(QLabel)]
+
+
+def test_settings_keeps_a_hand_edited_audio_list_until_sound_is_changed(qtbot, cfg, fake_recorder):
+    data = config.load_raw()
+    data["recorder"]["audio"] = [config.WOW_SOUND, "app:discord"]   # as a hand edit could leave it
+    config.CONFIG_FILE.write_text(config.render(data))
+    w = settings.SettingsWindow()
+    qtbot.addWidget(w)
+    assert w.collect()["recorder"]["audio"] == [config.WOW_SOUND, "app:discord"]
+    w.mic.setChecked(True)
+    assert w.collect()["recorder"]["audio"] == config.audio_tracks("wow", True)
+
+
+def test_closed_clip_browser_stops_its_timers_and_reloads_when_shown(qtbot, cfg, monkeypatch):
+    w = browser.ClipBrowser()
+    qtbot.addWidget(w)
+    w.show()
+    assert w.checklist_timer.isActive()
+    w.close()
+    assert not w.checklist_timer.isActive() and not w.flash_timer.isActive()
+    reloads = []
+    monkeypatch.setattr(w, "reload", lambda: reloads.append(1))
+    w.reload_if_shown()                 # a folder changed while closed
+    assert reloads == []
+    w.show()
+    assert reloads == [1]

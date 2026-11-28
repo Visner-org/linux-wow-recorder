@@ -52,7 +52,7 @@ APP_ONLY = (("clips", "other_folders"), ("updates", "check"),
 WIZARD = (("Folders", "Where WoW writes its combat log, and where recordings and clips go."),
           ("What to record", "The picture and the sound. Everything else can wait for Settings."),
           ("Try it", "A 5-second recording to check the picture and the sound. Then Finish "
-                     "starts the recorder; it runs whenever you're logged in."))
+                     "starts the recorder; it records while this app is open."))
 _MARK = {model.OK: "✓", model.INFO: "•", model.WARNING: "⚠", model.ERROR: "✕"}
 
 
@@ -573,6 +573,9 @@ class SettingsWindow(QDialog):
             box.addWidget(button)
         self.mic = QCheckBox("Also record my microphone (as a track of its own)")
         self.mic.setChecked(any("default_input" in a for a in r["audio"]))
+        # A hand-edited track list is kept unless these controls are changed.
+        self.loaded_sound = (current, self.mic.isChecked())
+        self.loaded_audio = list(r["audio"])
         box.addSpacing(6)
         box.addWidget(self.mic)
         return _section(box)
@@ -1007,7 +1010,10 @@ class SettingsWindow(QDialog):
         r["fps"] = self.fps.currentData()
         r["quality"] = self.quality.currentData()
         game = list(config.GAME_SOUND)[max(0, self.game_sound.checkedId())]
-        r["audio"] = config.audio_tracks(game, self.mic.isChecked())
+        if (game, self.mic.isChecked()) == self.loaded_sound:
+            r["audio"] = list(self.loaded_audio)
+        else:
+            r["audio"] = config.audio_tracks(game, self.mic.isChecked())
         s, c = d["storage"], d["clips"]
         s["session_retention_days"] = self.session_days.value()
         s["clip_retention_days"] = self.clip_days.value()

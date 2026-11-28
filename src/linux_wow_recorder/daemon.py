@@ -51,6 +51,9 @@ NO_LOG_PROBLEM = "No combat log is being written. Is combat logging on?"
 # While "Cut the clips so far" waits for a key or boss pull to end, the combat log is read
 # this often.
 CUT_CHECK_INTERVAL = 30
+# A completed key waiting for the next run to end: the whole session's combat log is read each
+# look, so look less often than CUT_CHECK_INTERVAL while playing.
+RUN_RECHECK_INTERVAL = 120
 # WoW writes the combat log in batches, a minute or more after the events, so a cut waits for an
 # event after it was asked (a key started just before the click isn't in the file yet), or this
 # long if none comes (nothing happening in town).
@@ -569,7 +572,10 @@ class Daemon:
         logs = combat_logs_between(self.cfg.combat_log_dir, s.start, now)
         for f in logs:
             s.key_done |= self.log_news(f)
-        if not s.key_done or run_in_progress(read_log_events(logs)):
+        if not s.key_done:
+            return
+        if run_in_progress(read_log_events(logs)):
+            s.keys_checked = now + RUN_RECHECK_INTERVAL - CUT_CHECK_INTERVAL
             return
         s.key_done = False
         log.info("A key was completed; cutting its clip, recording on in a new file.")

@@ -105,6 +105,38 @@ def test_the_app_restarts_for_a_new_version_only_with_no_window_open(qapp_or_ski
     assert restarted == [1]
 
 
+def test_settings_with_a_test_recording_running_is_shown_again_not_replaced(qapp_or_skip,
+                                                                           monkeypatch):
+    from linux_wow_recorder.gui import settings
+    made = []
+
+    class Window:
+        def __init__(self, on_saved):
+            self.working, self.shown = True, False
+            self.finished = type("S", (), {"connect": lambda self, f: None})()
+            made.append(self)
+
+        def isVisible(self):
+            return False   # closed
+
+        def busy(self):
+            return self.working
+
+        def show(self):
+            self.shown = True
+
+        raise_ = activateWindow = lambda self: None
+    monkeypatch.setattr(settings, "SettingsWindow", Window)
+    t = tray.Tray.__new__(tray.Tray)
+    t.settings_window, t._after_save = None, lambda: None
+    t.show_settings()
+    t.show_settings()
+    assert len(made) == 1 and t.settings_window is made[0]   # the test still runs: same window
+    made[0].working = False
+    t.show_settings()
+    assert len(made) == 2                                    # done: a fresh one
+
+
 def test_a_new_release_is_told_once_and_stays_in_the_menu(tmp_path, monkeypatch, qapp_or_skip):
     import types
     from linux_wow_recorder import config, updates

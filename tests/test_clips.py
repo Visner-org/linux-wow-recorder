@@ -563,3 +563,71 @@ def test_add_casts_adds_what_killed_and_the_dispels(tmp_path):
     assert session["runs"][0]["deaths"][0]["hits"][0]["spell"] == "Septic Spatter"
     assert session["dispels"] == [[35.0, "Healer-Realm-US", 7, "Tank-Realm-US"]]
     assert clips.add_casts(cfg) == (0, 0)   # done once
+
+
+def _one_run_recording(tmp_path, monkeypatch, runs=1):
+    from linux_wow_recorder import clips
+    cfg = make_cfg(tmp_path)
+    cfg.sessions_dir.mkdir()
+    rec = cfg.sessions_dir / "2026-10-12_14-07-45.mkv"
+    rec.write_bytes(b"\0" * 2_000_000)
+    end = 1_800_000_000.0
+    start = end - 2557
+    monkeypatch.setattr(clips, "recording_span", lambda path: (start, end))
+    found = [Run("Temple of Sethraliss", start + 415 + i, start + 2081, "+10 Completed", 1666.7,
+                 level=10, result="completed") for i in range(runs)]
+    monkeypatch.setattr(clips, "combat_logs_between", lambda *a: [tmp_path / "log.txt"])
+    monkeypatch.setattr(clips, "read_log_events", lambda logs: [])
+    monkeypatch.setattr(clips, "read_casts", lambda logs: [])
+    monkeypatch.setattr(clips, "find_runs", lambda events, minutes, raids: found)
+    return cfg, rec
+
+
+def test_a_cut_that_times_out_leaves_no_part_file(tmp_path, monkeypatch):
+    from linux_wow_recorder import clips
+    cfg, rec = _one_run_recording(tmp_path, monkeypatch)
+
+    def ffmpeg(cmd, **kw):
+        Path(cmd[-1]).write_bytes(b"half")
+        raise subprocess.TimeoutExpired(cmd, 1800)
+    monkeypatch.setattr(clips.subprocess, "run", ffmpeg)
+    [result] = process_pending(cfg)
+    assert result.problem == "clip_failed"
+    assert list(cfg.clips_dir.iterdir()) == [] and rec.exists()
+
+
+def test_stop_between_clips_leaves_the_recording_for_next_time(tmp_path, monkeypatch):
+    import threading
+    from linux_wow_recorder import clips
+    cfg, rec = _one_run_recording(tmp_path, monkeypatch, runs=2)
+    stop = threading.Event()
+    cut = []
+
+    def one_then_stop(*a, **k):
+        cut.append(1)
+        stop.set()
+        return cfg.clips_dir / "a.mp4"
+    monkeypatch.setattr(clips, "cut_clip", one_then_stop)
+    [result] = process_pending(cfg, stop)
+    assert len(cut) == 1 and rec.exists()
+
+
+def test_old_part_files_go_when_a_cut_starts_new_ones_stay(tmp_path):
+    cfg = make_cfg(tmp_path)
+    cfg.clips_dir.mkdir(parents=True)
+    old, new = cfg.clips_dir / "old.mp4.part", cfg.clips_dir / "copy.mp4.part"
+    old.write_bytes(b"x")
+    new.write_bytes(b"x")
+    os.utime(old, (1_000_000_000, 1_000_000_000))
+    process_pending(cfg)
+    assert not old.exists() and new.exists()
+
+
+def test_recording_span_ignores_a_duration_that_isnt_one(tmp_path, monkeypatch):
+    from linux_wow_recorder import clips
+    rec = tmp_path / "x.mkv"
+    rec.write_bytes(b"")
+    for out in ("nan", "inf", "-3", "0"):
+        monkeypatch.setattr(clips.subprocess, "run",
+                            lambda cmd, out=out, **kw: subprocess.CompletedProcess(cmd, 0, out, ""))
+        assert clips.recording_span(rec) is None

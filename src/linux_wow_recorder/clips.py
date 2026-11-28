@@ -4,6 +4,7 @@ import datetime
 import fcntl
 import json
 import logging
+import math
 import re
 import shutil
 import subprocess
@@ -108,13 +109,19 @@ def recording_span(path: Path) -> tuple[float, float] | None:
         capture_output=True, text=True, timeout=120,
     )
     try:
-        return end - float(result.stdout.strip()), end
+        duration = float(result.stdout.strip())
+        if math.isfinite(duration) and duration > 0:
+            return end - duration, end
     except ValueError:
         pass
     m = _NAME_TIME.search(path.name)
-    if m:
-        start = datetime.datetime.strptime(" ".join(m.groups()), "%Y-%m-%d %H-%M-%S").timestamp()
-        return start, end
+    try:
+        if m:
+            start = datetime.datetime.strptime(" ".join(m.groups()),
+                                               "%Y-%m-%d %H-%M-%S").timestamp()
+            return start, end
+    except ValueError:
+        pass
     return None
 
 
@@ -241,6 +248,7 @@ def make_thumbnail(clip: Path, details: dict) -> Path | None:
         result = subprocess.run(thumbnail_command(clip, thumbnail_time(details)),
                                 capture_output=True, text=True, timeout=60)
     except (OSError, subprocess.TimeoutExpired) as e:
+        part.unlink(missing_ok=True)
         log.warning(f"No thumbnail for {clip.name}: {e}")
         return None
     if result.returncode != 0 or not part.exists():
@@ -415,13 +423,17 @@ def cut_clip(cfg: Config, src: Path, rec_start: float, rec_end: float, run: Run,
     out = cfg.clips_dir / clip_name(run, rec_start, rec_end)
     part = out.with_name(out.name + ".part")
     log.info(f"Cutting {out.name}")
-    result = subprocess.run(cut_command(src, offset, stop - offset, part, faststart=False),
-                            capture_output=True, text=True, timeout=1800)
-    if result.returncode != 0:
-        # The index didn't fit the space kept for it (shouldn't happen): the slow way.
-        log.warning(f"Cutting {out.name} again with faststart:\n{result.stderr.strip()}")
-        result = subprocess.run(cut_command(src, offset, stop - offset, part, faststart=True),
+    try:
+        result = subprocess.run(cut_command(src, offset, stop - offset, part, faststart=False),
                                 capture_output=True, text=True, timeout=1800)
+        if result.returncode != 0:
+            # The index didn't fit the space kept for it (shouldn't happen): the slow way.
+            log.warning(f"Cutting {out.name} again with faststart:\n{result.stderr.strip()}")
+            result = subprocess.run(cut_command(src, offset, stop - offset, part, faststart=True),
+                                    capture_output=True, text=True, timeout=1800)
+    except BaseException:   # a timeout, or ffmpeg missing: no half-written clip left behind
+        part.unlink(missing_ok=True)
+        raise
     if result.returncode != 0:
         part.unlink(missing_ok=True)
         log.error(f"ffmpeg failed on {out.name}:\n{result.stderr}")
@@ -469,9 +481,11 @@ def session_details(rec_start: float, rec_end: float, runs: list[Run], recording
     }
 
 
-def process_recording(cfg: Config, src: Path) -> SessionResult:
+def process_recording(cfg: Config, src: Path, stop: threading.Event | None = None
+                      ) -> SessionResult:
     """Cuts one clip per dungeon run out of a recording, then moves it to processed/. If a
-    clip fails, the recording stays in sessions/ and is tried again next time."""
+    clip fails, or stop is set between clips, the recording stays in sessions/ and is tried
+    again next time."""
     if src.stat().st_size < MIN_RECORDING_BYTES:
         log.info(f"{src.name} is nearly empty (a failed start); moved to processed/.")
         _move_done(cfg, src)
@@ -520,6 +534,9 @@ def process_recording(cfg: Config, src: Path) -> SessionResult:
     result = SessionResult(src)
     failed = 0
     for run in runs:
+        if stop is not None and stop.is_set():
+            log.info(f"Stopping; the rest of {src.name} is cut next time.")
+            return result
         if not clip_window(cfg, rec_start, rec_end, run):
             log.info(f"{run.name} {run.label} is barely in this recording; skipped.")
             continue
@@ -626,7 +643,24 @@ def process_pending(cfg: Config, stop: threading.Event | None = None,
                     return []
                 if stop is None:
                     time.sleep(1)
+        remove_stale_parts(cfg.clips_dir)
         return _process_all(cfg, stop, in_use)
+
+
+# A .part file nothing has written to for this long was left by a cut that was killed.
+STALE_PART_SECONDS = 3600
+
+
+def remove_stale_parts(folder: Path):
+    """Deletes the half-written clips and pictures a killed cut left in folder. The clip
+    browser writes its copies there as .part files too, so only old ones go."""
+    for f in folder.glob("*.part"):
+        try:
+            if time.time() - f.stat().st_mtime > STALE_PART_SECONDS:
+                f.unlink()
+                log.info(f"Removed {f.name}, left by a cut that didn't finish.")
+        except OSError:
+            continue
 
 
 def _process_all(cfg: Config, stop: threading.Event | None,
@@ -639,7 +673,7 @@ def _process_all(cfg: Config, stop: threading.Event | None,
         if src == in_use():
             continue
         try:
-            results.append(process_recording(cfg, src))
+            results.append(process_recording(cfg, src, stop))
         except Exception:
             log.exception(f"Processing {src.name} failed")
             results.append(SessionResult(src, problem="clip_failed",

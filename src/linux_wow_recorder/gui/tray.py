@@ -537,7 +537,10 @@ class Tray:
 
     def show_settings(self):
         from .settings import SettingsWindow
-        if self.settings_window is None or not self.settings_window.isVisible():
+        # A closed window whose 5-second test still runs is shown again: replacing it would kill
+        # the test before it stops the recorder, which would then record on by itself.
+        if self.settings_window is None or not (self.settings_window.isVisible()
+                                                or self.settings_window.busy()):
             self.settings_window = SettingsWindow(on_saved=self._after_save)
             self.settings_window.finished.connect(lambda _: self.closed_to_tray())
         self.settings_window.show()

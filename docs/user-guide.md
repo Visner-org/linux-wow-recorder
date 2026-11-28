@@ -65,7 +65,7 @@ And in WoW:
 ### Nobara or Fedora (RPM)
 
 ```bash
-sudo dnf install ./linux-wow-recorder-1.3.9-1.fc44.noarch.rpm
+sudo dnf install ./linux-wow-recorder-1.3.10-1.fc44.noarch.rpm
 ```
 
 This brings in ffmpeg and Qt, and on Nobara gpu-screen-recorder. Open **Linux WoW Recorder**
@@ -89,8 +89,7 @@ for Fedora/Nobara 44 (`fc44`); for another release, build it there with
 
 ### CachyOS or Arch (package)
 
-Installs system-wide, with everything from Arch's repos. It'll be on the AUR once sign-ups
-reopen; until then:
+Installs system-wide, with everything from Arch's repos:
 
 ```bash
 sudo pacman -S --needed git base-devel
@@ -107,7 +106,7 @@ For Ubuntu 25.10+ (26.04 tested) and Debian 13. Download the `.deb` from
 [Releases](https://github.com/Visner-org/linux-wow-recorder/releases), then:
 
 ```bash
-sudo apt install ./linux-wow-recorder_1.3.9-1_all.deb
+sudo apt install ./linux-wow-recorder_1.3.10-1_all.deb
 flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
 flatpak install --user flathub com.dec05eba.gpu_screen_recorder
 ```

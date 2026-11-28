@@ -174,6 +174,45 @@ def test_heroic_dungeon_with_a_boss():
     assert [(r.label, r.start, r.end) for r in runs] == [("Heroic", T0, T0 + 1200)]
 
 
+def test_dungeon_entered_at_difficulty_0_then_set():
+    # WoW often enters at difficulty 0 and sets the real one in a second ZONE_CHANGE (10-30 Ruby
+    # Life Pools, 10-31 Temple of Sethraliss had no clip)
+    runs = find_runs([
+        zone(0, 2521, "Ruby Life Pools", 0),
+        zone(3, 2521, "Ruby Life Pools", 23),
+        boss(60),
+        zone(700, 0, "Thaldraszus", 0),
+        zone(1400, 1, "Valdrakken", 0),
+    ])
+    assert [(r.label, r.start, r.end) for r in runs] == [("Mythic", T0 + 3, T0 + 700)]
+
+
+def test_back_in_on_another_difficulty_is_a_new_visit():
+    # 11-01: Normal for a moment, out, reset, back in on Mythic; the bosses were on Mythic
+    runs = find_runs([
+        zone(0, 2825, "Zul'Aman", 0),
+        zone(1, 2825, "Den of Nalorakk", 1),
+        zone(34, 0, "Zul'Aman", 0),
+        zone(46, 2825, "Den of Nalorakk", 23),
+        boss(330),
+        zone(1200, 0, "Silvermoon City", 0),
+        zone(2000, 1, "Orgrimmar", 0),
+    ])
+    assert [(r.label, r.start) for r in runs] == [("Mythic", T0 + 46)]
+
+
+def test_same_instance_again_is_still_ignored():
+    # a sub-zone or reload in the same instance and difficulty doesn't start the visit over
+    runs = find_runs([
+        zone(0, 2290, "Mists of Tirna Scithe", 2),
+        boss(60),
+        zone(300, 2290, "Mists of Tirna Scithe", 2),
+        zone(1200, 0, "Ardenweald", 0),
+        zone(2000, 1, "Orgrimmar", 0),
+    ])
+    assert [(r.label, r.start) for r in runs] == [("Heroic", T0)]
+
+
 def test_dungeon_without_a_boss_is_dropped():
     runs = find_runs([
         zone(0, 2290, "Mists of Tirna Scithe", 1),
@@ -846,3 +885,12 @@ def test_a_death_moment_keeps_who_died():
     events = [zone(0, 0, "Mulgore", 0), unit_died(100, "Player-1-ME", "0x511")]
     [moment] = find_moments(events, ["death"])
     assert [(d.name, d.time) for d in moment.deaths] == [(events[1][2][5], T0 + 100)]
+
+
+def test_log_names_that_arent_dates_are_skipped(tmp_path):
+    from linux_wow_recorder.combatlog import _hit, combat_logs_between, log_opened
+    bad = tmp_path / "WoWCombatLog-139926_250000.txt"   # month 13
+    bad.write_text("")
+    assert log_opened(bad) is None
+    assert combat_logs_between(tmp_path, 0, 2e9) == []
+    assert _hit(0.0, "SWING_DAMAGE", []) is None

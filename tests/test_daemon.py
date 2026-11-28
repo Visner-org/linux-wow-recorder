@@ -1038,6 +1038,9 @@ def test_a_completed_keys_clip_is_cut_while_wow_runs_on(make, monkeypatch):
     in_key[0] = False
     clock.now += daemon.CUT_CHECK_INTERVAL
     d.check_session(100)
+    assert d._cutter is None   # a run was going on: the log isn't read again for a while
+    clock.now += daemon.RUN_RECHECK_INTERVAL - daemon.CUT_CHECK_INTERVAL
+    d.check_session(100)
     assert entered.wait(5)
     assert d.recorder.starts == 2 and d.recorder.file != first and calls == [d.recorder.file]
     release.set()

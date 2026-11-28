@@ -189,7 +189,10 @@ def log_dirs(log_dir: Path) -> list[Path]:
 def log_opened(path: Path) -> float | None:
     """When WoW opened a combat log, from its name (WoWCombatLog-110526_173620.txt)."""
     m = _LOG_NAME.search(path.name)
-    return datetime.datetime.strptime(m.group(1), "%m%d%y_%H%M%S").timestamp() if m else None
+    try:
+        return datetime.datetime.strptime(m.group(1), "%m%d%y_%H%M%S").timestamp() if m else None
+    except ValueError:   # digits that aren't a date (a renamed copy)
+        return None
 
 
 # A completed key's END (success 1); the all-zeros END when a keystone goes in doesn't count.
@@ -201,12 +204,13 @@ def combat_logs_between(log_dir: Path, start: float, end: float) -> list[Path]:
     subfolders too, e.g. Raider.IO's archive) that overlap [start, end], oldest first."""
     found = []
     for f in (f for d in log_dirs(log_dir) for f in d.glob("**/WoWCombatLog-*.txt")):
-        m = _LOG_NAME.search(f.name)
-        if not m:
+        if (opened := log_opened(f)) is None or opened > end:
             continue
-        opened = datetime.datetime.strptime(m.group(1), "%m%d%y_%H%M%S").timestamp()
-        if opened <= end and f.stat().st_mtime >= start:
-            found.append((opened, f))
+        try:
+            if f.stat().st_mtime >= start:
+                found.append((opened, f))
+        except OSError:   # deleted or archived away meanwhile
+            continue
     return [f for _, f in sorted(found)]
 
 
@@ -341,6 +345,7 @@ class _RunFinder:
         self.pull: _OpenRun | None = None   # a raid boss being fought
         self.pulls: dict[tuple, int] = {}   # (instance, encounter, difficulty) -> pulls so far
         self.instance: int | None = None   # ZONE_CHANGE also fires for sub-zones and reloads
+        self.difficulty: int | None = None   # the last ZONE_CHANGE's difficulty
         self.zone_name = ""                # the instance's name, for a raid pull's raid
         self.last_t = 0.0
         self.sated: dict[str, float] = {}   # player GUID -> when the lust debuff they have was applied
@@ -365,7 +370,7 @@ class _RunFinder:
         try:
             handler(t, f)
         except (IndexError, ValueError):
-            log.debug(f"Unreadable combat log line: {event} {f}")
+            log.debug(f"Unreadable combat log line: {event} ({len(f)} fields)")   # no names in logs
 
     def finish(self) -> list[Run]:
         if self.pull:
@@ -413,7 +418,11 @@ class _RunFinder:
     def zone_change(self, t: float, f: list[str]):
         # ZONE_CHANGE,instanceID,"Name",difficultyID
         inst, name, diff = int(f[0]), f[1], int(f[2])
-        if inst == self.instance:
+        was = self.difficulty
+        self.difficulty = diff
+        # A dungeon is often entered at difficulty 0 and set a moment later in a second
+        # ZONE_CHANGE for the same instance: that one is the real arrival.
+        if inst == self.instance and not (was == 0 and diff):
             return
         self.instance, self.zone_name = inst, name
         if self.pull:
@@ -431,10 +440,11 @@ class _RunFinder:
             self.key = _OpenRun(name, inst, t, inferred=True,
                                 challenge=keytimers.challenge_id(name))
         if self.visit:
-            if inst == self.visit.instance:
+            if inst == self.visit.instance and DUNGEON_DIFFICULTIES.get(diff, self.visit.difficulty) \
+                    == self.visit.difficulty:
                 self.visit.left_at = None   # back in after a release or a disconnect
                 return
-            self.visit.left(t)
+            self.visit.left(t)   # elsewhere, or back in on another difficulty (a reset): a new visit
         if inst and diff and diff not in DUNGEON_DIFFICULTIES and diff not in RAID_DIFFICULTIES \
                 and diff != 8:
             # Scenarios, delves, or a difficulty this app doesn't know yet (a new game
@@ -838,6 +848,8 @@ def _hit(t: float, event: str, f: list[str]) -> Hit | None:
     """A damage line as a Hit. Every damage line ends with amount, base amount, overkill, school,
     resisted, blocked, absorbed, critical, glancing, crushing, and for spells since 12.0 "ST" or
     "AOE"; that end is the same with and without advanced logging."""
+    if not f:
+        return None
     tail = f[:-1] if f[-1] in ("ST", "AOE") else f
     if len(tail) < 18:   # a melee hit without advanced logging: 8 fields and those 10
         return None
